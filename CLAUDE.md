@@ -6,6 +6,18 @@ the instrument backend. Two existing lab repos do the same physics on different 
 neutral layer above them, and the substrate for **AI-driven experiment loops** (decide approach + params →
 run → analyze → extract → decide next).
 
+## Terminology (canonical vocabulary — single source of truth)
+The word **"protocol" is retired**; use these names across all repos.
+
+- **Experiment** — the registered, instrument-agnostic unit SCQO catalogs and dispatches to a backend (QM or Qblox). Owns its **Parameters**; binds a probe + an estimator.
+- **probe** — the acquisition half: build the instrument sequence (QM program / Qblox schedule) and run it → **Dataset** (xarray). On the simulated backend the probe runs the **model** forward to synthesize data ("simulation = virtual experiment").
+- **estimator** — the analysis half: fit the Dataset to a **model** → **Result** (extracted model parameters). Implemented in scqat (`scqat.estimators`); its orchestrator method is `analyze()`.
+- **tool** / **fitter** — reusable helpers an estimator imports (`scqat.tools`); a fitter is the common case. Many-to-many; **tools never import estimators**.
+- **model** — the physics that predicts the signal; used *forward* by a simulated probe and *inverse* by an estimator. SCQ.jl builds/simulates models; scqat fits them.
+- **Parameters / Result / Backend / Session** — input schema / extracted output / instrument adapter (QM, Qblox, Simulated) / the orchestrator entry point (`catalog()` / `run()` / `device_state()`).
+
+**Naming status (2026-06-08):** scqat is migrated (`estimators/`, `tools/`, `BaseEstimator`, `*Estimator`). **SCQO's own code and the sections below still use the legacy names** `Protocol` / `build → run → analyze → update` / `scqo.protocols`; renaming them to **Experiment / probe / estimate** is a pending pass, and LCHQBDriver mirrors the legacy names until then. (QBLOX_training documents Qblox's *own* `Experiment` ABC — a different class from this `Experiment`.)
+
 ## The two source repos (reference implementations)
 
 | | LCHQMDriver | QBLOX_training |
