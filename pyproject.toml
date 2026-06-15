@@ -9,12 +9,18 @@ dependencies = [
     "pydantic>=2.6",
     "xarray>=2024.7.0",
     "numpy>=1.26",
-    "lmfit>=1.3.3",
+    "scqat",            # the shared analysis engine: estimators + fitters (import-light; lazy-imported in estimate())
 ]
 
 # IMPORTANT: scqo deliberately depends on NO instrument library (no qm-qua, no
 # quam, no qualibrate, no qblox-scheduler). That is what lets both LCHQMDriver
 # and LCHQBDriver depend on scqo without dragging each other's hardware stack in.
+# scqat is the one allowed non-instrument dependency: it is the single estimator
+# engine (one estimator per probing method), so SCQO never fits inline. lmfit is
+# now a transitive dependency via scqat.
+
+[tool.uv.sources]
+scqat = { path = "../SCqubit-analysis-tool", editable = true }
 
 [build-system]
 requires = ["hatchling"]

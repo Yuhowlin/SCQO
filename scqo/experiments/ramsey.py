@@ -18,9 +18,9 @@ from __future__ import annotations
 from typing import ClassVar
 
 import numpy as np
-from lmfit import Model
 from pydantic import Field
 
+from .._scqat import per_qubit_results
 from ..parameters import AveragingParameters, QubitSelection
 from ..experiment import Experiment
 from ..result import Outcome, Result
@@ -43,36 +43,6 @@ class RamseyResult(Result):
     ``fit[qubit]`` carries ``drive_freq`` (new absolute Hz), ``detuning_error_hz``,
     ``t2_star_s`` and ``old_drive_freq``.
     """
-
-
-def _decaying_cosine(t, offset, amp, tau, freq, phase):
-    return offset + amp * np.exp(-t / tau) * np.cos(2 * np.pi * freq * t + phase)
-
-
-def _fit_ramsey(t: np.ndarray, signal: np.ndarray) -> tuple[float, float, bool]:
-    """Fit a decaying cosine; return (osc_freq_hz, t2_star_s, ok)."""
-    centered = signal - signal.mean()
-    dt = float(t[1] - t[0])
-    spectrum = np.abs(np.fft.rfft(centered))
-    freqs = np.fft.rfftfreq(t.size, dt)
-    freq_guess = float(freqs[1:][np.argmax(spectrum[1:])]) if t.size > 2 else 1.0 / (t[-1] - t[0])
-
-    model = Model(_decaying_cosine)
-    params = model.make_params(
-        offset=float(signal.mean()),
-        amp=float((signal.max() - signal.min()) / 2),
-        tau=float((t[-1] - t[0]) / 2),
-        freq=freq_guess,
-        phase=0.0,
-    )
-    params["tau"].set(min=0)
-    params["freq"].set(min=0)
-    params["amp"].set(min=0)
-    try:
-        out = model.fit(signal, params, t=t)
-        return float(out.params["freq"].value), float(out.params["tau"].value), bool(out.success)
-    except Exception:
-        return freq_guess, float("nan"), False
 
 
 class Ramsey(Experiment):
@@ -113,13 +83,27 @@ class Ramsey(Experiment):
 
     def estimate(self) -> RamseyResult:
         assert self.dataset is not None, "run() populates self.dataset before estimate()"
-        t = self.dataset["idle_time_ns"].values * 1e-9
+        from scqat.estimators.ramsey import RamseyEstimator
+
+        # scqat's contract: variable `signal` + coord `idle_time` in seconds. The estimator
+        # selects single/beat/relaxation; the beat (charge dispersion) case calibrates on the
+        # mean of the two fringe frequencies.
+        prepared = self.dataset.rename({"I": "signal", "idle_time_ns": "idle_time"})
+        prepared = prepared.assign_coords(idle_time=prepared["idle_time"] * 1e-9)
+
+        results = per_qubit_results(prepared, RamseyEstimator())
+
         applied = self.params.frequency_detuning_hz
         result = RamseyResult()
         for qubit in self.params.qubits:
-            signal = self.dataset["I"].sel(qubit=qubit).values
-            osc_freq, t2_star, ok = _fit_ramsey(t, signal)
+            r = results[qubit]
+            model_type = r.get("model_type")
+            if model_type == "beat":
+                osc_freq = 0.5 * (float(r["f_1"]) + float(r["f_2"]))
+            else:
+                osc_freq = float(r["f_1"])
             detuning_error = osc_freq - applied
+            t2_star = float(r.get("tau_1", float("nan")))
             old = float(self.backend.device.qubit(qubit).drive_freq)
             result.fit[qubit] = {
                 "drive_freq": old + detuning_error,
@@ -127,7 +111,10 @@ class Ramsey(Experiment):
                 "t2_star_s": t2_star,
                 "old_drive_freq": old,
             }
-            result.outcomes[qubit] = Outcome.SUCCESSFUL if ok and t2_star > 0 else Outcome.FAILED
+            # A fringe is expected: only a converged single/beat fit with a physical T2*
+            # counts; the relaxation model (f=0) means no fringe was resolved.
+            ok = bool(r["success"]) and model_type in ("single", "beat") and np.isfinite(t2_star) and t2_star > 0
+            result.outcomes[qubit] = Outcome.SUCCESSFUL if ok else Outcome.FAILED
         return result
 
     def update(self) -> None:

@@ -9,16 +9,12 @@ from __future__ import annotations
 from typing import ClassVar
 
 import numpy as np
-from lmfit.models import ConstantModel, LorentzianModel
 from pydantic import Field
 
+from .._scqat import per_qubit_results
 from ..parameters import AveragingParameters, QubitSelection
 from ..experiment import Experiment
 from ..result import Outcome, Result
-
-# np.trapz was renamed to np.trapezoid in NumPy 2.0 (and the old name later removed);
-# np.trapezoid does not exist before 2.0. Support scqo's whole numpy>=1.26 range.
-_trapezoid = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
 
 
 class ResonatorSpectroscopyParameters(QubitSelection, AveragingParameters):
@@ -37,24 +33,6 @@ class ResonatorSpectroscopyResult(Result):
     ``fit[qubit]`` carries ``readout_freq`` (new absolute Hz), ``dip_detuning_hz`` and
     ``old_readout_freq``.
     """
-
-
-def _fit_dip(detuning: np.ndarray, magnitude: np.ndarray) -> tuple[float, bool]:
-    """Fit a Lorentzian to the transmission dip; return (center_detuning_hz, ok)."""
-    peak = magnitude.max() - magnitude  # flip the dip into a positive peak
-    model = LorentzianModel() + ConstantModel()
-    params = model.make_params()
-    params["center"].set(value=float(detuning[np.argmax(peak)]))
-    params["sigma"].set(value=float((detuning[-1] - detuning[0]) / 10), min=0)
-    params["amplitude"].set(value=float(_trapezoid(peak, detuning)), min=0)
-    params["c"].set(value=0.0)
-    try:
-        out = model.fit(peak, params, x=detuning)
-        center = float(out.params["center"].value)
-        ok = bool(out.success) and detuning[0] <= center <= detuning[-1]
-        return center, ok
-    except Exception:
-        return float(detuning[np.argmin(magnitude)]), False
 
 
 class ResonatorSpectroscopy(Experiment):
@@ -92,20 +70,31 @@ class ResonatorSpectroscopy(Experiment):
 
     def estimate(self) -> ResonatorSpectroscopyResult:
         assert self.dataset is not None, "run() populates self.dataset before estimate()"
-        detuning = self.dataset["detuning_hz"].values
+        from scqat.estimators.resonator_spectroscopy import ResonatorSpectroscopyEstimator
+
+        # scqat's contract: coord `detuning` + (I, Q); optional `full_freq` lets it report
+        # the absolute resonance. full_freq is per-qubit (each has its own readout_freq), so
+        # attach it as a (qubit, detuning) coord before the per-qubit split.
+        qubits = list(self.dataset["qubit"].values)
+        old_freqs = {q: float(self.backend.device.qubit(q).readout_freq) for q in qubits}
+        prepared = self.dataset.rename({"detuning_hz": "detuning"})
+        detuning = prepared["detuning"].values
+        full_freq = np.array([detuning + old_freqs[q] for q in qubits])
+        prepared = prepared.assign_coords(full_freq=(("qubit", "detuning"), full_freq))
+
+        results = per_qubit_results(prepared, ResonatorSpectroscopyEstimator())
+
         result = ResonatorSpectroscopyResult()
         for qubit in self.params.qubits:
-            i_data = self.dataset["I"].sel(qubit=qubit).values
-            q_data = self.dataset["Q"].sel(qubit=qubit).values
-            magnitude = np.hypot(i_data, q_data)
-            center, ok = _fit_dip(detuning, magnitude)
-            old = float(self.backend.device.qubit(qubit).readout_freq)
+            r = results[qubit]
+            old = old_freqs[qubit]
+            center = float(r["detuning"])  # fitted dip detuning (Hz, relative)
             result.fit[qubit] = {
-                "readout_freq": old + center,
+                "readout_freq": float(r.get("full_freq", old + center)),
                 "dip_detuning_hz": center,
                 "old_readout_freq": old,
             }
-            result.outcomes[qubit] = Outcome.SUCCESSFUL if ok else Outcome.FAILED
+            result.outcomes[qubit] = Outcome.SUCCESSFUL if bool(r["success"]) else Outcome.FAILED
         return result
 
     def update(self) -> None:
