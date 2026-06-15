@@ -16,6 +16,10 @@ from ..parameters import AveragingParameters, QubitSelection
 from ..experiment import Experiment
 from ..result import Outcome, Result
 
+# np.trapz was renamed to np.trapezoid in NumPy 2.0 (and the old name later removed);
+# np.trapezoid does not exist before 2.0. Support scqo's whole numpy>=1.26 range.
+_trapezoid = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
+
 
 class ResonatorSpectroscopyParameters(QubitSelection, AveragingParameters):
     """Inputs for resonator spectroscopy."""
@@ -42,7 +46,7 @@ def _fit_dip(detuning: np.ndarray, magnitude: np.ndarray) -> tuple[float, bool]:
     params = model.make_params()
     params["center"].set(value=float(detuning[np.argmax(peak)]))
     params["sigma"].set(value=float((detuning[-1] - detuning[0]) / 10), min=0)
-    params["amplitude"].set(value=float(np.trapz(peak, detuning)), min=0)
+    params["amplitude"].set(value=float(_trapezoid(peak, detuning)), min=0)
     params["c"].set(value=0.0)
     try:
         out = model.fit(peak, params, x=detuning)
