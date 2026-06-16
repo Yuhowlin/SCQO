@@ -80,7 +80,7 @@ class ResonatorSpectroscopy(Experiment):
         # the absolute resonance. full_freq is per-qubit (each has its own readout_freq), so
         # attach it as a (qubit, detuning) coord before the per-qubit split.
         qubits = list(self.dataset["qubit"].values)
-        old_freqs = {q: float(self.backend.device.qubit(q).readout_freq) for q in qubits}
+        old_freqs = {q: float(self.device.qubit(q).readout_freq) for q in qubits}
         prepared = self.dataset.rename({"detuning_hz": "detuning"})
         detuning = prepared["detuning"].values
         full_freq = np.array([detuning + old_freqs[q] for q in qubits])
@@ -106,4 +106,4 @@ class ResonatorSpectroscopy(Experiment):
             return
         for qubit, fit in self.result.fit.items():
             if self.result.outcomes[qubit] is Outcome.SUCCESSFUL:
-                self.backend.device.qubit(qubit).readout_freq = fit["readout_freq"]
+                self.device.qubit(qubit).readout_freq = fit["readout_freq"]

@@ -42,6 +42,10 @@ class Experiment(ABC):
     def __init__(self, backend: Backend, params: Parameters) -> None:
         self.backend = backend
         self.params = params
+        #: device state experiments read/write. Defaults to the backend's vendor device
+        #: (standalone use, unrecorded); the Session swaps in a RecordingDevice so its
+        #: runs are recorded into the authoritative SCQO config + history.
+        self.device = backend.device
         self.sweep_axes: dict[str, np.ndarray] = {}
         self.dataset: xr.Dataset | None = None
         self.result: Result | None = None
@@ -56,7 +60,7 @@ class Experiment(ABC):
         """Fit ``self.dataset`` and return a structured :class:`Result`."""
 
     def update(self) -> None:
-        """Write fitted quantities back into ``self.backend.device``. Default: no-op."""
+        """Write fitted quantities back into ``self.device``. Default: no-op."""
 
     def simulate(self, coords: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         """Return synthetic ``{var: ndarray}`` of shape ``(n_qubits, *sweep)``.

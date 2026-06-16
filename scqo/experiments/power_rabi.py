@@ -90,7 +90,7 @@ class PowerRabi(Experiment):
         for qubit in self.params.qubits:
             r = results[qubit]
             factor_pi = float(r["opt_amp_prefactor"])
-            old = float(self.backend.device.qubit(qubit).pi_amp)
+            old = float(self.device.qubit(qubit).pi_amp)
             result.fit[qubit] = {
                 "pi_amp": old * factor_pi,
                 "pi_amp_factor": factor_pi,
@@ -104,4 +104,4 @@ class PowerRabi(Experiment):
             return
         for qubit, fit in self.result.fit.items():
             if self.result.outcomes[qubit] is Outcome.SUCCESSFUL:
-                self.backend.device.qubit(qubit).pi_amp = fit["pi_amp"]
+                self.device.qubit(qubit).pi_amp = fit["pi_amp"]

@@ -108,7 +108,7 @@ class Ramsey(Experiment):
                 osc_freq = float(r["f_1"])
             detuning_error = osc_freq - applied
             t2_star = float(r.get("tau_1", float("nan")))
-            old = float(self.backend.device.qubit(qubit).drive_freq)
+            old = float(self.device.qubit(qubit).drive_freq)
             result.fit[qubit] = {
                 "drive_freq": old + detuning_error,
                 "detuning_error_hz": detuning_error,
@@ -126,4 +126,4 @@ class Ramsey(Experiment):
             return
         for qubit, fit in self.result.fit.items():
             if self.result.outcomes[qubit] is Outcome.SUCCESSFUL:
-                self.backend.device.qubit(qubit).drive_freq = fit["drive_freq"]
+                self.device.qubit(qubit).drive_freq = fit["drive_freq"]

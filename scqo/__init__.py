@@ -12,6 +12,7 @@ Public surface::
 from .parameters import AveragingParameters, Parameters, QubitSelection
 from .result import Outcome, Result
 from .contract import ContractError, DatasetContract
+from .config import ChangeRecord, RecordingDevice
 from .device import DeviceModel, QubitView
 from .backend import Backend
 from .experiment import Experiment
@@ -26,6 +27,8 @@ __all__ = [
     "Outcome",
     "DatasetContract",
     "ContractError",
+    "ChangeRecord",
+    "RecordingDevice",
     "DeviceModel",
     "QubitView",
     "Backend",
