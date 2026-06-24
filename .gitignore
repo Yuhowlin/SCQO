@@ -20,3 +20,6 @@ env/
 .vscode/
 .idea/
 .DS_Store
+
+# Claude Code (personal/local settings stay local; shared settings.json is committed)
+.claude/settings.local.json
