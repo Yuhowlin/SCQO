@@ -154,10 +154,6 @@ class RecordingDevice(DeviceModel):
         self._experiment = experiment
         self._run_id = run_id
 
-    def set_experiment(self, name: str | None) -> None:
-        """Backward-compatible alias for :meth:`set_context` (experiment only)."""
-        self.set_context(name, None)
-
     def _get(self, qubit: str, field: str) -> float:
         return self._config[qubit][field]  # type: ignore[return-value]
 
