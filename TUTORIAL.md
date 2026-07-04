@@ -94,6 +94,8 @@ data_root   = 'D:\qpu_data'                          # all measurement data land
 device_name = "SQ_demo"                              # your chip / sample name
 state_path  = 'D:\qpu_data\SQ_demo\scqo_state.json'  # calibration state + change history
 backend     = "simulated"                            # "qblox" / "qm" on a control PC
+state_sync  = "push"                                 # simulated/qblox: scqo owns the device.
+                                                     # QM control PCs MUST use "pull" (see LCHQMDriver)
 default_tags = ["cooldown1"]                         # stamped on EVERY run; edit each cooldown
 ```
 
@@ -105,8 +107,13 @@ data_root   = "~/qpu_data"
 device_name = "SQ_demo"
 state_path  = "~/qpu_data/SQ_demo/scqo_state.json"
 backend     = "simulated"
+state_sync  = "push"
 default_tags = ["cooldown1"]
 ```
+
+(`state_sync = "push"` makes calibrated values persist across script invocations —
+right for a device scqo fully owns, like the simulator. On QM it stays `"pull"` so a
+stale scqo state file can never overwrite calibrations made through qualibrate.)
 
 Notes:
 - `default_tags` is the killer feature: set it once per cooldown and every run is
@@ -157,6 +164,21 @@ python scripts/run_experiment.py qubit_ramsey --no-update ...     # analyze only
 python scripts/run_experiment.py qubit_ramsey --params my.json    # parameters from a file
 ```
 
+The **daily workflow** is one command — the standard sequence (resonator spectroscopy
+→ Ramsey → power Rabi), every step saved + tagged, summary at the end:
+
+```bash
+python scripts/calibrate.py --qubits q0 q1 --tag cooldown1
+python scripts/calibrate.py --skip resonator_spectroscopy       # drop a step
+```
+
+And the device's calibration state / change log any time:
+
+```bash
+python scripts/device.py                    # current values per qubit
+python scripts/device.py --history 20       # who changed what, when, in which run
+```
+
 ## 4. Finding your data (the whole point)
 
 ```bash
@@ -174,8 +196,9 @@ python scripts/find_runs.py --show 20260704-153041-qubit_ramsey-01   # one run, 
 - Dates in filters are **local lab time** and match the folder names; a bare date in
   `--until` includes that whole day.
 - `find_runs` touches no instrument — it runs anywhere the data drive is mounted.
-- Realized a week later that a run mattered? Tag it retroactively from Python:
-  `sess.tag_run("20260704-...-01", add=["thesis-fig3"])`.
+- Realized a week later that a run mattered? Tag it retroactively:
+  `python scripts/tag_run.py 20260704-...-01 --add thesis-fig3 --note "best T2* so far"`
+  (also backend-free).
 
 ## 5. What's inside a run folder
 
