@@ -203,7 +203,30 @@ python -m scqo <data_root>
 
 ## 6. Working in Python / Jupyter
 
-Everything the scripts do is four lines in a notebook:
+**Where do my notebooks/scripts live?** Anywhere OUTSIDE the governed repos — e.g. a
+personal `lab-notebooks/` folder (make it your own git repo if you want history).
+Because `scqo`/`scqat` are installed in the venv, imports work from any directory;
+just select the venv as your interpreter/kernel (VS Code: pick
+`.venv\Scripts\python.exe`; or `uv pip install --python <venv-python> jupyterlab
+ipykernel`). If a notebook grows into a new *experiment* or *estimator*, it graduates
+to the contrib sandbox (section 8) — never straight into SCQO or a driver repo.
+
+**Analyzing saved data needs no backend at all** — this is what most notebooks are:
+
+```python
+from scqo import DataStore, load_lab_config
+
+cfg = load_lab_config()
+store = DataStore(cfg.data_root, device_name=cfg.device_name)
+
+store.find_runs(experiment="qubit_ramsey", qubit="q1", tag="cooldown1")
+run = store.load_run("20260704-153041-qubit_ramsey-01")  # record + params + figure paths
+ds = store.open_dataset("20260704-153041-qubit_ramsey-01")
+ds["I"].sel(qubit="q1").plot()
+store.tag_run("20260704-153041-qubit_ramsey-01", add=["thesis-fig3"])
+```
+
+**Running measurements** from a notebook is the same Session the scripts use:
 
 ```python
 from scqo import load_lab_config, make_session
@@ -219,9 +242,6 @@ sess = make_session(backend, cfg)
 result = sess.run("qubit_ramsey", {"qubits": ["q1"], "num_points": 201})
 sess.find_runs(experiment="qubit_ramsey", qubit="q1")   # list of dicts, newest first
 sess.load_run(result["run_id"])                          # record + params + figure paths
-
-ds = sess.datastore.open_dataset(result["run_id"])       # the raw xarray.Dataset
-ds["I"].sel(qubit="q1").plot()
 
 sess.device_state()   # current calibration of every qubit
 sess.history()        # every change ever: who, what, old → new, which run caused it
