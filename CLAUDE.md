@@ -122,6 +122,8 @@ Parameters, Result, `estimate`, `simulate` and `update` are inherited unchanged.
    - [ ] `description` is catalog-quality (an AI reads it to decide).
    - [ ] Physics half moved to `scqo/experiments/`; driver `probe()` subclasses registered
          under the core `scqo.experiments` group; contrib copy deleted.
+   - [ ] Launcher stubs regenerated in each driver (`python scripts/experiments/_sync.py`)
+         so the new experiment is directly runnable.
 
 ### Reference backends
 - `D:\github\LCHQMDriver` — Quantum Machines (qm-qua / quam / qualibrate).

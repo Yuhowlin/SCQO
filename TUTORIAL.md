@@ -164,6 +164,15 @@ python scripts/run_experiment.py qubit_ramsey --no-update ...     # analyze only
 python scripts/run_experiment.py qubit_ramsey --params my.json    # parameters from a file
 ```
 
+Prefer one command per experiment (qualibrate-node style)? Every cataloged experiment
+has its own launcher in `scripts/experiments/` — same flags, and `--help` shows that
+experiment's full parameter list with defaults and descriptions:
+
+```bash
+python scripts/experiments/qubit_ramsey.py --qubits q1 --set num_points=201
+python scripts/experiments/qubit_ramsey.py --help
+```
+
 The **daily workflow** is one command — the standard sequence (resonator spectroscopy
 → Ramsey → power Rabi), every step saved + tagged, summary at the end:
 
