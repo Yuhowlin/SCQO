@@ -83,6 +83,11 @@ python scripts/run_experiment.py resonator_spectroscopy --no-update ...   # anal
 python scripts/run_experiment.py qubit_ramsey --params my.json    # parameters from a file
 ```
 
+Two ways to pass parameters — don't mix their syntaxes: **`--set KEY=VALUE`** changes
+*one* knob (repeat it for several), while **`--params`** loads a *whole set* as JSON —
+a file path or an inline object like `--params "{""num_points"": 201}"`. See every
+knob an experiment has with `... <experiment> --help`.
+
 Prefer one command per experiment (qualibrate-node style)? Every cataloged experiment
 has its own launcher in `scripts/experiments/` — same flags, and `--help` shows that
 experiment's full parameter list with defaults and descriptions:
