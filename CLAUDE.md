@@ -110,9 +110,10 @@ Parameters, Result, `estimate`, `simulate` and `update` are inherited unchanged.
 ### Experiment governance (3 tiers) + promotion checklist
 1. **Students** run the driver scripts (`run_experiment.py` / `find_runs.py`) with
    `~/.scqo/config.toml`; they change nothing in the governed repos.
-2. **Advanced users** prototype new experiments + estimators in a sandbox (planned:
-   `scqo-contrib` repo on the entry-point group `scqo.experiments.contrib`), against their
-   instrument and QPU. Contrib runs persist to the same datastore, so prove-out is evaluable.
+2. **Advanced users** prototype new experiments + estimators in the sandbox repo
+   `D:\github\scqo-contrib` (github.com/shiau109/scqo-contrib; entry-point group
+   `scqo.experiments.contrib`, tagged `maturity: contrib` in the catalog; template:
+   `t1_relaxation`). Contrib runs persist to the same datastore, so prove-out is evaluable.
 3. **The manager promotes** a proven experiment into the system. Checklist:
    - [ ] `DatasetContract` declared; probe output validated against it on the real instrument.
    - [ ] `simulate()` implemented -> offline end-to-end test in `tests/`.

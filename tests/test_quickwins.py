@@ -153,6 +153,46 @@ def test_discovery_imports_entry_points(monkeypatch):
     assert "discovered_ramsey" in names
 
 
+def test_contrib_entry_point_group_is_tagged(monkeypatch):
+    """Experiments loaded from the contrib group are tagged maturity='contrib' in the
+    catalog; core-group and hand-registered ones stay 'core'."""
+    registry._discovered = False
+
+    class _CoreEP:
+        name = "core"
+
+        def load(self):
+            @register
+            class _CoreExp(ResonatorSpectroscopy):
+                name = "maturity_core_exp"
+
+                def probe(self):
+                    return None
+
+    class _ContribEP:
+        name = "contrib"
+
+        def load(self):
+            @register
+            class _ContribExp(ResonatorSpectroscopy):
+                name = "maturity_contrib_exp"
+
+                def probe(self):
+                    return None
+
+    def fake_entry_points(group=None):
+        return {
+            "scqo.experiments": [_CoreEP()],
+            "scqo.experiments.contrib": [_ContribEP()],
+        }.get(group, [])
+
+    monkeypatch.setattr(registry, "entry_points", fake_entry_points)
+    maturity = {e["name"]: e["maturity"] for e in registry.catalog()}
+    assert maturity["maturity_core_exp"] == "core"
+    assert maturity["maturity_contrib_exp"] == "contrib"
+    assert maturity["resonator_spectroscopy"] == "core"  # hand-registered demo classes
+
+
 def test_discovery_skips_failing_entry_point(monkeypatch):
     """A backend that fails to import is skipped, not fatal to discovery."""
     registry._discovered = False
