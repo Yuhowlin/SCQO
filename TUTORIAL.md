@@ -47,6 +47,7 @@ python scripts/run_experiment.py                 # no arguments = show the menu
 ```
 qubit_power_rabi        Sweep drive amplitude ... recalibrate pi_amp.
 qubit_ramsey            Two pi/2 pulses ... correct drive_freq and report T2*.
+qubit_spectroscopy      Sweep a weak saturation drive ... recalibrates drive_freq.
 resonator_spectroscopy  Sweep readout frequency ... updates readout_freq.
 ```
 
@@ -97,8 +98,9 @@ python scripts/experiments/resonator_spectroscopy.py --qubits q1 --set frequency
 python scripts/experiments/resonator_spectroscopy.py --help
 ```
 
-The **daily workflow** is one command — the standard sequence (resonator spectroscopy
-→ Ramsey → power Rabi), every step saved + tagged, summary at the end:
+The **daily workflow** is one command — the bring-up sequence (resonator spectroscopy
+→ qubit spectroscopy → power Rabi; Ramsey is the fine-tuning follow-up once a pi pulse
+exists — run it explicitly), every step saved + tagged, summary at the end:
 
 ```bash
 python scripts/calibrate.py --qubits q0 q1 --tag cooldown1

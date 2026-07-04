@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 
 from scqo import Outcome, Session, register
-from scqo.experiments import QubitPowerRabi, QubitRamsey, ResonatorSpectroscopy
+from scqo.experiments import QubitPowerRabi, QubitRamsey, QubitSpectroscopy, ResonatorSpectroscopy
 from scqo.testing import InMemoryDevice, SimulatedBackend
 
 
@@ -32,6 +32,14 @@ class DemoQubitRamsey(QubitRamsey):
 @register
 class DemoQubitPowerRabi(QubitPowerRabi):
     """Concrete power Rabi for tests/demos; no real instrument program."""
+
+    def probe(self):  # never called by SimulatedBackend
+        return None
+
+
+@register
+class DemoQubitSpectroscopy(QubitSpectroscopy):
+    """Concrete qubit spectroscopy for tests/demos; no real instrument program."""
 
     def probe(self):  # never called by SimulatedBackend
         return None
@@ -97,6 +105,20 @@ def test_ramsey_generalizes_pattern():
     after = sess.device_state()["q1"]["drive_freq"]
     assert after != before
     assert np.isclose(after, result["fit"]["q1"]["drive_freq"])
+
+
+def test_qubit_spectroscopy_finds_peak_and_updates_drive_freq():
+    """Two-tone: peak search within the swept window -> coarse drive_freq update."""
+    sess = Session(SimulatedBackend(_device()))
+
+    before = sess.device_state()["q0"]["drive_freq"]
+    result = sess.run("qubit_spectroscopy", {"qubits": ["q0"], "frequency_span_hz": 60e6})
+    assert result["outcomes"]["q0"] == Outcome.SUCCESSFUL.value
+    fit = result["fit"]["q0"]
+    assert abs(fit["peak_detuning_hz"]) <= 60e6 / 2  # inside the swept window
+    assert fit["fwhm_hz"] > 0 and fit["n_peaks"] >= 1
+    after = sess.device_state()["q0"]["drive_freq"]
+    assert np.isclose(after, before + fit["peak_detuning_hz"])
 
 
 def test_power_rabi_generalizes_pattern():

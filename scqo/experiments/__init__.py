@@ -7,6 +7,11 @@ these and implement ``probe()`` for their instrument, then ``@register`` the sub
 
 from .qubit_power_rabi import QubitPowerRabi, QubitPowerRabiParameters, QubitPowerRabiResult
 from .qubit_ramsey import QubitRamsey, QubitRamseyParameters, QubitRamseyResult
+from .qubit_spectroscopy import (
+    QubitSpectroscopy,
+    QubitSpectroscopyParameters,
+    QubitSpectroscopyResult,
+)
 from .resonator_spectroscopy import (
     ResonatorSpectroscopy,
     ResonatorSpectroscopyParameters,
@@ -17,6 +22,9 @@ __all__ = [
     "ResonatorSpectroscopy",
     "ResonatorSpectroscopyParameters",
     "ResonatorSpectroscopyResult",
+    "QubitSpectroscopy",
+    "QubitSpectroscopyParameters",
+    "QubitSpectroscopyResult",
     "QubitRamsey",
     "QubitRamseyParameters",
     "QubitRamseyResult",
