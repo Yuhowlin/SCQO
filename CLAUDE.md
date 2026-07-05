@@ -85,6 +85,9 @@ scqo/
     qubit_ramsey.py             # time sweep, decaying-cosine fit -> updates drive_freq + T2*
     qubit_power_rabi.py         # amplitude sweep, cosine fit -> updates pi_amp
     t1_relaxation.py            # pi + swept wait, exp-decay fit -> reports t1_s (no writeback)
+    t2_echo.py                  # Hahn echo, exp-envelope fit -> reports t2_echo_s (no writeback)
+    qubit_spectroscopy_flux.py  # 2D flux x detuning arch -> sweet spot / Ej_sum (Phase-3 feeder)
+    single_shot_readout.py      # per-shot IQ blobs (prepared_state x shot_idx) -> readout fidelity
     resonator_spectroscopy_power.py  # 2D punchout (detuning x power_db) -> readout_amp + readout_freq
 tests/test_end_to_end.py        # catalog -> run -> writeback, no hardware
 tests/test_datastore.py         # run folders + index + tags + reindex, no hardware
