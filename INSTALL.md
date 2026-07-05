@@ -155,6 +155,14 @@ device_name = "chipB"
 state_path  = 'D:\qpu_data\chipB\scqo_state.json'
 ```
 
+**QUAM state authority (QM):** `[qm] state_dir` names THE state a session uses in
+**both** `qm_sim` and real `qm` modes (since v0.1.2 — before that, real mode silently
+resolved through `~/.qualibrate`, the hidden second authority that broke the server's
+first real run). A machine measuring the real instrument points it at the LIVE state
+folder; a tier-2 dev machine doing a real prove-out points it at a **fresh copy of
+the server's live state** (scp it over first) — `state_sync = "pull"` keeps
+writebacks inside the copy, so the canonical state is never touched.
+
 Optionally describe each sample in `<data_root>\devices.toml` (one table per chip:
 description, design values, where it is mounted — instrument-independent facts only);
 the viewer's Device page shows the matching card. All samples share ONE `data_root`
