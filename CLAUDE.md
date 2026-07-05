@@ -118,6 +118,11 @@ Moving a sample between instruments needs NO data action (folder/history/trends 
 the sample; eras distinguish by backend) — procedure in INSTALL.md §2. Rule: qubit
 names belong to the SAMPLE and must be identical in every vendor config ("q1" = the
 same physical qubit on both instruments), or its trends and history split.
+Scale/concurrency (tests/test_index_scale.py): device-scoped pages are O(limit) via
+the composite index — fast at 100k+ runs/sample, unaffected by neighbors; only
+UNSCOPED JSON tag/qubit filters scan lab-wide totals. Simultaneous same-PC sessions
+(two students, two samples) are safe (WAL + busy retry; folder written before index,
+so reindex heals any skipped write); multi-PC writers need per-PC data_roots.
 
 ### How a driver adds an experiment
 1. Subclass the backend-free experiment from `scqo.experiments`.

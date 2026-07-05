@@ -18,10 +18,15 @@ scratch by scanning for ``record.json`` files (folders without one are incomplet
 and are skipped). Deleting the index is always safe — remove all ``index.sqlite*`` files
 together (the ``-wal``/``-shm`` siblings too) and rerun ``python -m scqo <data_root>``.
 
-Concurrency note: WAL mode makes one writing Session + any number of readers safe on a
-local disk. If ``data_root`` lives on a network share, keep the *writing* Session on one
-PC (SQLite WAL is not reliable across SMB/NFS clients); readers can always fall back to
-the folders + ``reindex`` on a local copy.
+Concurrency note: on a local disk, WAL mode + the 10 s busy retry + short-lived
+connections make SIMULTANEOUS same-PC sessions safe — e.g. two students measuring two
+different samples: they share no rows (PK ``(run_id, device)``), no folders, and no
+state files; index writes are ~1 ms per run and simply queue. Worst case an index
+write is skipped, the run folder is already on disk and ``reindex`` heals the cache.
+If ``data_root`` lives on a network share, keep ALL writing Sessions on one PC
+(SQLite WAL is not reliable across SMB/NFS clients); when instruments move to separate
+control PCs, give each PC its own local ``data_root`` (= physical per-sample
+separation) and aggregate centrally by collecting folders + ``reindex``.
 """
 
 from __future__ import annotations
@@ -66,7 +71,11 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 CREATE INDEX IF NOT EXISTS idx_runs_experiment ON runs(experiment);
 CREATE INDEX IF NOT EXISTS idx_runs_started    ON runs(started_at);
-CREATE INDEX IF NOT EXISTS idx_runs_device     ON runs(device);
+DROP INDEX IF EXISTS idx_runs_device;  -- superseded by the composite below
+-- Device-scoped, newest-first pages walk this index and read only the LIMIT rows:
+-- O(limit) regardless of how many runs THIS or any other sample has accumulated.
+CREATE INDEX IF NOT EXISTS idx_runs_device_started
+  ON runs(device, started_at DESC, run_id DESC);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 """
 
