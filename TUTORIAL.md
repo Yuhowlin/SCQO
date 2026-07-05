@@ -195,7 +195,44 @@ all can run at once):
 Power users: `python -m scqo.browse` still serves raw datasette on **8081** for
 ad-hoc SQL, facets and CSV export (same canned queries as before).
 
-## 5. Working in Python / Jupyter
+## 5. Working from your own laptop (nothing to install)
+
+Once the lab server is running, your own laptop needs **no Python, no venv, no
+config file** — just two addresses:
+
+**To see data — the browser.** Open `http://<server>:8080` (ask the manager for the
+server's name/IP). Everything in the viewer section above works from any machine on
+the lab network, including tag/note editing.
+
+**To measure — SSH.** Every OS ships an ssh client (Windows PowerShell, macOS
+Terminal, Linux). Ask the manager for an account on the server, then a session looks
+like this:
+
+```
+ssh <your-account>@<server>            # password prompt on first login
+D:\github\.venv-qblox\Scripts\Activate.ps1     # (or .venv-qm for the OPX1000)
+cd D:\github\LCHQBDriver
+python scripts\run_experiment.py resonator_spectroscopy --qubits q1 --tag mytest
+python scripts\find_runs.py --limit 5
+exit
+```
+
+The run executes on the server (which owns the instruments and the data), your
+laptop is only the keyboard — closing the lid mid-run kills the run, so let a
+measurement finish before disconnecting. Figures appear in the viewer seconds later.
+
+Rules that keep shared instruments sane:
+
+- Every run records **you** as its operator (your login name) — visible in the
+  viewer and `find_runs.py --operator <name>`. Your work is attributable; so are
+  your mistakes. Both are fine — failed runs are searchable on purpose.
+- **One measurement at a time per instrument.** Check the viewer's latest runs (or
+  ask in the lab chat) before starting a long sweep; a second program on the same
+  instrument will fail or corrupt both.
+- SSH is for *measuring*. For looking at data, use the browser — it can't break
+  anything.
+
+## 6. Working in Python / Jupyter
 
 **Where do my notebooks/scripts live?** Anywhere OUTSIDE the governed repos — e.g. a
 personal `lab-notebooks/` folder (make it your own git repo if you want history).
@@ -204,7 +241,7 @@ just select the right venv as your interpreter/kernel (VS Code: pick
 `.venv-view\Scripts\python.exe` for analysis notebooks, `.venv-qblox\...` if the
 notebook drives the instrument; or `uv pip install --python <venv-python> jupyterlab
 ipykernel`). If a notebook grows into a new *experiment* or *estimator*, it graduates
-to the contrib sandbox (section 7) — never straight into SCQO or a driver repo.
+to the contrib sandbox (section 8) — never straight into SCQO or a driver repo.
 
 **Analyzing saved data needs no backend at all** — this is what most notebooks are:
 
@@ -242,7 +279,7 @@ sess.device_state()   # current calibration of every qubit
 sess.history()        # every change ever: who, what, old → new, which run caused it
 ```
 
-## 6. When things fail (by design)
+## 7. When things fail (by design)
 
 A failed fit or a bad probe **never crashes and never loses data**: you get
 `"error": "..."`, the qubits are marked `failed`/`no_data`, nothing is written back
@@ -251,7 +288,7 @@ searchable via `--outcome failed`, because failed data is exactly what you want 
 look at when debugging. Even "measurement fine, instrument rejected the writeback"
 comes back as a structured error with the fit intact.
 
-## 7. Rules of the road (who edits what)
+## 8. Rules of the road (who edits what)
 
 1. **Students**: run the scripts, edit only your own `config.toml` and parameters.
    The repos are read-only for you.
@@ -261,7 +298,7 @@ comes back as a structured error with the fit intact.
 3. **The manager** promotes proven experiments into `scqo/experiments/` + the driver
    repos (checklist in [CLAUDE.md](CLAUDE.md)).
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 | Symptom | Cause / fix |
 |---|---|
@@ -271,7 +308,7 @@ comes back as a structured error with the fit intact.
 | Unknown `run_id` in `--show` | same — rebuild the index |
 | Want a clean slate | deleting `index.sqlite*` (all three files) is always safe; the folders are the data |
 
-## 9. What Phase 1 does NOT include yet
+## 10. What Phase 1 does NOT include yet
 
 - **Real Qblox hardware**: `QbloxBackend._to_canonical()` is still a TODO — Qblox
   runs are simulated/virtual-twin only today. QM hardware runs the three migrated

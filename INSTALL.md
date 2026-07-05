@@ -277,10 +277,22 @@ One-time server setup (Windows 11, admin PowerShell):
 Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
 Set-Service sshd -StartupType Automatic; Start-Service sshd
 
+# make PowerShell the shell students land in (default is cmd.exe, where the
+# venv Activate.ps1 scripts in TUTORIAL section 5 would not run)
+New-ItemProperty -Path "HKLM:\SOFTWARE\OpenSSH" -Name DefaultShell `
+  -Value "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" -PropertyType String -Force
+
+# one STANDARD (non-admin) account per student — the login becomes the run's
+# recorded operator, so no shared accounts
+net user <student> <initial-password> /add /fullname:"Student Name"
+
 # nightly data mirror to the NAS (= the lab's backup policy; /MIR mirrors deletions too)
 schtasks /Create /TN scqo-mirror /SC DAILY /ST 03:00 `
   /TR "robocopy D:\qpu_data \\NAS\qpu_data /MIR /R:2 /W:5 /LOG:D:\qpu_data\mirror.log"
 ```
+
+(Client side — what a student actually types from their laptop — is
+[TUTORIAL.md §5](TUTORIAL.md); point new members there, not here.)
 
 A student measuring from their own laptop, with nothing installed on it:
 
