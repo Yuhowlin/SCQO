@@ -290,6 +290,19 @@ def test_operator_is_stamped_and_survives_reindex(tmp_path):
     assert DataStore(tmp_path / "data").find_runs(operator=me)[0]["run_id"] == r["run_id"]
 
 
+def test_run_ids_unique_across_devices_same_second(tmp_path):
+    """Two samples allocating in the same wall-clock second must not share a run_id
+    (run_ids embed the device name — /run/{id} and tag_run stay unambiguous)."""
+    from scqo import DataStore
+
+    a = DataStore(tmp_path / "data", device_name="devA")
+    b = DataStore(tmp_path / "data", device_name="devB")
+    id_a, _ = a.new_run_dir("resonator_spectroscopy")  # same second, same experiment
+    id_b, _ = b.new_run_dir("resonator_spectroscopy")
+    assert id_a != id_b
+    assert "devA" in id_a and "devB" in id_b
+
+
 def test_device_registry_loader(tmp_path):
     """devices.toml is optional, instrument-independent, and a typo never raises."""
     from scqo.datastore import load_device_registry

@@ -74,8 +74,8 @@ You get the structured result as JSON — extracted physics, not raw traces:
                     "dip_detuning_hz": -1795822.3,      // how far the dip sat from the old value
                     "old_readout_freq": 5909267253.9 } },
   "error": null,
-  "run_id": "20260704-225450-resonator_spectroscopy-01",
-  "data_path": "D:\\qpu_data\\SQ_demo\\2026-07-04\\20260704-225450-resonator_spectroscopy-01"
+  "run_id": "20260704-225450-SQ_demo-resonator_spectroscopy-01",
+  "data_path": "D:\\qpu_data\\SQ_demo\\2026-07-04\\20260704-225450-SQ_demo-resonator_spectroscopy-01"
 }
 ```
 
@@ -127,11 +127,11 @@ python scripts/find_runs.py                                   # latest runs, new
 python scripts/find_runs.py --tag cooldown1                   # everything from this cooldown
 python scripts/find_runs.py --experiment resonator_spectroscopy --qubit q1 --since 2026-07-01
 python scripts/find_runs.py --outcome failed                  # what went wrong lately?
-python scripts/find_runs.py --show 20260704-225450-resonator_spectroscopy-01   # one run, in full
+python scripts/find_runs.py --show 20260704-225450-SQ_demo-resonator_spectroscopy-01   # one run, in full
 ```
 
 ```
-20260704-225450-resonator_spectroscopy-01   successful  q1   cooldown1,mytest  SQ_demo/2026-07-04/20260704-225450-resonator_spectroscopy-01
+20260704-225450-SQ_demo-resonator_spectroscopy-01   successful  q1   cooldown1,mytest  SQ_demo/2026-07-04/20260704-225450-SQ_demo-resonator_spectroscopy-01
 ```
 
 - Dates in filters are **local lab time** and match the folder names; a bare date in
@@ -146,7 +146,7 @@ python scripts/find_runs.py --show 20260704-225450-resonator_spectroscopy-01   #
 ## 4. What's inside a run folder
 
 ```
-<data_root>/SQ_demo/2026-07-04/20260704-225450-resonator_spectroscopy-01/
+<data_root>/SQ_demo/2026-07-04/20260704-225450-SQ_demo-resonator_spectroscopy-01/
     record.json          run manifest (its absence = run was incomplete/crashed)
     dataset.nc           the raw I/Q dataset (xarray/netCDF, dims: qubit × detuning_hz)
     parameters.json      exactly what you asked for
@@ -215,10 +215,10 @@ cfg = load_lab_config()
 store = DataStore(cfg.data_root, device_name=cfg.device_name)
 
 store.find_runs(experiment="resonator_spectroscopy", qubit="q1", tag="cooldown1")
-run = store.load_run("20260704-225450-resonator_spectroscopy-01")  # record + params + figures
-ds = store.open_dataset("20260704-225450-resonator_spectroscopy-01")
+run = store.load_run("20260704-225450-SQ_demo-resonator_spectroscopy-01")  # record + params + figures
+ds = store.open_dataset("20260704-225450-SQ_demo-resonator_spectroscopy-01")
 ds["I"].sel(qubit="q1").plot()
-store.tag_run("20260704-225450-resonator_spectroscopy-01", add=["thesis-fig3"])
+store.tag_run("20260704-225450-SQ_demo-resonator_spectroscopy-01", add=["thesis-fig3"])
 ```
 
 **Running measurements** from a notebook is the same Session the scripts use:

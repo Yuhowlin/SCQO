@@ -173,12 +173,20 @@ class DataStore:
 
     # ------------------------------------------------------------------ folders
     def new_run_dir(self, experiment: str) -> tuple[str, Path]:
-        """Allocate a run_id and create its folder (collision-safe via exclusive mkdir)."""
+        """Allocate a run_id and create its folder (collision-safe via exclusive mkdir).
+
+        The device (sample) name is PART of the run_id: the exclusive-mkdir guard only
+        serializes within one device's folder, so two samples starting the same
+        experiment in the same second would otherwise mint identical ids — making
+        ``/run/{run_id}``, ``tag_run`` and ``load_run`` ambiguous (caught by CI's fast
+        runners; the two-students-two-samples scenario). With the device embedded the
+        id is globally unique by construction — no cross-device locking needed.
+        """
         now = datetime.now()  # local wall-clock: humans browse folders by lab date
         stamp = now.strftime("%Y%m%d-%H%M%S")
         day_dir = self.data_root / self.device_name / now.strftime("%Y-%m-%d")
         for seq in range(1, 100):
-            run_id = f"{stamp}-{experiment}-{seq:02d}"
+            run_id = f"{stamp}-{self.device_name}-{experiment}-{seq:02d}"
             run_dir = day_dir / run_id
             try:
                 run_dir.mkdir(parents=True, exist_ok=False)
