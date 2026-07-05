@@ -84,6 +84,8 @@ scqo/
     qubit_spectroscopy.py       # two-tone peak search -> coarse drive_freq (bring-up step 2)
     qubit_ramsey.py             # time sweep, decaying-cosine fit -> updates drive_freq + T2*
     qubit_power_rabi.py         # amplitude sweep, cosine fit -> updates pi_amp
+    t1_relaxation.py            # pi + swept wait, exp-decay fit -> reports t1_s (no writeback)
+    resonator_spectroscopy_power.py  # 2D punchout (detuning x power_db) -> readout_amp + readout_freq
 tests/test_end_to_end.py        # catalog -> run -> writeback, no hardware
 tests/test_datastore.py         # run folders + index + tags + reindex, no hardware
 ```
@@ -149,3 +151,10 @@ searchable tags; `find_runs`/`load_run`/`tag_run` complete the Session surface, 
 change history links each writeback to its `run_id`. Lab config (`~/.scqo/config.toml`,
 `scqo.labconfig`) drives the student scripts in both driver repos. `state_sync="pull"`
 is the default (QM stays pull until qualibrate migration completes).
+
+**2026-07-05 — first Tier-3 promotions + 2D sweeps:** `t1_relaxation` promoted from
+scqo-contrib (first full sandbox->promotion exercise) and `resonator_spectroscopy_power`
+promoted from the QM qualibrate path. The stack now supports **multi-axis sweeps**
+(`DatasetContract.sweeps` tuple; N-D `_to_canonical` in both drivers) and a fourth
+tracked field **`readout_amp`** (readout pulse amplitude; QM: within the current
+output-power config — FEM-gain reconfiguration stays with the qualibrate power node).

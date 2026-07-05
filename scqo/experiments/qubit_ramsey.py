@@ -58,7 +58,7 @@ class QubitRamsey(Experiment):
     Parameters: ClassVar[type] = QubitRamseyParameters
     Result: ClassVar[type] = QubitRamseyResult
     Contract: ClassVar[DatasetContract] = DatasetContract(
-        sweep="idle_time_ns", sweep_unit="ns", variables=("I", "Q")
+        sweeps=("idle_time_ns",), sweep_units=("ns",), variables=("I", "Q")
     )
 
     params: QubitRamseyParameters

@@ -29,41 +29,42 @@ class ContractError(ValueError):
 
 @dataclass(frozen=True)
 class DatasetContract:
-    """The canonical dataset a single-sweep probing method's probe must emit.
+    """The canonical dataset a probing method's probe must emit (1..N sweep axes).
 
     Attributes:
-        sweep: name of the swept dimension/coordinate (e.g. ``"idle_time_ns"``).
-        sweep_unit: documentary unit of the sweep axis (e.g. ``"ns"``, ``"Hz"``,
-            ``"dimensionless"``); not enforced (xarray coords carry no units here).
+        sweeps: names of the swept dimensions/coordinates, in canonical order
+            (e.g. ``("idle_time_ns",)`` or ``("detuning_hz", "power_db")``).
+        sweep_units: documentary units per sweep axis (e.g. ``("Hz", "dB")``);
+            not enforced (xarray coords carry no units here).
         variables: data variables every conforming dataset must contain.
         qubit_dim: the per-qubit dimension/coordinate name (default ``"qubit"``).
     """
 
-    sweep: str
-    sweep_unit: str
+    sweeps: tuple[str, ...]
+    sweep_units: tuple[str, ...]
     variables: tuple[str, ...]
     qubit_dim: str = "qubit"
 
     @property
-    def dims(self) -> tuple[str, str]:
-        """The dimensions every required variable must span: ``(qubit_dim, sweep)``."""
-        return (self.qubit_dim, self.sweep)
+    def dims(self) -> tuple[str, ...]:
+        """The dimensions every required variable must span: ``(qubit_dim, *sweeps)``."""
+        return (self.qubit_dim, *self.sweeps)
 
     def validate(self, ds: xr.Dataset) -> None:
         """Raise :class:`ContractError` if ``ds`` does not conform.
 
-        Checks that ``qubit_dim`` and ``sweep`` are present as both a dimension and a
-        coordinate, and that each required variable exists and spans exactly those two
-        dimensions. Extra variables/coordinates are allowed (e.g. a probe may also emit
-        ``Q`` for a method whose estimator only reads ``I``).
+        Checks that ``qubit_dim`` and every sweep axis are present as both a dimension
+        and a coordinate, and that each required variable exists and spans exactly that
+        dimension set. Extra variables/coordinates are allowed (e.g. a probe may also
+        emit ``Q`` for a method whose estimator only reads ``I``).
         """
         problems: list[str] = []
-        for dim in (self.qubit_dim, self.sweep):
+        for dim in self.dims:
             if dim not in ds.dims:
                 problems.append(f"missing dimension {dim!r}")
             if dim not in ds.coords:
                 problems.append(f"missing coordinate {dim!r}")
-        want = {self.qubit_dim, self.sweep}
+        want = set(self.dims)
         for var in self.variables:
             if var not in ds.data_vars:
                 problems.append(f"missing variable {var!r}")
@@ -74,7 +75,7 @@ class DatasetContract:
                 )
         if problems:
             raise ContractError(
-                f"dataset does not conform to contract (sweep={self.sweep!r}, "
+                f"dataset does not conform to contract (sweeps={self.sweeps!r}, "
                 f"variables={self.variables}): " + "; ".join(problems)
             )
 

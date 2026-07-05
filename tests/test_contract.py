@@ -17,8 +17,8 @@ from scqo.testing import InMemoryDevice, SimulatedBackend
 def _device() -> InMemoryDevice:
     return InMemoryDevice(
         {
-            "q0": {"readout_freq": 5.95e9, "drive_freq": 3.87e9, "pi_amp": 0.2},
-            "q1": {"readout_freq": 6.05e9, "drive_freq": 4.01e9, "pi_amp": 0.18},
+            "q0": {"readout_freq": 5.95e9, "drive_freq": 3.87e9, "pi_amp": 0.2, "readout_amp": 0.25},
+            "q1": {"readout_freq": 6.05e9, "drive_freq": 4.01e9, "pi_amp": 0.18, "readout_amp": 0.22},
         }
     )
 
@@ -57,7 +57,7 @@ def _acquire(cls):
 def test_simulated_probe_output_conforms(cls, sweep):
     exp, ds = _acquire(cls)
     # the declared contract's sweep axis matches define_sweep, and the dataset conforms
-    assert cls.Contract.sweep == sweep
+    assert cls.Contract.sweeps == (sweep,)
     assert cls.Contract.dims == ("qubit", sweep)
     exp.Contract.validate(ds)  # does not raise
     assert exp.Contract.conforms(ds)
@@ -77,7 +77,7 @@ def test_run_enforces_contract():
 
 
 def test_validate_rejects_nonconforming():
-    contract = DatasetContract(sweep="idle_time_ns", sweep_unit="ns", variables=("I", "Q"))
+    contract = DatasetContract(sweeps=("idle_time_ns",), sweep_units=("ns",), variables=("I", "Q"))
     _, ds = _acquire(_Ram)
 
     contract.validate(ds)  # baseline: conforms
@@ -87,3 +87,26 @@ def test_validate_rejects_nonconforming():
 
     with pytest.raises(ContractError):
         contract.validate(ds.rename({"idle_time_ns": "t"}))  # missing sweep dim/coord
+
+
+def test_two_axis_contract():
+    """A 2D-sweep contract validates (qubit, axis1, axis2) datasets and rejects 1D."""
+    import numpy as np
+    import xarray as xr
+
+    contract = DatasetContract(
+        sweeps=("detuning_hz", "power_db"), sweep_units=("Hz", "dB"), variables=("I", "Q")
+    )
+    assert contract.dims == ("qubit", "detuning_hz", "power_db")
+
+    det, pwr = np.linspace(-1e6, 1e6, 5), np.linspace(-30, 0, 3)
+    data = np.zeros((2, det.size, pwr.size))
+    ds2 = xr.Dataset(
+        {"I": (("qubit", "detuning_hz", "power_db"), data),
+         "Q": (("qubit", "detuning_hz", "power_db"), data)},
+        coords={"qubit": ["q0", "q1"], "detuning_hz": det, "power_db": pwr},
+    )
+    contract.validate(ds2)  # conforms
+
+    with pytest.raises(ContractError):
+        contract.validate(ds2.isel(power_db=0, drop=True))  # lost an axis -> reject

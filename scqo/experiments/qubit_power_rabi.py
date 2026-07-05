@@ -51,7 +51,7 @@ class QubitPowerRabi(Experiment):
     Parameters: ClassVar[type] = QubitPowerRabiParameters
     Result: ClassVar[type] = QubitPowerRabiResult
     Contract: ClassVar[DatasetContract] = DatasetContract(
-        sweep="amp_factor", sweep_unit="dimensionless", variables=("I", "Q")
+        sweeps=("amp_factor",), sweep_units=("dimensionless",), variables=("I", "Q")
     )
 
     params: QubitPowerRabiParameters

@@ -48,7 +48,7 @@ class ResonatorSpectroscopy(Experiment):
     Parameters: ClassVar[type] = ResonatorSpectroscopyParameters
     Result: ClassVar[type] = ResonatorSpectroscopyResult
     Contract: ClassVar[DatasetContract] = DatasetContract(
-        sweep="detuning_hz", sweep_unit="Hz", variables=("I", "Q")
+        sweeps=("detuning_hz",), sweep_units=("Hz",), variables=("I", "Q")
     )
 
     params: ResonatorSpectroscopyParameters

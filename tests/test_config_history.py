@@ -31,8 +31,8 @@ class _DemoRabi(QubitPowerRabi):
 def _device() -> InMemoryDevice:
     return InMemoryDevice(
         {
-            "q0": {"readout_freq": 5.95e9, "drive_freq": 3.87e9, "pi_amp": 0.2},
-            "q1": {"readout_freq": 6.05e9, "drive_freq": 4.01e9, "pi_amp": 0.18},
+            "q0": {"readout_freq": 5.95e9, "drive_freq": 3.87e9, "pi_amp": 0.2, "readout_amp": 0.25},
+            "q1": {"readout_freq": 6.05e9, "drive_freq": 4.01e9, "pi_amp": 0.18, "readout_amp": 0.22},
         }
     )
 
@@ -79,7 +79,7 @@ def _stale_state(tmp_path):
     path.write_text(
         json.dumps(
             {
-                "config": {"q0": {"readout_freq": 7.0e9, "drive_freq": 4.0e9, "pi_amp": 0.5}},
+                "config": {"q0": {"readout_freq": 7.0e9, "drive_freq": 4.0e9, "pi_amp": 0.5, "readout_amp": 0.25}},
                 "history": [
                     {
                         "timestamp": "2026-01-01T00:00:00+00:00", "qubit": "q0",

@@ -9,7 +9,14 @@ from __future__ import annotations
 import numpy as np
 
 from scqo import Outcome, Session, register
-from scqo.experiments import QubitPowerRabi, QubitRamsey, QubitSpectroscopy, ResonatorSpectroscopy
+from scqo.experiments import (
+    QubitPowerRabi,
+    QubitRamsey,
+    QubitSpectroscopy,
+    ResonatorSpectroscopy,
+    ResonatorSpectroscopyPower,
+    T1Relaxation,
+)
 from scqo.testing import InMemoryDevice, SimulatedBackend
 
 
@@ -45,11 +52,27 @@ class DemoQubitSpectroscopy(QubitSpectroscopy):
         return None
 
 
+@register
+class DemoT1Relaxation(T1Relaxation):
+    """Concrete T1 for tests/demos; no real instrument program."""
+
+    def probe(self):  # never called by SimulatedBackend
+        return None
+
+
+@register
+class DemoResonatorSpectroscopyPower(ResonatorSpectroscopyPower):
+    """Concrete punchout for tests/demos; no real instrument program."""
+
+    def probe(self):  # never called by SimulatedBackend
+        return None
+
+
 def _device() -> InMemoryDevice:
     return InMemoryDevice(
         {
-            "q0": {"readout_freq": 5.95e9, "drive_freq": 3.87e9, "pi_amp": 0.2},
-            "q1": {"readout_freq": 6.05e9, "drive_freq": 4.01e9, "pi_amp": 0.18},
+            "q0": {"readout_freq": 5.95e9, "drive_freq": 3.87e9, "pi_amp": 0.2, "readout_amp": 0.25},
+            "q1": {"readout_freq": 6.05e9, "drive_freq": 4.01e9, "pi_amp": 0.18, "readout_amp": 0.22},
         }
     )
 
@@ -119,6 +142,39 @@ def test_qubit_spectroscopy_finds_peak_and_updates_drive_freq():
     assert fit["fwhm_hz"] > 0 and fit["n_peaks"] >= 1
     after = sess.device_state()["q0"]["drive_freq"]
     assert np.isclose(after, before + fit["peak_detuning_hz"])
+
+
+def test_t1_relaxation_reports_without_writeback():
+    """T1: exponential decay fit -> reported t1_s inside the simulated truth range,
+    and NO device field changes (diagnostics, not calibration)."""
+    sess = Session(SimulatedBackend(_device()))
+
+    state_before = sess.device_state()
+    result = sess.run("t1_relaxation", {"qubits": ["q0"]})
+    assert result["outcomes"]["q0"] == Outcome.SUCCESSFUL.value
+    assert 20e-6 * 0.8 < result["fit"]["q0"]["t1_s"] < 60e-6 * 1.2  # sim truth 20-60 us
+    assert sess.device_state() == state_before  # no writeback
+    assert sess.history() == []
+
+
+def test_resonator_power_2d_updates_amp_and_freq():
+    """First 2D experiment: punchout picks a dispersive-regime power and writes back
+    BOTH readout_amp and readout_freq."""
+    sess = Session(SimulatedBackend(_device()))
+
+    before = sess.device_state()["q0"]
+    result = sess.run("resonator_spectroscopy_power", {"qubits": ["q0"]})
+    assert result["outcomes"]["q0"] == Outcome.SUCCESSFUL.value
+    fit = result["fit"]["q0"]
+    # optimal power is below the simulated punchout knee (-12..-8 dB)
+    assert fit["optimal_power_db"] <= -6.0
+    assert 0 < fit["readout_amp_factor"] < 1.0
+    after = sess.device_state()["q0"]
+    assert np.isclose(after["readout_amp"], before["readout_amp"] * fit["readout_amp_factor"])
+    assert np.isclose(after["readout_freq"], fit["readout_freq"])
+    # both writebacks are in the history, linked to the same run
+    fields = {h["field"] for h in sess.history()}
+    assert {"readout_amp", "readout_freq"} <= fields
 
 
 def test_power_rabi_generalizes_pattern():

@@ -3,11 +3,13 @@
 An experiment's ``update()`` writes fitted quantities back through these neutral names.
 Each backend maps them onto its native model:
 
-    neutral            QM / QUAM                     Qblox / QuantumDevice
-    -----------------  ----------------------------  -----------------------------
-    readout_freq       q.resonator.RF_frequency      q.clock_freqs.readout
-    drive_freq         q.f_01 / q.xy.RF_frequency    q.clock_freqs.f01
-    pi_amp             q.xy.operations['x180'].amp   q.rxy.amp180
+    neutral            QM / QUAM                        Qblox / QuantumDevice
+    -----------------  -------------------------------  -----------------------------
+    readout_freq       q.resonator.RF_frequency         q.clock_freqs.readout
+    drive_freq         q.f_01 / q.xy.RF_frequency       q.clock_freqs.f01
+    pi_amp             q.xy.operations['x180'].amp      q.rxy.amp180
+    readout_amp        q.resonator.operations           q.measure.pulse_amp
+                         ['readout'].amplitude
 
 This keeps experiment physics free of any vendor attribute path.
 """
@@ -52,6 +54,16 @@ class QubitView(ABC):
     @pi_amp.setter
     @abstractmethod
     def pi_amp(self, value: float) -> None: ...
+
+    @property
+    @abstractmethod
+    def readout_amp(self) -> float:
+        """Amplitude of the readout pulse (dimensionless, within the backend's
+        current output-power configuration)."""
+
+    @readout_amp.setter
+    @abstractmethod
+    def readout_amp(self, value: float) -> None: ...
 
 
 class DeviceModel(ABC):

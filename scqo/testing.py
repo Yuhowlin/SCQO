@@ -45,6 +45,14 @@ class _InMemoryQubit(QubitView):
     def pi_amp(self, value: float) -> None:
         self._state["pi_amp"] = float(value)
 
+    @property
+    def readout_amp(self) -> float:
+        return self._state["readout_amp"]
+
+    @readout_amp.setter
+    def readout_amp(self, value: float) -> None:
+        self._state["readout_amp"] = float(value)
+
 
 class InMemoryDevice(DeviceModel):
     """A DeviceModel held entirely in memory (no JSON files)."""

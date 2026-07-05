@@ -12,6 +12,12 @@ from .qubit_spectroscopy import (
     QubitSpectroscopyParameters,
     QubitSpectroscopyResult,
 )
+from .resonator_spectroscopy_power import (
+    ResonatorSpectroscopyPower,
+    ResonatorSpectroscopyPowerParameters,
+    ResonatorSpectroscopyPowerResult,
+)
+from .t1_relaxation import T1Relaxation, T1RelaxationParameters, T1RelaxationResult
 from .resonator_spectroscopy import (
     ResonatorSpectroscopy,
     ResonatorSpectroscopyParameters,
@@ -22,6 +28,12 @@ __all__ = [
     "ResonatorSpectroscopy",
     "ResonatorSpectroscopyParameters",
     "ResonatorSpectroscopyResult",
+    "ResonatorSpectroscopyPower",
+    "ResonatorSpectroscopyPowerParameters",
+    "ResonatorSpectroscopyPowerResult",
+    "T1Relaxation",
+    "T1RelaxationParameters",
+    "T1RelaxationResult",
     "QubitSpectroscopy",
     "QubitSpectroscopyParameters",
     "QubitSpectroscopyResult",

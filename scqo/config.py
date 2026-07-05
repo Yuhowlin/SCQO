@@ -33,7 +33,7 @@ from typing import Any, Literal
 from .device import DeviceModel, QubitView
 
 #: The neutral calibration fields SCQO owns (and a QubitView exposes).
-TRACKED_FIELDS = ("readout_freq", "drive_freq", "pi_amp")
+TRACKED_FIELDS = ("readout_freq", "drive_freq", "pi_amp", "readout_amp")
 
 
 def _now() -> str:

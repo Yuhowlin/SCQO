@@ -45,10 +45,12 @@ python scripts/run_experiment.py                 # no arguments = show the menu
 ```
 
 ```
-qubit_power_rabi        Sweep drive amplitude ... recalibrate pi_amp.
-qubit_ramsey            Two pi/2 pulses ... correct drive_freq and report T2*.
-qubit_spectroscopy      Sweep a weak saturation drive ... recalibrates drive_freq.
-resonator_spectroscopy  Sweep readout frequency ... updates readout_freq.
+qubit_power_rabi              Sweep drive amplitude ... recalibrate pi_amp.
+qubit_ramsey                  Two pi/2 pulses ... correct drive_freq and report T2*.
+qubit_spectroscopy            Sweep a weak saturation drive ... recalibrates drive_freq.
+resonator_spectroscopy        Sweep readout frequency ... updates readout_freq.
+resonator_spectroscopy_power  2D punchout ... updates readout_amp and readout_freq.
+t1_relaxation                 Pi pulse + swept wait ... reports T1 (no writeback).
 ```
 
 Start with **resonator spectroscopy** — always the first measurement on a device: you
