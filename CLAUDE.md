@@ -104,6 +104,17 @@ history records the `run_id` that caused each device update. State authority:
 calibrates, e.g. qualibrate on QM); `"push"` restores the saved SCQO config into the vendor
 (only for devices SCQO fully owns).
 
+**Multi-device rule (decided 2026-07-05):** `device_name` = the physical SAMPLE (chip),
+never the instrument; the instrument is provenance (every run/fit stamps `backend`).
+ONE data_root + ONE index for all samples (`find_runs(device=...)` / `--device` filter;
+per-sample DBs are rejected). With two instruments carrying two samples, the lab config's
+`[qblox]`/`[qm]` tables override `device_name`/`state_path` per backend (`scqo.labconfig`).
+Instrument-independent sample facts live in the optional human-edited registry
+`<data_root>/devices.toml` (`datastore.load_device_registry`; rendered by the viewer).
+Instrument-DEPENDENT measured values (thermal population etc.) stay in run records with
+backend provenance — compare across instruments by query, never average them away.
+Sample-level inferred physics (`sample.json` per device folder) is Phase-3 output.
+
 ### How a driver adds an experiment
 1. Subclass the backend-free experiment from `scqo.experiments`.
 2. Implement only `probe()` for the instrument (lazy-import the vendor lib inside it).

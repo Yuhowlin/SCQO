@@ -46,7 +46,8 @@ def _device() -> InMemoryDevice:
 
 @pytest.fixture(scope="module")
 def lab(tmp_path_factory):
-    """A datastore with three runs (res spec, ramsey, t1) + a viewer client over it."""
+    """A datastore with three runs (res spec, ramsey, t1), a SECOND sample sharing the
+    same data_root (multi-device paths), and a viewer client over it all."""
     root = tmp_path_factory.mktemp("data")
     state = root / "scqo_state.json"
     sess = Session(
@@ -56,8 +57,22 @@ def lab(tmp_path_factory):
     r_res = sess.run("resonator_spectroscopy", {"qubits": ["q0"]}, tags=["cool1"])
     r_ram = sess.run("qubit_ramsey", {"qubits": ["q1"], "num_points": 201}, tags=["cool1", "special"])
     r_t1 = sess.run("t1_relaxation", {"qubits": ["q1"]}, tags=["cool1"])
+
+    # second physical sample; its state file follows the
+    # <data_root>/<device>/scqo_state.json convention the viewer resolves
+    (root / "chipZ").mkdir()
+    sess_z = Session(
+        SimulatedBackend(_device()), data_root=root, device_name="chipZ",
+        state_path=str(root / "chipZ" / "scqo_state.json"), state_sync="push",
+    )
+    r_z = sess_z.run("resonator_spectroscopy", {"qubits": ["q0"]}, tags=["zcool"])
+    (root / "devices.toml").write_text(
+        '[chipZ]\ndescription = "second sample on the other fridge"\nmounted_on = "qm"\n',
+        encoding="utf-8",
+    )
+
     client = TestClient(create_app(root, device_name="devV", state_path=state))
-    return {"client": client, "root": root, "res": r_res, "ram": r_ram, "t1": r_t1}
+    return {"client": client, "root": root, "res": r_res, "ram": r_ram, "t1": r_t1, "chipz": r_z}
 
 
 def test_runs_page_lists_and_filters(lab):
@@ -118,6 +133,31 @@ def test_trends_page_charts_t1(lab):
 def test_device_page_state_and_history(lab):
     c = lab["client"]
     page = c.get("/device").text
+    assert "Device: devV" in page  # default = the configured sample
     assert "readout_amp" in page  # last-observed calibration table
     assert "Change history" in page
     assert lab["res"]["run_id"] in page  # history entry links to its run
+
+
+def test_multi_device_filter_and_device_page(lab):
+    c = lab["client"]
+    rid = lab["chipz"]["run_id"]
+
+    only_z = c.get("/", params={"device": "chipZ"}).text
+    assert rid in only_z and lab["res"]["run_id"] not in only_z
+
+    page = c.get("/device", params={"device": "chipZ"}).text
+    assert "Device: chipZ" in page
+    assert "second sample on the other fridge" in page  # devices.toml card rendered
+    assert rid in page  # history via the <data_root>/<device>/scqo_state.json convention
+
+
+def test_trends_never_mix_samples(lab):
+    c = lab["client"]
+    # q0 readout_freq exists on BOTH samples ("q1 exists on every chip" problem):
+    # the default trend is scoped to the configured device, not the union.
+    dev = c.get("/trends", params={"qubit": "q0", "quantity": "readout_freq"}).text
+    assert lab["res"]["run_id"] in dev
+    assert lab["chipz"]["run_id"] not in dev
+    z = c.get("/trends", params={"qubit": "q0", "quantity": "readout_freq", "device": "chipZ"}).text
+    assert lab["chipz"]["run_id"] in z and lab["res"]["run_id"] not in z

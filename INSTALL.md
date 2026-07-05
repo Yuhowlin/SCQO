@@ -108,7 +108,7 @@ Windows (virtual-twin example):
 ```toml
 [lab]
 data_root   = 'D:\qpu_data'                          # all measurement data lands here
-device_name = "SQ_demo"                              # your chip / sample name
+device_name = "SQ_demo"                              # the SAMPLE (chip) name — never the instrument
 state_path  = 'D:\qpu_data\SQ_demo\scqo_state.json'  # change history (provenance)
 backend     = "qblox_sim"                            # REAL device tree, synthetic data
 default_tags = ["cooldown1"]                         # stamped on EVERY run; edit each cooldown
@@ -120,6 +120,28 @@ config_dir = 'D:\qpu_data\SQ_demo\qblox_state'       # working copy of dut_confi
 # [qm]
 # state_dir = 'D:\qpu_data\SQ_demo\qm_state'         # working copy of state.json + wiring.json
 ```
+
+**Two instruments, two samples, one PC:** each vendor table may override
+`device_name`/`state_path` with the sample mounted on *that* instrument — switching
+`backend` then switches the sample automatically, so runs can never land under the
+wrong device:
+
+```toml
+[qblox]
+config_dir  = 'D:\qpu_data\chipA\qblox_state'
+device_name = "chipA"
+state_path  = 'D:\qpu_data\chipA\scqo_state.json'
+
+[qm]
+state_dir   = 'D:\qpu_data\chipB\qm_state'
+device_name = "chipB"
+state_path  = 'D:\qpu_data\chipB\scqo_state.json'
+```
+
+Optionally describe each sample in `<data_root>\devices.toml` (one table per chip:
+description, design values, where it is mounted — instrument-independent facts only);
+the viewer's Device page shows the matching card. All samples share ONE `data_root`
+and ONE index — filter with `--device` / the viewer's device dropdown.
 
 macOS / Linux (`~` is expanded for you; plain-simulated example):
 

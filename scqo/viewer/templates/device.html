@@ -1,7 +1,27 @@
 {% extends "base.html" %}
 {% block title %}Device{% endblock %}
 {% block content %}
-<h2>Device</h2>
+<h2>Device: {{ device }}</h2>
+{% if devices | length > 1 %}
+<p class="muted">Samples in this data root:
+  {% for d in devices %}
+  {% if d == device %}<b>{{ d }}</b>{% else %}<a href="/device?device={{ d }}">{{ d }}</a>{% endif %}{% if not loop.last %} · {% endif %}
+  {% endfor %}
+</p>
+{% endif %}
+
+{% if registry %}
+<table>
+  {% for k, v in registry.items() %}
+  <tr><th>{{ k }}</th>
+    <td>{% if v is mapping %}{% for dk, dv in v.items() %}{{ dk }} = {{ dv }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}{{ v }}{% endif %}</td>
+  </tr>
+  {% endfor %}
+</table>
+<p class="muted">Sample facts from <code>devices.toml</code> — instrument-independent only;
+measured values stay in runs with their backend recorded.</p>
+{% endif %}
+
 {% if state %}
 <p class="muted">Last observed calibration — from
   <a href="/run/{{ latest.run_id }}">{{ latest.run_id }}</a> (device_after snapshot).</p>

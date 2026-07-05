@@ -249,3 +249,39 @@ def test_without_data_root_behaves_as_before(tmp_path):
     assert "run_id" not in result and "data_path" not in result
     assert sess.find_runs() == []
     assert sess.history()[0]["run_id"] is None
+
+
+def test_multi_device_one_index(tmp_path):
+    """Several samples share ONE data_root + ONE index; device = the sample name.
+    Qubit names repeat across chips, so fit_trend must be scopeable by device."""
+    from scqo import DataStore
+
+    ra = _session(tmp_path).run("resonator_spectroscopy", {"qubits": ["q0"]})  # devA
+    sess_b = Session(SimulatedBackend(_device()), data_root=tmp_path / "data", device_name="devB")
+    rb = sess_b.run("resonator_spectroscopy", {"qubits": ["q0"]})
+
+    store = DataStore(tmp_path / "data")
+    assert store.distinct_devices() == ["devA", "devB"]
+    assert [r["run_id"] for r in store.find_runs(device="devB")] == [rb["run_id"]]
+
+    both = store.fit_trend("q0", "readout_freq")
+    assert {r["run_id"] for r in both} == {ra["run_id"], rb["run_id"]}
+    scoped = store.fit_trend("q0", "readout_freq", device="devB")
+    assert [r["run_id"] for r in scoped] == [rb["run_id"]]
+
+
+def test_device_registry_loader(tmp_path):
+    """devices.toml is optional, instrument-independent, and a typo never raises."""
+    from scqo.datastore import load_device_registry
+
+    assert load_device_registry(tmp_path) == {}
+    (tmp_path / "devices.toml").write_text(
+        '[chipA]\ndescription = "demo"\nmounted_on = "qblox"\n[chipA.design]\nEC_MHz = 200\n',
+        encoding="utf-8",
+    )
+    reg = load_device_registry(tmp_path)
+    assert reg["chipA"]["description"] == "demo"
+    assert reg["chipA"]["design"]["EC_MHz"] == 200
+
+    (tmp_path / "devices.toml").write_text("not [valid toml", encoding="utf-8")
+    assert load_device_registry(tmp_path) == {}  # broken hand-edit -> warn, not crash

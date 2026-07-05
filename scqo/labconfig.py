@@ -13,7 +13,7 @@ Example ``~/.scqo/config.toml``::
 
     [lab]
     data_root   = "D:/qpu_data"
-    device_name = "SQ4B_v3"
+    device_name = "SQ4B_v3"          # the SAMPLE (physical chip) name — never the instrument
     state_path  = "D:/qpu_data/SQ4B_v3/scqo_state.json"
     backend     = "simulated"        # "qblox" / "qm" on the control PC
     state_sync  = "pull"             # "push" only for devices SCQO fully owns
@@ -21,6 +21,21 @@ Example ``~/.scqo/config.toml``::
 
 Driver-specific keys live in their own tables (e.g. ``[qblox]``) and are passed
 through untouched in :attr:`LabConfig.extras`.
+
+**Two instruments carrying two different samples?** Each vendor table may override
+``device_name`` / ``state_path`` with the sample mounted on *that* instrument —
+switching ``backend`` then switches the device automatically (no second config file,
+no way to write runs under the wrong sample)::
+
+    [qblox]
+    config_dir  = "D:/qpu_data/chipA/qblox_state"
+    device_name = "chipA"
+    state_path  = "D:/qpu_data/chipA/scqo_state.json"
+
+    [qm]
+    state_dir   = "D:/qpu_data/chipB/qm_state"
+    device_name = "chipB"
+    state_path  = "D:/qpu_data/chipB/scqo_state.json"
 """
 
 from __future__ import annotations
@@ -40,6 +55,14 @@ else:  # pragma: no cover - py3.10 fallback
 
 DEFAULT_PATH = Path.home() / ".scqo" / "config.toml"
 ENV_VAR = "SCQO_CONFIG"
+
+
+def _backend_family(backend: str) -> str | None:
+    """The vendor table a backend reads overrides from ("qblox_sim" -> "qblox")."""
+    for family in ("qblox", "qm"):
+        if backend == family or backend == f"{family}_sim":
+            return family
+    return None
 
 
 @dataclass(frozen=True)
@@ -74,12 +97,20 @@ def load(path: str | Path | None = None) -> LabConfig:
             with open(candidate, "rb") as f:
                 raw = tomllib.load(f)
             lab = raw.pop("lab", {})
+            backend = lab.get("backend", "simulated")
+            # Per-backend overrides: the vendor table of the ACTIVE backend may name
+            # the sample mounted on that instrument (device = the physical sample),
+            # so switching backend switches device — see the module docstring.
+            family = _backend_family(backend)
+            vendor = raw.get(family, {}) if family else {}
+            device_name = vendor.get("device_name", lab.get("device_name", "device"))
+            state_path = vendor.get("state_path", lab.get("state_path"))
             # expanduser: lets a config say data_root = "~/qpu_data" (macOS/Linux idiom)
             return LabConfig(
                 data_root=Path(lab["data_root"]).expanduser() if lab.get("data_root") else None,
-                device_name=lab.get("device_name", "device"),
-                state_path=Path(lab["state_path"]).expanduser() if lab.get("state_path") else None,
-                backend=lab.get("backend", "simulated"),
+                device_name=device_name,
+                state_path=Path(state_path).expanduser() if state_path else None,
+                backend=backend,
                 state_sync=lab.get("state_sync", "pull"),
                 default_tags=list(lab.get("default_tags", [])),
                 extras=raw,

@@ -42,6 +42,44 @@ def test_tilde_paths_are_expanded(tmp_path):
     assert "~" not in str(cfg.state_path)
 
 
+_TWO_SAMPLE_CONFIG = """
+[lab]
+data_root = "D:/qpu_data"
+device_name = "fallback"
+state_path = "D:/qpu_data/fallback/scqo_state.json"
+backend = "%s"
+
+[qblox]
+config_dir = "./qblox_state"
+device_name = "chipA"
+state_path = "D:/qpu_data/chipA/scqo_state.json"
+
+[qm]
+device_name = "chipB"
+"""
+
+
+def test_backend_table_overrides_device(tmp_path):
+    """Two instruments carrying two samples: the ACTIVE backend's vendor table names
+    the mounted sample, so switching backend switches device (device = the sample)."""
+    path = tmp_path / "config.toml"
+
+    path.write_text(_TWO_SAMPLE_CONFIG % "qblox_sim", encoding="utf-8")
+    cfg = labconfig.load(path)
+    assert cfg.device_name == "chipA"  # qblox_sim reads the [qblox] table
+    assert "chipA" in str(cfg.state_path)
+
+    path.write_text(_TWO_SAMPLE_CONFIG % "qm", encoding="utf-8")
+    cfg = labconfig.load(path)
+    assert cfg.device_name == "chipB"
+    assert "fallback" in str(cfg.state_path)  # [qm] has no state_path -> [lab] wins
+
+    path.write_text(_TWO_SAMPLE_CONFIG % "simulated", encoding="utf-8")
+    cfg = labconfig.load(path)
+    assert cfg.device_name == "fallback"  # no vendor family -> [lab] values
+    assert cfg.extras["qblox"]["config_dir"] == "./qblox_state"  # passthrough intact
+
+
 def test_parse_full_file(tmp_path):
     path = tmp_path / "config.toml"
     path.write_text(

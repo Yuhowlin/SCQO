@@ -41,6 +41,7 @@ from pydantic import BaseModel, Field
 SCHEMA_VERSION = 2
 RECORD_FILE = "record.json"
 INDEX_FILE = "index.sqlite"
+DEVICES_FILE = "devices.toml"  # optional human-edited sample registry (see load_device_registry)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -271,20 +272,33 @@ class DataStore:
             rows = db.execute("SELECT DISTINCT experiment FROM runs ORDER BY experiment").fetchall()
         return [r["experiment"] for r in rows]
 
-    def fit_trend(self, qubit: str, quantity: str, limit: int = 500) -> list[dict]:
+    def distinct_devices(self) -> list[str]:
+        """Device (sample) names present in the index (for the viewer's device switcher)."""
+        with self._connect() as db:
+            rows = db.execute("SELECT DISTINCT device FROM runs ORDER BY device").fetchall()
+        return [r["device"] for r in rows]
+
+    def fit_trend(self, qubit: str, quantity: str, limit: int = 500, device: str | None = None) -> list[dict]:
         """One fitted quantity vs time for one qubit (oldest first) — drift at a glance.
 
         ``quantity`` is a fit key (t1_s, t2_star_s, readout_freq, pi_amp, ...). The
         JSON path is passed as a bound parameter, so arbitrary names are safe.
+        ``device`` narrows to one sample — qubit names repeat across samples ("q1"
+        exists on every chip), so multi-device data roots should always pass it.
         """
         path = f"$.{qubit}.{quantity}"
+        sql = (
+            "SELECT run_id, started_at, experiment, json_extract(fit, ?) AS value "
+            "FROM runs WHERE json_extract(fit, ?) IS NOT NULL "
+        )
+        args: list[Any] = [path, path]
+        if device is not None:
+            sql += "AND device = ? "
+            args.append(device)
+        sql += "ORDER BY started_at LIMIT ?"
+        args.append(int(limit))
         with self._connect() as db:
-            rows = db.execute(
-                "SELECT run_id, started_at, experiment, json_extract(fit, ?) AS value "
-                "FROM runs WHERE json_extract(fit, ?) IS NOT NULL "
-                "ORDER BY started_at LIMIT ?",
-                (path, path, int(limit)),
-            ).fetchall()
+            rows = db.execute(sql, args).fetchall()
         return [dict(r) for r in rows]
 
     def load_run(self, run_id: str) -> dict:
@@ -429,6 +443,30 @@ class DataStore:
 def reindex(data_root: str | Path) -> int:
     """Rebuild ``<data_root>/index.sqlite`` from the run folders (any device_name)."""
     return DataStore(data_root).reindex()
+
+
+def load_device_registry(data_root: str | Path) -> dict:
+    """The optional sample registry ``<data_root>/devices.toml`` -> dict ({} if absent).
+
+    One TOML table per physical sample, holding instrument-INDEPENDENT facts only
+    (description, design values, which instrument it is currently mounted on).
+    Human-edited; the viewer renders it. Instrument-dependent measured quantities
+    never go here — they live in run records with ``backend`` provenance.
+    """
+    path = Path(data_root) / DEVICES_FILE
+    if not path.is_file():
+        return {}
+    if sys.version_info >= (3, 11):
+        import tomllib
+    else:  # pragma: no cover - py3.10 fallback
+        import tomli as tomllib
+    try:
+        with open(path, "rb") as f:
+            return tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError) as err:
+        # A hand-edited registry with a typo must not take down the viewer.
+        print(f"warning: ignoring unreadable {path}: {err}", file=sys.stderr)
+        return {}
 
 
 if __name__ == "__main__":  # python -m scqo <data_root>

@@ -16,7 +16,7 @@ from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from ..datastore import DataStore
+from ..datastore import DataStore, load_device_registry
 
 #: fit quantities offered as one-click trend links (free-text also accepted)
 TREND_QUANTITIES = ("t1_s", "t2_star_s", "readout_freq", "drive_freq", "pi_amp", "readout_amp")
@@ -49,6 +49,7 @@ def create_app(
         outcome: str = "",
         since: str = "",
         until: str = "",
+        device: str = "",
         limit: int = 50,
     ):
         rows = store.find_runs(
@@ -58,6 +59,7 @@ def create_app(
             outcome=outcome or None,
             since=since or None,
             until=until or None,
+            device=device or None,
             limit=limit,
         )
         return templates.TemplateResponse(
@@ -66,8 +68,10 @@ def create_app(
             {
                 "rows": rows,
                 "experiments": store.distinct_experiments(),
+                "devices": store.distinct_devices(),
                 "filters": {"experiment": experiment, "qubit": qubit, "tag": tag,
-                            "outcome": outcome, "since": since, "until": until, "limit": limit},
+                            "outcome": outcome, "since": since, "until": until,
+                            "device": device, "limit": limit},
                 "data_root": str(store.data_root),
             },
         )
@@ -132,31 +136,48 @@ def create_app(
         return RedirectResponse(url=f"/run/{run_id}", status_code=303)
 
     @app.get("/trends", response_class=HTMLResponse)
-    def trends_page(request: Request, qubit: str = "q1", quantity: str = "t1_s"):
-        rows = store.fit_trend(qubit, quantity) if qubit and quantity else []
+    def trends_page(request: Request, qubit: str = "q1", quantity: str = "t1_s", device: str = ""):
+        # qubit names repeat across samples ("q1" exists on every chip), so the
+        # trend defaults to the configured device rather than mixing samples.
+        dev = device or device_name
+        rows = store.fit_trend(qubit, quantity, device=dev) if qubit and quantity else []
         svg = _trend_svg(rows)
         return templates.TemplateResponse(
             request,
             "trends.html",
             {"qubit": qubit, "quantity": quantity, "rows": rows, "svg": svg,
-             "quantities": TREND_QUANTITIES},
+             "quantities": TREND_QUANTITIES, "device": dev,
+             "devices": store.distinct_devices()},
         )
 
+    def _state_file_for(device: str) -> Path | None:
+        """The device's scqo state JSON: the configured path for the default device,
+        the ``<data_root>/<device>/scqo_state.json`` convention for any other."""
+        if device == device_name and state_path:
+            return Path(state_path)
+        candidate = store.data_root / device / "scqo_state.json"
+        return candidate if candidate.is_file() else None
+
     @app.get("/device", response_class=HTMLResponse)
-    def device_page(request: Request):
-        latest = store.find_runs(limit=1)
+    def device_page(request: Request, device: str = ""):
+        dev = device or device_name
+        latest = store.find_runs(device=dev, limit=1)
         state = None
         if latest:
             state = _read_json(_run_dir(latest[0]) / "device_after.json")
         history: list[dict] = []
-        if state_path and Path(state_path).is_file():
-            data = _read_json(Path(state_path)) or {}
+        sfile = _state_file_for(dev)
+        if sfile and sfile.is_file():
+            data = _read_json(sfile) or {}
             history = list(reversed(data.get("history", [])))[:200]
+        registry = load_device_registry(store.data_root)
         return templates.TemplateResponse(
             request,
             "device.html",
             {"state": state or {}, "latest": latest[0] if latest else None,
-             "history": history, "state_path": str(state_path or "")},
+             "history": history, "state_path": str(sfile or ""),
+             "device": dev, "devices": store.distinct_devices(),
+             "registry": registry.get(dev) or {}},
         )
 
     return app

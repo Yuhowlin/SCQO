@@ -137,6 +137,8 @@ python scripts/find_runs.py --show 20260704-225450-resonator_spectroscopy-01   #
 - Dates in filters are **local lab time** and match the folder names; a bare date in
   `--until` includes that whole day.
 - `find_runs` touches no instrument — it runs anywhere the data drive is mounted.
+- Several samples share one data_root: every run is stamped with its device (= sample)
+  name, so `--device chipA` (or the viewer's device dropdown) narrows to one chip.
 - Realized a week later that a run mattered? Tag it retroactively:
   `python scripts/tag_run.py 20260704-...-01 --add thesis-fig3 --note "best T2* so far"`
   (also backend-free).

@@ -3,6 +3,12 @@
 {% block content %}
 <h2>Runs</h2>
 <form class="filters" method="get" action="/">
+  <select name="device">
+    <option value="">any device</option>
+    {% for d in devices %}
+    <option value="{{ d }}" {% if filters.device == d %}selected{% endif %}>{{ d }}</option>
+    {% endfor %}
+  </select>
   <select name="experiment">
     <option value="">any experiment</option>
     {% for e in experiments %}
@@ -23,11 +29,12 @@
   <button>Filter</button>
 </form>
 <table>
-  <tr><th>run</th><th>started</th><th>experiment</th><th>qubits</th><th>outcome</th><th>tags</th><th>note</th></tr>
+  <tr><th>run</th><th>started</th><th>device</th><th>experiment</th><th>qubits</th><th>outcome</th><th>tags</th><th>note</th></tr>
   {% for r in rows %}
   <tr>
     <td><a href="/run/{{ r.run_id }}">{{ r.run_id }}</a></td>
     <td>{{ r.started_at[:16] }}</td>
+    <td>{{ r.device }}</td>
     <td>{{ r.experiment }}</td>
     <td>{{ r.qubits | join(", ") }}</td>
     <td><span class="badge {{ r.outcome }}">{{ r.outcome }}</span></td>
@@ -35,7 +42,7 @@
     <td>{{ r.note }}</td>
   </tr>
   {% else %}
-  <tr><td colspan="7">no runs match</td></tr>
+  <tr><td colspan="8">no runs match</td></tr>
   {% endfor %}
 </table>
 <p class="muted">data_root: {{ data_root }} — the run folders are the truth; this index is rebuildable (<code>python -m scqo &lt;data_root&gt;</code>).</p>
