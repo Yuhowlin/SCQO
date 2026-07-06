@@ -203,3 +203,13 @@ persisted) that names the defaults file for file-sourced typos. Driver `_cli.py`
 (mirrored) marks file defaults in `--help`, prints applied-defaults provenance to
 stderr, and only falls back to all-device qubits when neither CLI nor file names them.
 Docs: INSTALL §2 subsection + TUTORIAL §2 three-tier parameters.
+
+**2026-07-06 — punchout sim/estimator coupling:** the |IQ|-with-drive scaling in the
+punchout `simulate()` (`586af0e`) requires scqat **tag v0.1.4+**, whose punchout
+estimator baseline-normalizes the cross-power dip-amplitude outlier test (scqat
+`83a8cd9`). With older scqat the seeded e2e test deterministically fails
+(`optimal_power_db` -5.5 instead of -14.5) — that was the 2026-07-06 CI/local red
+window, **not** a numpy-version effect (verified identical on numpy 2.3.1 and 2.5.1).
+The floor is a comment in pyproject, not a `>=` pin: scqat's package metadata is stuck
+at 0.1.0 across its tags, so a version pin would break every install until scqat
+bumps `pyproject.version` at release time.

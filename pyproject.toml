@@ -10,6 +10,8 @@ dependencies = [
     "xarray>=2024.7.0",
     "numpy>=1.26",
     "scqat",            # the shared analysis engine: estimators + fitters (import-light; lazy-imported in estimate())
+                        # needs scqat tag v0.1.4+ (punchout outlier test is baseline-normalized for the |IQ|-scaled sim,
+                        # SCQO 586af0e); not expressible as >=0.1.4 while scqat's package metadata is stuck at 0.1.0
     "netcdf4>=1.6",     # datastore: dataset.nc has a string qubit coord (needs netCDF4, not the scipy netCDF3 fallback)
     "tomli>=2.0; python_version<'3.11'",  # labconfig TOML parsing on py3.10
 ]
