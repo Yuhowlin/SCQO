@@ -346,6 +346,48 @@ disposable — there is no migration. The index rebuilds itself (schema check); 
 `<device>\scqo_state.json` if present (it reseeds from the vendor config; history
 starts fresh); old run folders may stay (reindex skips anything unreadable).
 
+### Developer quickstart (local, no hardware)
+
+The whole system on your own machine in six steps — a Tier-2/3 dev deployment with a
+SCRATCH data root (dev machines track `main`, keep their own data, and never point
+writes at the server's data — §5):
+
+1. **Clone side-by-side** into one folder (§1 block: SCQO, scqat, and the driver
+   repo(s) you develop against).
+2. **Create the venvs** (§1 commands): `view` always; `qblox`/`qm` only if you drive
+   that stack.
+3. **Write `~\.scqo\config.toml`** — smallest working dev config (UTF-8 no BOM):
+
+   ```toml
+   [lab]
+   data_root   = 'D:\qpu_data_dev'                          # scratch, yours alone
+   device_name = "simdev"
+   state_path  = 'D:\qpu_data_dev\simdev\scqo_state.json'
+   backend     = "simulated"                                # demo qubits, synthetic data
+   state_sync  = "push"                                     # simulated needs push to persist
+   ```
+
+   (Swap to the virtual twin — `qblox_sim`/`qm_sim` + a copied vendor config, table
+   above — when you want your REAL device tree with synthetic data.)
+4. **Optionally seed the registries** to exercise the full provenance chain:
+   `D:\qpu_data_dev\instruments.toml`, `devices.toml`, and a first cycle via
+   `python scripts\cooldown.py start cd1 --fridge dev --packaging "sim"` (then
+   hand-add a `[[cd1.mapping]]` block). Every run is now stamped with cycle +
+   wiring era + operator.
+5. **Verify offline**: `cd SCQO && python -m pytest -q` (§3 — all green, no
+   instrument).
+6. **First run + look at it**:
+
+   ```powershell
+   cd ..\LCHQBDriver          # (or LCHQMDriver; scripts are mirrored)
+   python scripts\devices.py                                  # the menu — what can I select?
+   python scripts\run_experiment.py resonator_spectroscopy    # first saved, stamped run
+   python scripts\find_runs.py --limit 5
+   python -m scqo.viewer                                      # -> http://127.0.0.1:8080
+   ```
+
+   From here, [TUTORIAL.md](TUTORIAL.md) is the daily manual.
+
 ## 3. Offline verification
 
 The full test suite passes with no instrument attached (CI runs this exact suite on

@@ -50,10 +50,10 @@ python scripts/run_experiment.py                 # no arguments = show the menu
 ```
 
 ```
-qubit_echo                    Hahn echo ... reports T2_echo (no writeback).
+qubit_echo                    Hahn echo ... records t2_echo_s (record-only).
 qubit_power_rabi              Sweep drive amplitude ... recalibrate pi_amp.
 qubit_ramsey                  Two pi/2 pulses ... correct drive_freq and report T2*.
-qubit_relaxation              Pi pulse + swept wait ... reports T1 (no writeback).
+qubit_relaxation              Pi pulse + swept wait ... records t1_s (record-only).
 qubit_spectroscopy            Sweep a weak saturation drive ... recalibrates drive_freq.
 qubit_spectroscopy_flux       2D flux map ... reports sweet spot / Ej_sum (no writeback).
 readout_frequency             Per-shot fidelity vs freq ... updates readout_freq.
@@ -61,7 +61,7 @@ readout_power                 Per-shot fidelity vs amp ... updates readout_amp.
 resonator_spectroscopy        Sweep readout frequency ... updates readout_freq.
 resonator_spectroscopy_flux   2D resonator flux map ... reports sweet spot / g (no writeback).
 resonator_spectroscopy_power  2D punchout ... updates readout_amp and readout_freq.
-single_shot_readout           IQ blobs ... reports readout fidelity (no writeback).
+single_shot_readout           IQ blobs ... records readout fidelity (record-only).
 ```
 
 Start with **resonator spectroscopy** — always the first measurement on a device: you
@@ -317,8 +317,8 @@ comes back as a structured error with the fit intact.
 
 ## 8. Rules of the road (who edits what)
 
-1. **Students**: run the scripts, edit only your own `config.toml` and
-   `parameters.toml`. The repos are read-only for you.
+1. **Students**: run the scripts, edit only your own `config.toml`,
+   `parameters.toml` and `user.toml`. The repos are read-only for you.
 2. **Advanced users**: prototype new experiments + estimators in the sandbox
    (`scqo-contrib`, entry-point group `scqo.experiments.contrib`) — your runs land
    in the same datastore, so your evidence is findable.
@@ -329,20 +329,23 @@ comes back as a structured error with the fit intact.
 
 | Symptom | Cause / fix |
 |---|---|
-| `ModuleNotFoundError` / `lab config not found` / nothing gets saved | setup problem — see [INSTALL.md](INSTALL.md) §5 |
+| `ModuleNotFoundError` / `lab config not found` / nothing gets saved | setup problem — see [INSTALL.md](INSTALL.md) §1–§2 and the §6 symptom table |
 | A run shows `datastore_error` | measurement succeeded; only saving failed (disk full/locked). Fix the disk, rerun |
 | `invalid parameter-defaults file ...` (even on `--help`) | your `parameters.toml` has a syntax error — it affects measurements, so it never fails silently. Fix the named file |
 | `find_runs` misses runs you can see on disk | index stale → `python -m scqo <data_root>` |
 | Unknown `run_id` in `--show` | same — rebuild the index |
 | Want a clean slate | deleting `index.sqlite*` (all three files) is always safe; the folders are the data |
 
-## 10. What Phase 1 does NOT include yet
+## 10. What the system does NOT include yet
 
-- **Real Qblox hardware**: `QbloxBackend._to_canonical()` is still a TODO — Qblox
-  runs are simulated/virtual-twin only today. QM hardware runs the three migrated
-  experiments via `LCHQMDriver/scripts/run_experiment.py` (with
-  `backend = "qm"`, and `state_sync` stays `"pull"` there — see LCHQMDriver's CLAUDE.md).
-- **GUI** (Phase 2): the plan is datasette over `index.sqlite`, then a small
-  read-only run-browser.
+Everything above is real: **both instruments are hardware-proven** through this path
+(Qblox cluster and OPX1000, since 2026-07-05), the catalog holds 12 experiments, and
+the GUI you read about in section 4 (viewer + datasette) is shipped. Still ahead:
+
 - **Device-level inference** (Phase 3): combining runs into EJ/EC, anharmonicity,
-  flux response via scqat + SCQ.jl.
+  flux response via scqat + SCQ.jl — the recorded T1/T2/fidelity ledger is its input.
+- **Running measurements from the viewer** (run-forms with an approval gate) and a
+  per-instrument run lock — until then, measuring stays on the CLI and
+  one-measurement-per-instrument stays a social rule.
+- **The AI loop**: the catalog/Session JSON surface is built for it, but no agent
+  drives it yet.
