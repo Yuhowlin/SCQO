@@ -342,7 +342,10 @@ The rules that make this safe:
   path and select it machine-wide instead (admin, once):
   `[Environment]::SetEnvironmentVariable('SCQO_CONFIG','D:\github\scqo-config.toml','Machine')`.
   Personal configs exist only on analysis laptops and point `data_root` at the NAS
-  copy — those machines read, never write.
+  copy — those machines read, never write. In the shared config, leave
+  `parameters_file` **unset** so each account keeps its own standing defaults in
+  `~\.scqo\parameters.toml` (section 2); setting it would pin ONE parameter set for
+  every account — and a missing path fails loudly for all of them.
 - Simultaneous users are supported and tested (`tests/test_index_scale.py`), but
   **one measurement at a time per instrument** remains a social convention — the
   instruments themselves cannot run two programs at once.
