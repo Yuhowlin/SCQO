@@ -355,6 +355,10 @@ comes back as a structured error with the fit intact.
 
 ## 9. Troubleshooting
 
+**First move, always: `scqo doctor`** — it checks your venv, drivers, the whole
+config chain (shared config, user overlay, parameters file), data_root, registries
+and the cooldown registry, and tells you what is wrong and how to fix it.
+
 | Symptom | Cause / fix |
 |---|---|
 | `ModuleNotFoundError` / `lab config not found` / nothing gets saved | setup problem — see [INSTALL.md](INSTALL.md) §1–§2 and the §6 symptom table |

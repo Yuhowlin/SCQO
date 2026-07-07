@@ -1,0 +1,22 @@
+# Release manifest — which tag of each repo belongs to a release combo.
+# The server checks out ONE release name across the scqo-versioned repos and takes
+# scqat at its pinned tag (scqat versions independently: its own pyproject/tag line).
+# Hand-edited at release time by the manager (see RELEASING.md).
+
+[v0-4-1]
+date = 2026-07-07
+scqo = "v0.4.1"
+lchqbdriver = "v0.4.1"
+lchqmdriver = "v0.4.1"
+scqo-contrib = "v0.4.1"          # no-change re-tag
+scqat = "v0.1.4"                 # independent line; >= v0.1.4 required (punchout coupling)
+notes = "scqo doctor; missing-driver error covers stale installs; suite isolated from real ~/.scqo; viewer tests skip without python-multipart; docs (SSH editing, server backend policy, parameters_file clarity)"
+
+[v0-4-0]
+date = 2026-07-07
+scqo = "v0.4.0"
+lchqbdriver = "v0.4.0"
+lchqmdriver = "v0.4.0"
+scqo-contrib = "v0.4.0"          # no-change re-tag
+scqat = "v0.1.4"
+notes = "CLI consolidation: the scqo command, scqo.backends entry points, drivers reduced to wrappers. UPGRADE REQUIRES the uv pip install -e re-runs (entry points register at install time)."

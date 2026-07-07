@@ -22,6 +22,7 @@ _COMMANDS = {
     "devices": ("devices", "the menu: selectable backends/samples/instruments"),
     "cooldown": ("cooldown", "cooldown-cycle registry: validate/list, start, end"),
     "sample": ("sample", "add-a-sample scaffold (paste-ready snippets, edits nothing shared)"),
+    "doctor": ("doctor", "health check: venv, drivers, config chain, registries (run me first)"),
     "sync-launchers": ("sync_launchers", "regenerate the driver repos' launcher stubs (manager)"),
 }
 

@@ -269,3 +269,12 @@ working; `_lab.py`/`_cli.py` are import shims); launcher stubs regenerate via
 `scqo sync-launchers`. NOTE: entry points + the console command register at INSTALL
 time — upgrading across v0.4.0 requires re-running the `uv pip install -e` lines
 (INSTALL §1/§5); uninstalled-checkout script use (old sys.path trick) is retired.
+
+**2026-07-07 — v0.4.1 + release discipline.** `scqo doctor` (read-only health check:
+venv/drivers/config chain/registries/catalog — the first debugging move, born from a
+real server incident where a stale editable install hid the qm entry point). Releases
+are now COMBOS recorded in RELEASES.toml (all four scqo-versioned repos share the tag
+name; scqat pins independently, >= v0.1.4) with the manager checklist in RELEASING.md.
+Also: missing-driver error distinguishes wrong-venv from stale-install; the test suite
+is isolated from the runner's real ~/.scqo files (suite-wide conftest fixture); viewer
+tests skip where python-multipart is absent (the QM lock env).

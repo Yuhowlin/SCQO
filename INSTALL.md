@@ -542,10 +542,13 @@ The rules that make this safe:
   v0.1.0` in each); dev machines track `main`. Update the server deliberately, after
   CI is green — never mid-cooldown on a whim. The update procedure:
   `git fetch --tags; git checkout <new tag>` in each repo, re-run section 3, restart
-  the viewer (editable installs pick the new code up on restart). **Upgrading across
-  v0.4.0**: the `scqo` console command and the backend entry points register at
-  INSTALL time, not import time — also re-run the section-1 `uv pip install -e`
-  lines for `.venv-view`, `.venv-qblox` and `.venv-qm`.
+  the viewer (editable installs pick the new code up on restart). **Which tags belong
+  together — and any REQUIRED upgrade action — is recorded per release in
+  [RELEASES.toml](RELEASES.toml)** (process: [RELEASING.md](RELEASING.md)).
+  **Upgrading across v0.4.0**: the `scqo` console command and the backend entry
+  points register at INSTALL time, not import time — also re-run the section-1
+  `uv pip install -e` lines for `.venv-view`, `.venv-qblox` and `.venv-qm`; finish
+  with `scqo doctor` on a student account.
 - **Dev machines (tier 2/3) keep their OWN scratch `data_root`** (e.g.
   `D:\qpu_data_dev`) — never point writes at the server's data over the network
   (the SQLite rule). Tier-2 prove-out runs on real hardware execute from the dev
@@ -624,6 +627,9 @@ python D:\github\LCHQBDriver\scripts\run_experiment.py resonator_spectroscopy --
 …then views the figures at `http://<server>:8080`.
 
 ## 6. Install troubleshooting
+
+**First move, always: `scqo doctor`** — venv, drivers, config chain, registries, one
+read-only command.
 
 | Symptom | Cause / fix |
 |---|---|
