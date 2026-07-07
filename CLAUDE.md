@@ -79,6 +79,10 @@ scqo/
   datastore.py    # DataStore + RunRecord: every run saved to a folder, indexed in SQLite (rebuildable)
   labconfig.py    # ~/.scqo/config.toml -> LabConfig + make_session (students never edit repos)
   testing.py      # InMemoryDevice + SimulatedBackend (run with no instrument)
+  cli/            # the `scqo` command (run/calibrate/find/tag/device/devices/cooldown/
+                  #   sample/sync-launchers): ONE engine, any-directory; backends resolve
+                  #   via the scqo.backends entry-point group; simulated is built in
+                  #   (_backends.ensure_demo_experiments fills the catalog driver-less)
   experiments/
     resonator_spectroscopy.py   # frequency sweep, Lorentzian dip -> updates readout_freq
     qubit_spectroscopy.py       # two-tone peak search -> coarse drive_freq (bring-up step 2)
@@ -241,10 +245,27 @@ provenance (operator + backend + cycle + wiring era). Landed in six phases:
   device page cycle+wiring panel + instrument cards, stable state columns
   (descriptor order — fields are heterogeneous per qubit now), history operator
   column; TREND_QUANTITIES derived from FIELDS.
-- **Mirrored scripts** (now TEN shared files): NEW `cooldown.py` (validate/list;
+- **Mirrored scripts** (grew to TEN shared files): NEW `cooldown.py` (validate/list;
   `start` append-only; `end` targeted insert + .bak + re-parse), `devices.py`
   (the Tier-1 menu: backend → sample → instrument(IP) → cycle → wiring + the exact
   user.toml selection line; touches no instrument) and `sample.py` (add-a-sample
   scaffold: prints paste-ready config/registry snippets + creates the data folder;
   never edits shared files — INSTALL §2 checklist); `find_runs.py --cooldown`;
-  `device.py --history` shows `by=<operator>`.
+  `device.py --history` shows `by=<operator>`. (Mirror retired same day — see below.)
+
+**2026-07-07 — CLI consolidation (v0.4.0): the mirror is gone.** The 10-file script
+engine moved into `scqo/cli/` — ONE implementation, tested in SCQO CI, exposed as the
+**`scqo` console command** (`[project.scripts]`; subcommand flags byte-identical to
+the old scripts) that works from any directory in the right venv. Backends resolve
+via the NEW **`scqo.backends` entry-point group** (mirrors `scqo.experiments`):
+LCHQBDriver registers `qblox = lchqb.scqo_backend:build_backend`, LCHQMDriver
+`qm = customized.scqo.backend_factory:build_backend` (each serves its real + `_sim`
+modes; QM's state_sync="pull" guard now fires BEFORE QUAM loads); a missing driver
+fails loudly naming the repo/venv. `simulated` is built in with a UNIFIED q0/q1 demo
+device (QM's old q1/q2 demo retired) + `ensure_demo_experiments()` (register-if-
+absent, never shadows a driver) so driver-less envs get a full catalog. Driver
+`scripts/` are now ≤10-line wrappers (all documented `python scripts\...` forms keep
+working; `_lab.py`/`_cli.py` are import shims); launcher stubs regenerate via
+`scqo sync-launchers`. NOTE: entry points + the console command register at INSTALL
+time — upgrading across v0.4.0 requires re-running the `uv pip install -e` lines
+(INSTALL §1/§5); uninstalled-checkout script use (old sys.path trick) is retired.

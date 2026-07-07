@@ -1,6 +1,6 @@
 [project]
 name = "scqo"
-version = "0.3.0"
+version = "0.4.0"
 description = "Superconducting Qubit Orchestration — instrument-agnostic experiment API shared by QM and Qblox backends"
 readme = "CLAUDE.md"
 requires-python = ">=3.10,<3.13"
@@ -22,6 +22,9 @@ dependencies = [
 # scqat is the one allowed non-instrument dependency: it is the single estimator
 # engine (one estimator per probing method), so SCQO never fits inline. lmfit is
 # now a transitive dependency via scqat.
+
+[project.scripts]
+scqo = "scqo.cli.__main__:main"  # the lab command; re-run `uv pip install -e` after upgrading
 
 [project.optional-dependencies]
 viewer = [

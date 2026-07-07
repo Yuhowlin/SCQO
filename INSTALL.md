@@ -94,7 +94,10 @@ uv pip install --python .venv-qm\Scripts\python.exe -e .\scqat -e .\SCQO -e .\LC
 .venv-view\Scripts\Activate.ps1     # daily default — prompt shows (view)
 ```
 
-(`[viewer]` pulls the run-viewer's web extras — fastapi/uvicorn/jinja2/python-multipart —
+(Each scqo install line also puts the **`scqo` command** on that venv's PATH — the
+whole Tier-1 surface (`scqo run/find/tag/device/devices/cooldown/sample/calibrate`)
+works from any directory. `[viewer]` pulls the run-viewer's web extras —
+fastapi/uvicorn/jinja2/python-multipart —
 for `python -m scqo.viewer`; `datasette` powers the SQL browser `python -m scqo.browse`.
 **qblox-scheduler pin:** LCHQBDriver's pyproject floors it at `>=1.0.0b4` because PyPI's
 only non-prerelease is an empty 0.0.0 placeholder that fails to build; the explicit
@@ -333,12 +336,11 @@ note = "module2 out0 dead"
 "q1.readout" = "cluster0.module6.in0"
 ```
 
-Manage cycles with `python scripts\cooldown.py` — run from a DRIVER repo
-(`cd D:\github\LCHQBDriver` or `LCHQMDriver`; SCQO itself has no `scripts\`) —
+Manage cycles with `scqo cooldown` — works from any directory
 (no args = validate + show; `start <id>` / `end` do safe minimal file edits;
 mapping snapshots are hand-edited).
 Every run is then auto-stamped with the active cycle and wiring era — query with
-`find_runs.py --cooldown cd8`, filter in the viewer, and stop hand-editing a
+`scqo find --cooldown cd8`, filter in the viewer, and stop hand-editing a
 cooldown tag into `default_tags`. Failure rules: `instruments.toml`/`devices.toml`
 are display-only (a typo warns and is ignored); `cooldowns.toml` STAMPS RUNS, so a
 broken file fails loudly at run start — before any instrument time is spent.
@@ -350,10 +352,9 @@ starts fresh); old run folders may stay (reindex skips anything unreadable).
 
 ### Adding a new sample
 
-One manual edit, two optional entries, everything else auto-creates. From a DRIVER
-repo (`cd D:\github\LCHQBDriver` — the student scripts live there, not in SCQO):
-`python scripts\sample.py new <name> --backend qblox --instrument cluster0` prints all
-of it paste-ready and creates the data folder (it never edits shared files):
+One manual edit, two optional entries, everything else auto-creates.
+`scqo sample new <name> --backend qblox --instrument cluster0` (any directory) prints
+all of it paste-ready and creates the data folder (it never edits shared files):
 
 1. **Manual (manager)**: the shared config's vendor table (`[qblox]`/`[qm]`
    `device_name` + `state_path` — the sample follows that instrument), or `[lab]
@@ -361,8 +362,8 @@ of it paste-ready and creates the data folder (it never edits shared files):
 2. **Optional registries**: a `devices.toml` entry (sample facts, `mounted_on`) and —
    once per *instrument*, not per sample — an `instruments.toml` entry.
 3. **Automatic on first use**: `<data_root>\<name>\` run folders, `scqo_state.json`,
-   the index row, viewer pages; `cooldowns.toml` via `cooldown.py start cd1 ...`
-   (hand-add its `[[cd1.mapping]]` wiring snapshot). Verify with `devices.py`.
+   the index row, viewer pages; `cooldowns.toml` via `scqo cooldown start cd1 ...`
+   (hand-add its `[[cd1.mapping]]` wiring snapshot). Verify with `scqo devices`.
 
 ### Factory reset (make a machine "new" again)
 
@@ -425,26 +426,23 @@ writes at the server's data — §5):
    (Swap to the virtual twin — `qblox_sim`/`qm_sim` + a copied vendor config, table
    above — when you want your REAL device tree with synthetic data.)
 4. **Optionally seed the registries** to exercise the full provenance chain:
-   `D:\qpu_data_dev\instruments.toml`, `devices.toml`, and a first cycle — **the
-   student scripts live in the DRIVER repos, not SCQO**, so:
+   `D:\qpu_data_dev\instruments.toml`, `devices.toml`, and a first cycle:
 
    ```powershell
-   cd D:\github\LCHQBDriver   # (or LCHQMDriver; scripts are mirrored)
-   python scripts\cooldown.py start cd1 --fridge dev --packaging "sim"
+   scqo cooldown start cd1 --fridge dev --packaging "sim"
    ```
 
    (then hand-add a `[[cd1.mapping]]` block). Every run is now stamped with cycle +
    wiring era + operator.
 5. **Verify offline**: `cd D:\github\SCQO; python -m pytest -q` (§3 — all green, no
    instrument).
-6. **First run + look at it** (back in the driver repo):
+6. **First run + look at it** (any directory — the `scqo` command needs no repo):
 
    ```powershell
-   cd D:\github\LCHQBDriver
-   python scripts\devices.py                                  # the menu — what can I select?
-   python scripts\run_experiment.py resonator_spectroscopy    # first saved, stamped run
-   python scripts\find_runs.py --limit 5
-   python -m scqo.viewer                                      # -> http://127.0.0.1:8080
+   scqo devices                            # the menu — what can I select?
+   scqo run resonator_spectroscopy         # first saved, stamped run
+   scqo find --limit 5
+   python -m scqo.viewer                   # -> http://127.0.0.1:8080
    ```
 
    From here, [TUTORIAL.md](TUTORIAL.md) is the daily manual.
@@ -533,7 +531,10 @@ The rules that make this safe:
   v0.1.0` in each); dev machines track `main`. Update the server deliberately, after
   CI is green — never mid-cooldown on a whim. The update procedure:
   `git fetch --tags; git checkout <new tag>` in each repo, re-run section 3, restart
-  the viewer (editable installs pick the new code up on restart).
+  the viewer (editable installs pick the new code up on restart). **Upgrading across
+  v0.4.0**: the `scqo` console command and the backend entry points register at
+  INSTALL time, not import time — also re-run the section-1 `uv pip install -e`
+  lines for `.venv-view`, `.venv-qblox` and `.venv-qm`.
 - **Dev machines (tier 2/3) keep their OWN scratch `data_root`** (e.g.
   `D:\qpu_data_dev`) — never point writes at the server's data over the network
   (the SQLite rule). Tier-2 prove-out runs on real hardware execute from the dev
@@ -616,7 +617,9 @@ python D:\github\LCHQBDriver\scripts\run_experiment.py resonator_spectroscopy --
 | Symptom | Cause / fix |
 |---|---|
 | `ModuleNotFoundError: scqo` | no venv activated — Windows: `.venv-view\Scripts\Activate.ps1`; macOS/Linux: `source .venv-view/bin/activate` |
+| `scqo: command not found` / not recognized | no venv activated, or scqo upgraded across v0.4.0 without re-running the section-1 install line (the command registers at install time). `Get-Command scqo` shows which venv's command you're getting |
 | viewer: `missing package: uvicorn` (or fastapi/jinja2) | **wrong venv activated** — the viewer lives in every section-1 env; check the prompt says `(view)`, `(qblox)` or `(.venv-qm)`, not something stale |
+| `backend 'qblox' needs the 'qblox' driver, which is not installed...` | right command, wrong venv (the view env has no instrument drivers by design) — the message names the venv to activate |
 | `ModuleNotFoundError: lchqb` / `qblox_scheduler` from a run script | you're in the view env (by design it has no instrument libs) — activate `.venv-qblox` to measure |
 | `lab config not found` | your `--config`/`$SCQO_CONFIG` path is wrong (intentional loud failure — better than silently unsaved) |
 | `# lab config: built-in defaults ...` in the catalog header | no `~\.scqo\config.toml` yet: runs work but are **not saved** — do section 2. A personal `user.toml` does NOT rescue this: the overlay needs a base config |

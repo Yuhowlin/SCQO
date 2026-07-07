@@ -8,15 +8,15 @@ never edit anything in the repos.
 **Prerequisites** (done once per machine — see [INSTALL.md](INSTALL.md), or ask
 whoever set up the PC): a venv activated and a lab config in place (your own
 `~\.scqo\config.toml`, or the server's shared one). **Which venv? One rule:** activate
-**view** to look at data — the run-viewer, browsing, `find_runs.py`, `tag_run.py`
+**view** to look at data — the run-viewer, browsing, `scqo find`, `scqo tag`
 (`D:\github\.venv-view\Scripts\Activate.ps1`, prompt `(view)`; macOS/Linux
 `source ~/github/.venv-view/bin/activate` — the venvs live NEXT TO the repos, not
 inside them, so use the full path or run from the repos' parent folder) — and an
 instrument env only to measure:
-`.venv-qblox` for `run_experiment.py`/`calibrate.py`/`device.py` on the Qblox
+`.venv-qblox` for `scqo run`/`scqo calibrate`/`scqo device` on the Qblox
 cluster, `.venv-qm` on the OPX1000. Cooldowns are no longer a tag you maintain:
-the manager registers each cycle (`cooldown.py`), and every run you take is
-auto-stamped with it — findable via `find_runs.py --cooldown`.
+the manager registers each cycle (`scqo cooldown`), and every run you take is
+auto-stamped with it — findable via `scqo find --cooldown`.
 
 Everything below works identically on the simulated backend, the **virtual twin** of
 your real chip (`qblox_sim`/`qm_sim` — the recommended practice mode), and real
@@ -46,9 +46,12 @@ you (script / notebook / later: GUI or AI agent)
 
 ## 2. Your first measurement
 
+Every command below is the **`scqo` command** — it works from ANY directory once the
+right venv is active (the old `python scripts\...` forms still work inside a driver
+repo; they are thin wrappers around the same engine).
+
 ```bash
-cd LCHQBDriver          # D:\github\LCHQBDriver on the lab PC, ~/github/LCHQBDriver on a Mac
-python scripts/run_experiment.py                 # no arguments = show the menu
+scqo run                                         # no arguments = show the menu
 ```
 
 ```
@@ -71,7 +74,7 @@ have to find the readout resonance before any qubit experiment means anything, a
 writeback (`readout_freq`) is the most benign one. Tag it so you can find it later:
 
 ```bash
-python scripts/run_experiment.py resonator_spectroscopy --qubits q1 --tag mytest --note "first try"
+scqo run resonator_spectroscopy --qubits q1 --tag mytest --note "first try"
 ```
 
 You get the structured result as JSON — extracted physics, not raw traces:
@@ -93,10 +96,10 @@ Because the fit succeeded, `readout_freq` was **written back** to the device sta
 qubit experiments follow the same one-liner pattern:
 
 ```bash
-python scripts/run_experiment.py qubit_ramsey --qubits q1 --set num_points=201   # drive_freq + T2*
-python scripts/run_experiment.py qubit_power_rabi                 # all qubits, defaults
-python scripts/run_experiment.py resonator_spectroscopy --no-update ...   # analyze only, no writeback
-python scripts/run_experiment.py qubit_ramsey --params my.json    # parameters from a file
+scqo run qubit_ramsey --qubits q1 --set num_points=201            # drive_freq + T2*
+scqo run qubit_power_rabi                                         # all qubits, defaults
+scqo run resonator_spectroscopy --no-update ...                   # analyze only, no writeback
+scqo run qubit_ramsey --params my.json                            # parameters from a file
 ```
 
 Three tiers of parameters — each overriding the previous:
@@ -114,13 +117,13 @@ Three tiers of parameters — each overriding the previous:
    path or an inline object like `--params "{""num_points"": 201}"`. Don't mix the
    two syntaxes.
 
-Prefer one command per experiment (qualibrate-node style)? Every cataloged experiment
-has its own launcher in `scripts/experiments/` — same flags, and `--help` shows that
-experiment's full parameter list with defaults and descriptions:
+See every knob an experiment has — with your standing defaults marked — via
+`scqo run <experiment> --help`. (Inside a driver repo the per-experiment launchers
+`scripts/experiments/<name>.py` still exist with the same flags.)
 
 ```bash
-python scripts/experiments/resonator_spectroscopy.py --qubits q1 --set frequency_span_hz=15e6
-python scripts/experiments/resonator_spectroscopy.py --help
+scqo run resonator_spectroscopy --qubits q1 --set frequency_span_hz=15e6
+scqo run resonator_spectroscopy --help
 ```
 
 The **daily workflow** is one command — the bring-up sequence (resonator spectroscopy
@@ -128,25 +131,25 @@ The **daily workflow** is one command — the bring-up sequence (resonator spect
 exists — run it explicitly), every step saved + tagged, summary at the end:
 
 ```bash
-python scripts/calibrate.py --qubits q0 q1 --tag cooldown1
-python scripts/calibrate.py --skip resonator_spectroscopy       # drop a step
+scqo calibrate --qubits q0 q1 --tag cooldown1
+scqo calibrate --skip resonator_spectroscopy       # drop a step
 ```
 
 And the device's calibration state / change log any time:
 
 ```bash
-python scripts/device.py                    # current values per qubit
-python scripts/device.py --history 20       # who changed what, when, in which run
+scqo device                     # current values per qubit
+scqo device --history 20        # who changed what, when, in which run
 ```
 
 ## 3. Finding your data (the whole point)
 
 ```bash
-python scripts/find_runs.py                                   # latest runs, newest first
-python scripts/find_runs.py --cooldown cd8                    # everything from this cooldown cycle
-python scripts/find_runs.py --experiment resonator_spectroscopy --qubit q1 --since 2026-07-01
-python scripts/find_runs.py --outcome failed                  # what went wrong lately?
-python scripts/find_runs.py --show 20260704-225450-SQ_demo-resonator_spectroscopy-01   # one run, in full
+scqo find                                   # latest runs, newest first
+scqo find --cooldown cd8                    # everything from this cooldown cycle
+scqo find --experiment resonator_spectroscopy --qubit q1 --since 2026-07-01
+scqo find --outcome failed                  # what went wrong lately?
+scqo find --show 20260704-225450-SQ_demo-resonator_spectroscopy-01   # one run, in full
 ```
 
 ```
@@ -159,7 +162,7 @@ python scripts/find_runs.py --show 20260704-225450-SQ_demo-resonator_spectroscop
 - Several samples share one data_root: every run is stamped with its device (= sample)
   name, so `--device chipA` (or the viewer's device dropdown) narrows to one chip.
 - Realized a week later that a run mattered? Tag it retroactively:
-  `python scripts/tag_run.py 20260704-...-01 --add thesis-fig3 --note "best T2* so far"`
+  `scqo tag 20260704-...-01 --add thesis-fig3 --note "best T2* so far"`
   (also backend-free).
 
 ## 4. What's inside a run folder
@@ -204,7 +207,7 @@ all can run at once):
 - **Run page** — outcome badges, the fit table, **every figure inline** (the dip,
   the fringe, the 2D power map...), your parameters, and the device before → after
   diff with changed fields highlighted. You can **add/remove tags and edit the
-  note right here** — the viewer's only write, equivalent to `tag_run.py`.
+  note right here** — the viewer's only write, equivalent to `scqo tag`.
 - **Trends** — a fitted quantity vs time per qubit (`t1_s`, `t2_star_s`,
   `readout_freq`, `pi_amp`, ...): coherence drift at a glance, every point linking
   to its run.
@@ -233,16 +236,15 @@ Your account carries your own settings — no shared file to fight over:
   it), your project tags, your parameters file. Only these personal keys are allowed.
 - `~/.scqo/parameters.toml` — your standing experiment parameters (three-tier rule
   in section 2).
-- Don't know what's available? `python scripts\devices.py` prints every configured
+- Don't know what's available? `scqo devices` prints every configured
   backend with its sample, instrument address, active cooldown and wiring — plus the
   exact user.toml line to select it. It touches no instrument, so it is always safe.
 
 ```
 ssh <your-account>@<server>            # password prompt on first login
 D:\github\.venv-qblox\Scripts\Activate.ps1     # (or .venv-qm for the OPX1000)
-cd D:\github\LCHQBDriver
-python scripts\run_experiment.py resonator_spectroscopy --qubits q1 --tag mytest
-python scripts\find_runs.py --limit 5
+scqo run resonator_spectroscopy --qubits q1 --tag mytest    # any directory works
+scqo find --limit 5
 exit
 ```
 
@@ -253,7 +255,7 @@ measurement finish before disconnecting. Figures appear in the viewer seconds la
 Rules that keep shared instruments sane:
 
 - Every run records **you** as its operator (your login name) — visible in the
-  viewer and `find_runs.py --operator <name>`. Your work is attributable; so are
+  viewer and `scqo find --operator <name>`. Your work is attributable; so are
   your mistakes. Both are fine — failed runs are searchable on purpose.
 - **One measurement at a time per instrument.** Check the viewer's latest runs (or
   ask in the lab chat) before starting a long sweep; a second program on the same
@@ -332,6 +334,8 @@ comes back as a structured error with the fit intact.
 | Symptom | Cause / fix |
 |---|---|
 | `ModuleNotFoundError` / `lab config not found` / nothing gets saved | setup problem — see [INSTALL.md](INSTALL.md) §1–§2 and the §6 symptom table |
+| `scqo: command not found` (or the term is not recognized) | no venv activated — or scqo was upgraded without re-running the INSTALL §1 `uv pip install -e` line (the command registers at install time) |
+| `backend 'qblox' needs the 'qblox' driver...` | right command, wrong venv — the message names the venv to activate |
 | A run shows `datastore_error` | measurement succeeded; only saving failed (disk full/locked). Fix the disk, rerun |
 | `invalid parameter-defaults file ...` (even on `--help`) | your `parameters.toml` has a syntax error — it affects measurements, so it never fails silently. Fix the named file |
 | `find_runs` misses runs you can see on disk | index stale → `python -m scqo <data_root>` |
