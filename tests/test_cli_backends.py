@@ -27,9 +27,11 @@ def test_missing_driver_names_repo_and_venv(tmp_path, monkeypatch):
     monkeypatch.delenv(labconfig.USER_ENV_VAR, raising=False)
     with pytest.raises(SystemExit) as err:
         _backends.build_session(str(_cfg(tmp_path, "qblox")))
-    # (no driver installed in the test env — the message must name the fix)
+    # (no driver installed in the test env — the message must name BOTH fixes:
+    # the wrong-venv case and the stale-install case a real user hit on the server)
     assert "LCHQBDriver" in str(err.value)
     assert ".venv-qblox" in str(err.value)
+    assert "uv pip install -e" in str(err.value)
 
 
 def test_unknown_backend_rejected(tmp_path, monkeypatch):

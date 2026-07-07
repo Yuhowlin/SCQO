@@ -95,6 +95,10 @@ def build_session(config_path: str | None = None) -> tuple[Session, LabConfig]:
             return make_session(backend, cfg), cfg
     provider, venv = SERVED_BY[family]
     raise SystemExit(
-        f"backend {cfg.backend!r} needs the {family!r} driver, which is not installed in this "
-        f"environment — install {provider} (on the lab machines: activate D:\\github\\{venv})"
+        f"backend {cfg.backend!r} needs the {family!r} driver, which is not registered in this "
+        f"environment.\n"
+        f"- wrong venv? activate D:\\github\\{venv} (the one that has {provider})\n"
+        f"- already in {venv}? then {provider} predates v0.4.0 or was never reinstalled: entry\n"
+        f"  points register at INSTALL time — update the repo and re-run its "
+        f"`uv pip install -e` line (INSTALL §1/§5)"
     )
