@@ -237,6 +237,29 @@ Your account carries your own settings — no shared file to fight over:
 - `~/.scqo/parameters.toml` — your standing experiment parameters (three-tier rule
   in section 2). Applies automatically — no user.toml line needed; the optional
   `parameters_file` key in user.toml exists only to swap in a DIFFERENT file.
+
+**Editing these files from an SSH terminal** — GUI editors do NOT work over SSH:
+`notepad user.toml` starts an invisible process on the server and no window ever
+appears (clean strays with `Get-Process notepad | Stop-Process`). Use one of:
+
+1. **PowerShell here-string** (no tools; writes UTF-8 without BOM — never use
+   `Set-Content -Encoding UTF8`, its BOM breaks the TOML parser):
+
+   ```powershell
+   type ~\.scqo\user.toml                     # read
+   [IO.File]::WriteAllText("$env:USERPROFILE\.scqo\user.toml", @'
+   backend = "qblox"
+   default_tags = ["projA"]
+   '@)
+   ```
+
+   PowerShell shows `>>` until the closing `'@` — type it at the start of the line.
+   To ADD an experiment table to parameters.toml, use `AppendAllText` the same way.
+2. **scp round-trip** from your laptop (OpenSSH lands in your profile, so relative
+   paths work): `scp <you>@<server>:.scqo/parameters.toml .` → edit locally →
+   `scp parameters.toml <you>@<server>:.scqo/`.
+3. **VS Code Remote-SSH** if you edit these often — a real editor saving directly
+   on the server, correct encoding by default.
 - Don't know what's available? `scqo devices` prints every configured
   backend with its sample, instrument address, active cooldown and wiring — plus the
   exact user.toml line to select it. It touches no instrument, so it is always safe.
@@ -336,6 +359,7 @@ comes back as a structured error with the fit intact.
 |---|---|
 | `ModuleNotFoundError` / `lab config not found` / nothing gets saved | setup problem — see [INSTALL.md](INSTALL.md) §1–§2 and the §6 symptom table |
 | `scqo: command not found` (or the term is not recognized) | no venv activated — or scqo was upgraded without re-running the INSTALL §1 `uv pip install -e` line (the command registers at install time) |
+| `notepad ...` over SSH does nothing | GUI apps have no display in an SSH session (the process starts invisibly on the server) — use the §5 editing methods (here-string / scp / VS Code Remote-SSH) |
 | `backend 'qblox' needs the 'qblox' driver...` | right command, wrong venv — the message names the venv to activate |
 | A run shows `datastore_error` | measurement succeeded; only saving failed (disk full/locked). Fix the disk, rerun |
 | `invalid parameter-defaults file ...` (even on `--help`) | your `parameters.toml` has a syntax error — it affects measurements, so it never fails silently. Fix the named file |
