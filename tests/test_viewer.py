@@ -9,6 +9,10 @@ from pathlib import Path
 import pytest
 
 fastapi = pytest.importorskip("fastapi")
+# python-multipart backs FastAPI's Form(...) (the tag-edit POST). The QM lock env
+# deliberately omits the viewer extras — skip there instead of erroring 14 tests
+# (INSTALL §3 blesses the view venv for the suite).
+pytest.importorskip("multipart")
 from fastapi.testclient import TestClient  # noqa: E402
 
 from scqo import Session, register  # noqa: E402
