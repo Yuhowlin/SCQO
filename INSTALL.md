@@ -346,6 +346,21 @@ disposable — there is no migration. The index rebuilds itself (schema check); 
 `<device>\scqo_state.json` if present (it reseeds from the vendor config; history
 starts fresh); old run folders may stay (reindex skips anything unreadable).
 
+### Adding a new sample
+
+One manual edit, two optional entries, everything else auto-creates.
+`python scripts\sample.py new <name> --backend qblox --instrument cluster0` prints all
+of it paste-ready and creates the data folder (it never edits shared files):
+
+1. **Manual (manager)**: the shared config's vendor table (`[qblox]`/`[qm]`
+   `device_name` + `state_path` — the sample follows that instrument), or `[lab]
+   device_name` for simulated. Twin modes also need the vendor-config working copy.
+2. **Optional registries**: a `devices.toml` entry (sample facts, `mounted_on`) and —
+   once per *instrument*, not per sample — an `instruments.toml` entry.
+3. **Automatic on first use**: `<data_root>\<name>\` run folders, `scqo_state.json`,
+   the index row, viewer pages; `cooldowns.toml` via `cooldown.py start cd1 ...`
+   (hand-add its `[[cd1.mapping]]` wiring snapshot). Verify with `devices.py`.
+
 ### Factory reset (make a machine "new" again)
 
 To reinstall as if on a clean computer, delete the machine's scqo state — repos and

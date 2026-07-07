@@ -241,8 +241,10 @@ provenance (operator + backend + cycle + wiring era). Landed in six phases:
   device page cycle+wiring panel + instrument cards, stable state columns
   (descriptor order — fields are heterogeneous per qubit now), history operator
   column; TREND_QUANTITIES derived from FIELDS.
-- **Mirrored scripts** (now NINE shared files): NEW `cooldown.py` (validate/list;
-  `start` append-only; `end` targeted insert + .bak + re-parse) and `devices.py`
+- **Mirrored scripts** (now TEN shared files): NEW `cooldown.py` (validate/list;
+  `start` append-only; `end` targeted insert + .bak + re-parse), `devices.py`
   (the Tier-1 menu: backend → sample → instrument(IP) → cycle → wiring + the exact
-  user.toml selection line; touches no instrument); `find_runs.py --cooldown`;
+  user.toml selection line; touches no instrument) and `sample.py` (add-a-sample
+  scaffold: prints paste-ready config/registry snippets + creates the data folder;
+  never edits shared files — INSTALL §2 checklist); `find_runs.py --cooldown`;
   `device.py --history` shows `by=<operator>`.
