@@ -524,6 +524,11 @@ The rules that make this safe:
   **The sanctioned per-user layer on top of the shared config is `~\.scqo\user.toml`**
   (section 2): each account picks its own `backend` (= instrument = device),
   `default_tags` and `parameters_file` there — and nothing else.
+  **Recommended server policy: OMIT `backend` from the shared config** (the built-in
+  default is `simulated`), so an account that has not yet chosen an instrument in its
+  `user.toml` cannot touch hardware by accident — `scqo devices` prints the exact
+  line to write. On single-user dev machines, setting `backend` directly in your own
+  `config.toml` remains the normal, sufficient form.
 - Simultaneous users are supported and tested (`tests/test_index_scale.py`), but
   **one measurement at a time per instrument** remains a social convention — the
   instruments themselves cannot run two programs at once.
