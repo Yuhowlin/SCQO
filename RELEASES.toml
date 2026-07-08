@@ -8,7 +8,7 @@ date = 2026-07-08
 scqo = "v0.5.0"
 lchqbdriver = "v0.5.0"
 lchqmdriver = "v0.5.0"
-scqo-contrib = "v0.5.0"          # no-change re-tag
+scqo-contrib = "v0.5.0"          # real change: template DatasetContract fixed to the plural sweeps API
 scqat = "v0.1.5"                 # independent line (v0.1.4 + version-metadata fix)
 notes = "Device-centric config: user.toml picks the device; [[cycle.setup]] owns backend + instrument_config (canonical vendor filenames); instruments.toml, [qblox]/[qm] tables, [lab] backend/device_name/state_path and twin modes retired (not read). UPGRADE REQUIRES: uv pip install -e re-runs AND manual edits — shrink config.toml to [lab] data_root(+device), user.toml backend->device, cooldowns.toml [[.mapping]]->[[.setup]] + backend/instrument_config, delete instruments.toml (INSTALL §2 upgrade note). Index auto-rebuilds (schema v5); post-cooldown-end runs refuse."
 
