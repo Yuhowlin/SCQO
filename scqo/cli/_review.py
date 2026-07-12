@@ -1,7 +1,7 @@
 """Suggested-update review: the table, the prompt, and the selection grammar.
 
-Shared by ``scqo run`` (prompt right after the measurement), ``scqo calibrate``
-(prompt per step) and ``scqo accept`` (decide later by run id). Everything human-
+Shared by ``scqo run`` (prompt right after the measurement) and ``scqo accept``
+(decide later by run id). Everything human-
 facing goes to **stderr** — stdout stays parseable result JSON (``| jq`` safe).
 
 Selection grammar (``parse_selection``): ``a``/``all`` — every pending item;

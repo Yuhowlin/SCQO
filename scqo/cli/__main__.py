@@ -15,7 +15,6 @@ import sys
 #: subcommand -> (module in scqo.cli, one-line help)
 _COMMANDS = {
     "run": ("run", "run any cataloged experiment (no name = show the catalog)"),
-    "calibrate": ("calibrate", "the daily bring-up sequence, every step saved + tagged"),
     "find": ("find", "query saved runs (no instrument touched)"),
     "accept": ("accept", "review / apply / reject a run's suggested updates (by run id)"),
     "tag": ("tag", "retro-tag / annotate a saved run"),

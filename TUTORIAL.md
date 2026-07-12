@@ -1,4 +1,4 @@
-# SCQO tutorial — measure, calibrate, and find your data
+# SCQO tutorial — measure and find your data
 
 The student guide to the lab's measurement system. You run experiments by *physics
 name* (resonator spectroscopy, Ramsey, power Rabi), get fitted device parameters back,
@@ -13,7 +13,7 @@ whoever set up the PC): a venv activated and a lab config in place (your own
 `source ~/github/.venv-view/bin/activate` — the venvs live NEXT TO the repos, not
 inside them, so use the full path or run from the repos' parent folder) — and an
 instrument env only to measure:
-`.venv-qblox` for `scqo run`/`scqo calibrate`/`scqo state` on the Qblox
+`.venv-qblox` for `scqo run`/`scqo state` on the Qblox
 cluster, `.venv-qm` on the OPX1000. Cooldowns are no longer a tag you maintain:
 the manager registers each cycle (`scqo device cooldown`), and every run you take is
 auto-stamped with it — findable via `scqo find --cooldown`.
@@ -202,8 +202,8 @@ Three tiers of parameters — each overriding the previous:
    with `... <experiment> --help`.
 2. **Your standing defaults** (optional) — put semi-permanent project settings in
    `~\.scqo\parameters.toml`, one table per experiment (format and rules in
-   [INSTALL.md](INSTALL.md) §2). Edit it once per project or cooldown and every run —
-   including `scqo calibrate`'s steps — picks the values up; `--help` marks them like
+   [INSTALL.md](INSTALL.md) §2). Edit it once per project or cooldown and every run
+   picks the values up; `--help` marks them like
    `default=15e6 [parameters.toml]`. With this file in place, most runs need no
    parameter flags at all.
 3. **The command line** — always wins. **`--set KEY=VALUE`** changes *one* knob
@@ -219,17 +219,18 @@ scqo run resonator_spectroscopy --qubits q1 --set frequency_span_hz=15e6
 scqo run resonator_spectroscopy --help
 ```
 
-The **daily workflow** is one command — the bring-up sequence (resonator spectroscopy
-→ qubit spectroscopy → power Rabi; Ramsey is the fine-tuning follow-up once a pi pulse
-exists — run it explicitly), every step saved + tagged, summary at the end. After each
-step you are shown its suggested updates and asked what to apply — what you accept
-feeds the next step; `--accept` applies everything automatically (unattended bring-up):
+The **standard bring-up** is the same command three times — resonator spectroscopy
+→ qubit spectroscopy → power Rabi (Ramsey is the fine-tuning follow-up once a pi pulse
+exists); accept each run's suggestions so the next step measures with them:
 
 ```bash
-scqo calibrate --qubits q0 q1 --tag cooldown1
-scqo calibrate --skip resonator_spectroscopy       # drop a step
-scqo calibrate --accept                            # unattended: apply every step's updates
+scqo run resonator_spectroscopy --qubits q0 q1 --tag cooldown1
+scqo run qubit_spectroscopy     --qubits q0 q1 --tag cooldown1
+scqo run qubit_power_rabi       --qubits q0 q1 --tag cooldown1
 ```
+
+(The old `scqo calibrate` sequence command was removed in v0.8 — not used at this
+phase; a sequence runner returns with the AI loop, where it belongs.)
 
 And the device's calibration state / change log any time:
 

@@ -22,7 +22,7 @@ actually running a measurement.**
 | venv | prompt | contents | activate when you… |
 |---|---|---|---|
 | `D:\github\.venv-view` | `(view)` | scqo `[viewer]` + scqat + datasette + pytest — **no instrument libraries** | look at data (the common case): run-viewer, SQL browser, `scqo find`, `scqo tag`. Works identically on an analysis-only laptop/Mac. |
-| `D:\github\.venv-qblox` | `(qblox)` | the view stack + LCHQBDriver + `qblox-scheduler==1.0.0b4` (hardware-proven) + scqo-contrib | measure on the Qblox cluster: `scqo run`, `scqo calibrate`, `scqo state` |
+| `D:\github\.venv-qblox` | `(qblox)` | the view stack + LCHQBDriver + `qblox-scheduler==1.0.0b4` (hardware-proven) + scqo-contrib | measure on the Qblox cluster: `scqo run`, `scqo state` |
 | `D:\github\.venv-qm` | `(.venv-qm)` | pinned QM stack, py3.11 (`LCHQMDriver\requirements-qm.lock.txt`) + scqo/scqat/LCHQMDriver editables | measure on the OPX1000 or use qualibrate — `qm.bat` activates it for you |
 
 All three import scqo/scqat from the same editable checkouts, so they never drift on
@@ -95,7 +95,7 @@ uv pip install --python .venv-qm\Scripts\python.exe -e .\scqat -e .\SCQO -e .\LC
 ```
 
 (Each scqo install line also puts the **`scqo` command** on that venv's PATH — the
-whole Tier-1 surface (`scqo run/find/accept/tag/state/user/device/calibrate`)
+whole Tier-1 surface (`scqo run/find/accept/tag/state/user/device/doctor`)
 works from any directory. `[viewer]` pulls the run-viewer's web extras —
 fastapi/uvicorn/jinja2/python-multipart —
 for `python -m scqo.viewer`; `datasette` powers the SQL browser `python -m scqo.browse`.
@@ -169,8 +169,9 @@ setup era. The operator's checklist:
    disconnected) and copy `readout_freq` / `drive_freq` per qubit — these are sample
    properties and transfer well.
 3. Do **NOT** transfer `pi_amp` / `readout_amp` — they encode the setup (line
-   attenuation, output gain). Re-derive them with the standard bring-up:
-   `scqo calibrate` on the new instrument.
+   attenuation, output gain). Re-derive them with the standard bring-up runs on the
+   new instrument (`scqo run resonator_spectroscopy` → `qubit_spectroscopy` →
+   `qubit_power_rabi`, accepting each step).
 4. Keep **qubit names identical across instruments** — `q1` must mean the same
    physical qubit in `dut_config.json` AND in the QUAM `state.json`. Names belong to
    the sample; different names would split its trends and history.
@@ -206,8 +207,7 @@ qubits = ["q1"]          # even required knobs may get a standing default
 ```
 
 - With the file in place, a project's daily commands shrink to
-  `scqo run resonator_spectroscopy` — and
-  `scqo calibrate` runs every sequence step with these effective defaults too.
+  `scqo run resonator_spectroscopy`.
 - `scqo run <experiment> --help` marks file-sourced values, e.g. `default=15e6 [parameters.toml]`.
 - Working on several projects? Point `parameters_file` in `[lab]` — or in your
   personal `user.toml` (next subsection) — at a different file to swap the whole set.
@@ -355,9 +355,7 @@ changes what a run DOES:**
   at a terminal `scqo run` shows the table and asks (press `a` to apply all —
   Enter applies NOTHING and the device stays unchanged); in scripts everything
   stays pending until `scqo accept <run_id>`. The pre-v0.6 behavior is one flag
-  away: `scqo run ... --accept` (or `update="apply"` in Python). `scqo calibrate`
-  now asks after each step — use `scqo calibrate --accept` for unattended
-  bring-up, otherwise later steps run on whatever you accepted so far.
+  away: `scqo run ... --accept` (or `update="apply"` in Python).
 - **T1/T2*/T2echo moved out of the device state.** `scqo state` no longer shows
   them — they are SAMPLE physics now, living in `<data_root>\<device>\physical.json`
   with their own change history: `scqo state --physical [--history]`. Legacy

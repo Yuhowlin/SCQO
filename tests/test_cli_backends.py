@@ -154,7 +154,7 @@ def test_ensure_demo_experiments_is_idempotent_and_never_shadows():
 def test_dispatcher_usage_lists_every_subcommand(capsys):
     for name in ("state", "user", "device"):  # the v0.7.0 command set
         assert name in _COMMANDS
-    for name in ("devices", "sample", "cooldown"):  # retired, no aliases
+    for name in ("devices", "sample", "cooldown", "calibrate"):  # retired, no aliases
         assert name not in _COMMANDS
     assert cli_main(["--help"]) == 0
     out = capsys.readouterr().out

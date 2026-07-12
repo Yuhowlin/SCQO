@@ -84,7 +84,7 @@ scqo/
   datastore.py    # DataStore + RunRecord: every run saved to a folder, indexed in SQLite (rebuildable)
   labconfig.py    # ~/.scqo/config.toml -> LabConfig + make_session (students never edit repos)
   testing.py      # InMemoryDevice + SimulatedBackend (run with no instrument)
-  cli/            # the `scqo` command (run/calibrate/find/accept/tag/state/user/
+  cli/            # the `scqo` command (run/find/accept/tag/state/user/
                   #   device/doctor): ONE engine, any-directory;
                   #   the device's SELECTED named setup picks the backend, resolved via
                   #   the scqo.backends entry-point group; simulated is built in
@@ -419,3 +419,11 @@ worked Session-API example, importing `from scqo.cli import build_session`
 directly; its run_resonator_spectroscopy.py example was deleted too, redundant
 with `scqo run`). Never add wrappers or per-command stubs again.
 Combo tag v0.7.0 all four repos, scqat pin v0.1.5.
+
+**2026-07-12 (post-v0.7.0, on main) — `scqo calibrate` REMOVED** (user decision:
+unused at this phase, keep the project light). The fixed bring-up sequence was
+the command's only content; the docs now show the three explicit `scqo run`
+steps (res spec → qubit spec → power Rabi, accept each). A sequence runner
+returns with the Phase-3 AI loop, where deciding the next step belongs.
+`cli/calibrate.py` deleted, `_COMMANDS` entry gone (no alias), `_review.py` is
+shared by run + accept only.
