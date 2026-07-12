@@ -3,6 +3,15 @@
 # scqat at its pinned tag (scqat versions independently: its own pyproject/tag line).
 # Hand-edited at release time by the manager (see RELEASING.md).
 
+[v0-6-0]
+date = 2026-07-12
+scqo = "v0.6.0"
+lchqbdriver = "v0.6.0"           # scripts pass update="apply" explicitly; launcher stubs regenerated
+lchqmdriver = "v0.6.0"           # same script/stub updates as the qblox driver
+scqo-contrib = "v0.6.0"          # no-change re-tag
+scqat = "v0.1.5"                 # unchanged pin
+notes = "Suggest -> review -> accept: runs DEFAULT to suggesting fitted values (a terminal prompts; Enter applies nothing; scqo accept <run_id> decides later; --accept / update=\"apply\" = pre-v0.6 behavior; calibrate prompts per step). t1/t2 moved out of scqo_state.json into per-sample physical.json (scqo device --physical); legacy state keys not read. Index auto-rebuilds (schema v6). Live-source provenance: scqo device --sources + viewer live: markers (strict match; vendor reseeds show 'externally changed'). Guards ask [y/N] at a terminal (--force/--reapply are the script form). UPGRADE REQUIRES: nothing -- no config/data action; editable dev installs just git pull. BEHAVIOR CHANGE: runs no longer write back by default -- INSTALL section 2 v0.6.0 note."
+
 [v0-5-0]
 date = 2026-07-08
 scqo = "v0.5.0"
