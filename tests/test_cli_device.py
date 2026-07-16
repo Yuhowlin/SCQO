@@ -38,16 +38,10 @@ def _registries(tmp_path: Path) -> Path:
     """chipA: ACTIVE cycle with TWO named setups; simdev: single simulated setup."""
     data_root = tmp_path / "data"
     (data_root / "chipA").mkdir(parents=True)
-    qblox_folder = data_root / "chipA" / "qblox_cd3"
-    qm_folder = data_root / "chipA" / "qm_cd3"
-    qblox_folder.mkdir()
-    qm_folder.mkdir()
     (data_root / "chipA" / "cooldowns.toml").write_text(
         '[cd3]\nstart = 2026-07-01\npackaging = "PCB v3"\n\n'
-        '[cd3.setup.qblox_main]\nbackend = "qblox"\n'
-        f"instrument_config = '{qblox_folder.as_posix()}'\n\n"
-        '[cd3.setup.qm_alt]\nbackend = "qm"\n'
-        f"instrument_config = '{qm_folder.as_posix()}'\n",
+        '[cd3.setup.qblox_main]\nbackend = "qblox"\n\n'
+        '[cd3.setup.qm_alt]\nbackend = "qm"\n',
         encoding="utf-8",
     )
     (data_root / "simdev").mkdir()
@@ -69,9 +63,10 @@ def test_menu_one_row_per_setup_and_marker_follows_user_selection(tmp_path):
     qm_row = next(line for line in out.splitlines() if "qm_alt" in line)
     assert qblox_row.startswith("chipA")  # device name on the FIRST setup row only
     assert qm_row[:12].strip() == ""  # continuation row: device + cycle columns blank
-    assert "qblox" in qblox_row and "qblox_cd3" in qblox_row  # backend + config folder
+    # backend + the DERIVED config folder (<cid>/<setup>/backend_config)
+    assert "qblox" in qblox_row and "backend_config" in qblox_row
     assert "LCHQBDriver" in qblox_row and ".venv-qblox" in qblox_row  # where it runs
-    assert "LCHQMDriver" in qm_row and "qm_cd3" in qm_row
+    assert "LCHQMDriver" in qm_row and "backend_config" in qm_row
     assert "simdev" in out and "simulated" in out
     assert "scqo user --device" in out  # the how-to-select footer
     assert out.count("<- selected") == 1

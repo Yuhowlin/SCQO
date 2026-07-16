@@ -1,7 +1,7 @@
 """``python -m scqo.viewer`` — serve the run-viewer (lab convention: port 8080).
 
-Zero-config: reads data_root/device from the lab config; each device's state file is
-found by convention (``<data_root>/<device>/scqo_state.json``). Ports:
+Zero-config: reads data_root/device from the lab config; state files are per SETUP,
+found via each device's cooldown registry (``scqo.datastore.setup_state_path``). Ports:
 8001 qualibrate · 8080 THIS viewer · 8081 datasette (``python -m scqo.browse``).
 """
 

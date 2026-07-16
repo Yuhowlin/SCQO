@@ -116,6 +116,8 @@ def test_simulated_setup_builds_and_persists(tmp_path):
     assert sess.backend_label == "simulated"
     assert sess.setup_name == "sim_bench"  # the resolved setup NAME is era provenance
     assert sess.datastore is not None  # device + data_root = persisted
+    # per-(cooldown, setup) scqo/ folder convention
+    assert sess.state_path.replace("\\", "/").endswith("chipT/cd1/sim_bench/scqo/scqo_state.json")
 
 
 def _driver_installed(family: str) -> bool:
@@ -127,10 +129,8 @@ def _driver_installed(family: str) -> bool:
 @pytest.mark.skipif(_driver_installed("qblox"), reason="qblox driver installed in this env")
 def test_missing_driver_names_repo_and_venv(tmp_path):
     """A wrong-venv attempt fails loudly and says exactly what to activate/install."""
-    (tmp_path / "cfg").mkdir()
     _registry(tmp_path, '[cd1]\nstart = 2026-01-01\n'
-                        '[cd1.setup.qblox_main]\nbackend = "qblox"\n'
-                        f"instrument_config = '{(tmp_path / 'cfg').as_posix()}'\n")
+                        '[cd1.setup.qblox_main]\nbackend = "qblox"\n')
     with pytest.raises(SystemExit) as err:
         _backends.build_session(_lab(tmp_path))
     assert "'qblox_main'" in str(err.value)  # which setup demanded the driver

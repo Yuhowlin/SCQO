@@ -13,14 +13,16 @@ What is manual vs automatic when a sample arrives:
     1. `scqo device add <name>` — creates the data folder, prints every next step.
     2. `scqo device cooldown start cd1 ...` — records the insertion (an EMPTY cycle).
     3. Hand-add one `[cd1.setup.<name>]` block per measurement setup to the device's
-       cooldowns.toml (backend + instrument_config; for real backends first create
-       the folder and copy the vendor config files in under canonical names —
-       qblox: dut_config.json + hw_config.json; qm: state.json + wiring.json).
+       cooldowns.toml (backend + optional note — no path keys; for real backends
+       create the DERIVED folder <device>/cd1/<name>/backend_config/ and copy the
+       vendor config files in under canonical names — qblox: dut_config.json +
+       hw_config.json; qm: state.json + wiring.json).
     4. (optional) devices.toml: the sample's facts (description, design values).
 
   AUTOMATIC (no action needed):
-    - <data_root>/<name>/ folders, run folders, scqo_state.json, the index row,
-      viewer pages — all created on first use.
+    - <data_root>/<name>/ folders, run folders, each context's
+      <cooldown>/<setup>/scqo/ folder (scqo_state.json + physical.json), the index
+      row, viewer pages — all created on first use.
     - NO shared-config edit: users select the sample and setup with
       `scqo user --device <name> [--setup <name>]`.
 
@@ -59,11 +61,14 @@ packaging = {packaging}
 note = {note}
 
 # Setups are hand-added, one NAMED sub-table per measurement setup of this cycle:
-#   [{cid}.setup.<name>]            # the name IS the setup's identity (e.g. qblox_main)
-#   backend = "qblox"               # qblox | qm | simulated
-#   instrument_config = '<folder>'  # vendor config files under canonical names; omit for simulated
-#   note = "..."
-# (qblox: dut_config.json + hw_config.json; qm: state.json + wiring.json)
+#   [{cid}.setup.<name>]      # the name IS the setup's identity
+#   backend = "qblox"         # qblox | qm | simulated
+#   note = "..."              # optional
+# No path keys: the vendor-config folder is DERIVED from the keys —
+#   <device>/{cid}/<name>/backend_config/  (create it and copy the vendor files in
+#   under canonical names — qblox: dut_config.json + hw_config.json; qm: state.json +
+#   wiring.json; simulated needs no folder). SCQO writes its own state + physics to
+#   the sibling <device>/{cid}/<name>/scqo/ (auto-created).
 # Users pick one with: scqo user --setup <name>
 """
 
@@ -178,10 +183,11 @@ def _add(cfg, name: str, description: str) -> int:
           f"{device_dir / COOLDOWNS_FILE}:\n")
     print("[cd1.setup.qblox_main]")
     print('backend = "qblox"                # qblox | qm | simulated')
-    print(f"instrument_config = '{(device_dir / 'qblox_cd1').as_posix()}'   # omit for simulated")
-    print("\n   (for real backends create that folder and copy the vendor config files in")
-    print("    under canonical names: qblox dut_config.json + hw_config.json;")
-    print("    qm state.json + wiring.json)")
+    print("\n   (no path keys — the vendor folder is DERIVED from the keys: for real")
+    print("    backends create <device>/cd1/qblox_main/backend_config/ and copy the vendor")
+    print("    config files in under canonical names: qblox dut_config.json +")
+    print("    hw_config.json; qm state.json + wiring.json. SCQO keeps its own state +")
+    print("    physics in the sibling cd1/qblox_main/scqo/ — auto-created.)")
     print("\n" + "=" * 72)
     print(f"3. PASTE into {Path(cfg.data_root) / 'devices.toml'} (optional sample facts):\n")
     print(f"[{name}]")
@@ -212,7 +218,7 @@ def _show(cfg) -> int:
         setups = cycle.get("setup", {})
         if not setups:
             print(f"\n{cid} has no setups yet — hand-add [{cid}.setup.<name>] blocks "
-                  "(backend + instrument_config) to the registry; runs refuse until one exists")
+                  "(backend [+ note]) to the registry; runs refuse until one exists")
             return 0
         print(f"\nsetups of {cid} (users pick one with `scqo user --setup <name>`):")
         for name, setup in setups.items():
@@ -232,8 +238,10 @@ def _start(cfg, cid: str, fridge: str, packaging: str, note: str) -> int:
     active = active_cooldown(cycles)
     if active:
         raise SystemExit(f"cycle {active[0]!r} is still open — run `scqo device cooldown end` first")
-    if cid in cycles:
-        raise SystemExit(f"cycle {cid!r} already exists in {path}")
+    twin = next((c for c in cycles if c.casefold() == cid.casefold()), None)
+    if twin is not None:  # casefold: [cd2] and [CD2] would alias one folder tree on Windows
+        raise SystemExit(f"cycle {twin!r} already exists in {path}"
+                         + ("" if twin == cid else f" (differs from {cid!r} only by letter case)"))
     path.parent.mkdir(parents=True, exist_ok=True)
     original = path.read_text(encoding="utf-8") if path.is_file() else None
     # Append-only: hand-written content and comments above stay untouched.

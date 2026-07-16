@@ -42,6 +42,8 @@ def test_healthy_simulated_setup_passes(tmp_path):
     assert "all checks passed" in proc.stdout
     assert "cd1 ACTIVE" in proc.stdout and "backend=simulated" in proc.stdout
     assert "'sim_main' (auto)" in proc.stdout  # single-setup cycle auto-selects
+    # the per-(cooldown, setup) state file: named even before its first save
+    assert "sim_main" in proc.stdout and "scqo_state.json (not created yet)" in proc.stdout
     assert "13 experiment(s)" in proc.stdout  # simulated fills the catalog driver-less
 
 
@@ -85,36 +87,17 @@ def test_ambiguous_setup_without_selection_fails(tmp_path):
 
 def test_missing_instrument_config_files_fail(tmp_path):
     data_root = tmp_path / "data"
-    folder = data_root / "chipA" / "qblox_cd1"
-    folder.mkdir(parents=True)  # exists but EMPTY: canonical vendor files absent
+    # the DERIVED vendor folder exists but is EMPTY: canonical vendor files absent
+    folder = data_root / "chipA" / "cd1" / "qblox_main" / "backend_config"
+    folder.mkdir(parents=True)
     (data_root / "chipA" / "cooldowns.toml").write_text(
-        '[cd1]\nstart = 2026-07-01\n\n[cd1.setup.qblox_main]\nbackend = "qblox"\n'
-        f"instrument_config = '{folder.as_posix()}'\n",
+        '[cd1]\nstart = 2026-07-01\n\n[cd1.setup.qblox_main]\nbackend = "qblox"\n',
         encoding="utf-8",
     )
     proc = _doctor(tmp_path, _lab_body(tmp_path, device="chipA"))
     assert proc.returncode == 1
     assert "[FAIL] instr config" in proc.stdout
     assert "dut_config.json" in proc.stdout
-
-
-def test_shared_folder_across_devices_warns(tmp_path):
-    data_root = tmp_path / "data"
-    shared = data_root / "sharedcfg"
-    shared.mkdir(parents=True)
-    for name in ("state.json", "wiring.json"):
-        (shared / name).write_text("{}", encoding="utf-8")
-    for dev in ("chipA", "chipB"):
-        (data_root / dev).mkdir()
-        (data_root / dev / "cooldowns.toml").write_text(
-            '[cd1]\nstart = 2026-07-01\n\n[cd1.setup.qm_main]\nbackend = "qm"\n'
-            f"instrument_config = '{shared.as_posix()}'\n",
-            encoding="utf-8",
-        )
-    proc = _doctor(tmp_path, _lab_body(tmp_path, device="chipA"))
-    assert "[WARN] shared config" in proc.stdout
-    # the message names the device:setup pairs, not just the devices
-    assert "chipA:qm_main" in proc.stdout and "chipB:qm_main" in proc.stdout
 
 
 def test_no_config_warns_but_passes(tmp_path):

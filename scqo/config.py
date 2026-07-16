@@ -21,6 +21,13 @@ exists, what happens depends on ``on_load``:
 Either way, a *write* during a run always records + pushes: a fresh fit result is
 always legitimate. Wiring/hardware stays vendor-owned and is never modelled here.
 
+The state file is **per (cooldown, setup)** (:func:`scqo.datastore.setup_scqo_dir`:
+``<device>/<cooldown>/<setup>/scqo/scqo_state.json``): every value is a fact about
+qubit + setup, so two users on two setups of one sample never share (or clobber) a
+file, and every :class:`ChangeRecord` is stamped with the writing session's setup
+name. The sample's measured physics lives beside it as ``physical.json`` in the same
+folder (:mod:`scqo.physical`).
+
 **Two classes of fields** (see :data:`FIELDS`): *pushed* calibration knobs
 (readout_freq, drive_freq, pi_amp, readout_amp, readout_power_dbm) behave as above;
 *record-only*
@@ -131,6 +138,9 @@ class ChangeRecord:
     #: re-solves the chain and moves readout_amp): names the field whose write
     #: caused it. None for direct writes.
     coupled_to: str | None = None
+    #: NAMED setup the writing session was bound to (v0.9.0) — attributes manual
+    #: writes too. None only for direct-API sessions built without a setup.
+    setup: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -204,9 +214,11 @@ class RecordingDevice(DeviceModel):
         *,
         state_path: str | None = None,
         on_load: Literal["push", "pull"] = "pull",
+        setup: str | None = None,
     ) -> None:
         self._inner = inner
         self._state_path = state_path
+        self._setup = setup or None  # stamped on every ChangeRecord (v0.9.0)
         self._config: dict[str, dict[str, float | None]] = {}
         self._history: list[ChangeRecord] = []
         self._experiment: str | None = None  # set by the Session around a run
@@ -283,6 +295,7 @@ class RecordingDevice(DeviceModel):
                 # a notebook tweaking pi_amp — are attributed too.
                 operator=_current_operator() or None,
                 coupled_to=coupled_to,
+                setup=self._setup,
             )
         )
         self._config.setdefault(qubit, {})[field] = value          # SCQO config (authoritative)
@@ -332,8 +345,19 @@ class RecordingDevice(DeviceModel):
         if parent:
             os.makedirs(parent, exist_ok=True)  # a config'd path must not fail on first save
         data = {"config": self._config, "history": [r.as_dict() for r in self._history]}
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+        # Unique temp + replace: a save can no longer tear the JSON mid-write. State
+        # files are per-setup, so last-writer-wins on content is a same-setup race only.
+        tmp = f"{path}.{os.getpid()}.tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            os.replace(tmp, path)
+        except OSError:
+            try:
+                os.unlink(tmp)  # no orphan temp; the in-memory config stays intact
+            except OSError:
+                pass
+            raise
 
     def _load_state(self, path: str) -> dict:
         """Load a saved state file: installs the history, returns the saved config.

@@ -3,15 +3,16 @@
 Everything crosses this boundary as plain JSON-able Python (dicts / lists), so the
 same calls drive a manual notebook *and* an LLM tool-use loop:
 
-    sess = Session(backend, state_path="scqo_state.json", data_root="D:/qpu_data")
+    sess, cfg = build_session()        # the lab-config way (scqo.cli.build_session):
+                                       #   resolves device -> setup -> per-SETUP state file
     sess.catalog()                     # what can I measure? (with parameter schemas)
     sess.run("qubit_ramsey", {...})    # measure -> structured result (+ run_id + suggestions)
     sess.accept(run_id)                # apply the run's suggested updates (or a subset)
     sess.reject(run_id, comment="...") # decline them (metadata only)
     sess.find_runs(experiment="qubit_ramsey", qubit="q0")   # find my data (pending=True too)
     sess.load_run(run_id)              # reload a saved run (record/params/result/figures)
-    sess.device_state()                # current calibration (the SCQO config)
-    sess.physical_state()              # the sample's measured physics (physical.json)
+    sess.device_state()                # current calibration (this setup's SCQO config)
+    sess.physical_state()              # the sample's measured physics (this setup's slice)
     sess.history()                     # every recorded change (the loop's memory)
 
 No vendor/hardware object is ever exposed here. The Session owns the **authoritative
@@ -68,23 +69,30 @@ class Session:
         #: went through build_session — they stamp the cycle's only setup, or "".
         self.setup_name = setup_name or ""
         self.cooldown_id = cooldown_id or ""
+        #: where the per-SETUP instrument state+history persists (None = in-memory).
+        self.state_path = state_path
         self._persist = state_path is not None
         #: authoritative SCQO config + history over the backend's vendor device. With
         #: ``state_sync="pull"`` (default) the vendor wins at startup and only history is
         #: loaded; ``"push"`` loads the saved SCQO config and pushes it into the vendor
-        #: (only for devices SCQO fully owns — see scqo.config).
-        self.device = RecordingDevice(backend.device, state_path=state_path, on_load=state_sync)
-        #: instrument-independent measured physics of the SAMPLE (T1, arch/dispersive
-        #: parameters, ...). Persists under <data_root>/<device>/ (the convention), or
-        #: next to a bare state_path — losing measured physics on restart is THE
-        #: regression the state files exist to prevent. In-memory only if neither.
-        if data_root is not None:  # expanduser like DataStore does — same input, same place
-            physical_path = Path(data_root).expanduser() / device_name / PHYSICAL_FILE
-        elif state_path is not None:
+        #: (only for devices SCQO fully owns — see scqo.config). The state file lives in
+        #: the setup's per-(cooldown, setup) ``scqo/`` folder; each ChangeRecord is
+        #: stamped with this session's setup.
+        self.device = RecordingDevice(backend.device, state_path=state_path,
+                                      on_load=state_sync, setup=self.setup_name or None)
+        #: measured physics of the SAMPLE (T1, arch/dispersive parameters, ...) — one
+        #: file per (cooldown, setup) context. When a state_path is set it sits beside
+        #: it in the same ``scqo/`` folder (the make_session/CLI path); a setup-less
+        #: direct-API session with a data_root falls back to a device-level
+        #: <data_root>/<device>/physical.json; a bare state_path lands it next door.
+        #: Losing measured physics on restart is THE regression the store prevents.
+        if state_path is not None:  # the scqo/ folder (CLI) or the bare state dir (direct API)
             physical_path = Path(state_path).expanduser().parent / PHYSICAL_FILE
+        elif data_root is not None:  # setup-less direct-API escape hatch: device-level
+            physical_path = Path(data_root).expanduser() / device_name / PHYSICAL_FILE
         else:
             physical_path = None
-        self.physical = PhysicalStore(physical_path)
+        self.physical = PhysicalStore(physical_path, setup=self.setup_name or None)
         #: run datastore (folders + rebuildable SQLite index); None disables persistence.
         self.datastore = (
             DataStore(data_root, device_name=device_name,
@@ -561,7 +569,9 @@ class Session:
         return self.device.snapshot()
 
     def physical_state(self) -> dict:
-        """Return the sample's measured physical parameters (instrument-independent)."""
+        """The sample's measured physics for THIS SESSION'S (cooldown, setup) context
+        (flat ``{qubit: {field: value}}``). Other contexts' measurements live in their
+        own files; compare across them via the run index / trends."""
         return self.physical.snapshot()
 
     def live_sources(self) -> dict:
@@ -570,7 +580,8 @@ class Session:
         ``{"instrument": {qubit: {field: info}}, "physical": {...}}`` under the
         strict-match rule of :mod:`scqo.provenance`: a run is credited only while
         its recorded value still equals the live one — vendor reseeds and other
-        tools' writes show as ``"external"``, never a false credit.
+        tools' writes show as ``"external"``, never a false credit. Both stores are
+        per (cooldown, setup), so their whole history belongs to this context.
         """
         from .provenance import live_sources as _live_sources
 

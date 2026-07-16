@@ -4,8 +4,11 @@ One tiny TOML file tells every command where data goes; everything ELSE follows 
 DEVICE: which instrument a sample hangs on, and where its vendor config lives, is a
 NAMED setup of the sample's ACTIVE cooldown cycle
 (``<data_root>/<device>/cooldowns.toml`` — see ``scqo.datastore.load_cooldowns``;
-users pick one with ``scqo user --setup``), and the scqo state file is pure
-convention (``<data_root>/<device>/scqo_state.json``).
+users pick one with ``scqo user --setup``), and the scqo state + physics files are
+per (cooldown, setup), pure convention (``scqo.datastore.setup_scqo_dir``:
+``<data_root>/<device>/<cooldown>/<setup>/scqo/`` — a SIBLING of the setup's vendor
+``instrument_config`` folder, never inside it, so the QM backend's QUAM load never
+sweeps them up).
 Resolution order for the config file:
 
 1. an explicit path passed to :func:`load`;
@@ -62,6 +65,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .backend import Backend
+from .datastore import setup_state_path
 from .session import Session
 
 if sys.version_info >= (3, 11):
@@ -226,15 +230,25 @@ def make_session(backend: Backend, cfg: LabConfig, *, backend_label: str,
     """Build a Session wired to the lab config (datastore, state file, default tags).
 
     ``backend_label`` is the RESOLVED setup's backend; ``setup_name`` + ``cooldown_id``
-    are the RESOLVED era (named setup + its cycle) stamped verbatim on every run.
-    The scqo state file is pure convention — ``<data_root>/<device>/
-    scqo_state.json`` — and persistence needs BOTH a data_root and a device; the
-    device-less demo fallback saves nothing. ``simulated`` forces ``state_sync=
-    "push"``: an in-memory demo device has no vendor truth to pull, so without push
-    its calibrations would silently reset every session.
+    are the RESOLVED era (named setup + its cycle) stamped verbatim on every run. The
+    scqo state + physics files live in that context's ``scqo/`` folder
+    (:func:`scqo.datastore.setup_scqo_dir`: ``<device>/<cooldown>/<setup>/scqo/``) — so
+    a persisted session REQUIRES both a setup name AND a cooldown id (notebook sessions
+    that want a free-form location pass ``state_path`` to :class:`~scqo.session.Session`
+    directly). Persistence needs BOTH a data_root and a device; the device-less demo
+    fallback saves nothing. ``simulated`` forces ``state_sync="push"``: an in-memory
+    demo device has no vendor truth to pull, so without push its calibrations would
+    silently reset every session.
     """
     saved = cfg.data_root is not None and cfg.device is not None
-    state_path = str(Path(cfg.data_root) / cfg.device / "scqo_state.json") if saved else None
+    if saved and (not setup_name or not cooldown_id):
+        raise ValueError(
+            f"make_session: persisting device {cfg.device!r} requires its resolved setup "
+            "name AND cooldown id (the scqo/ folder is <device>/<cooldown>/<setup>/scqo/). "
+            "Resolve the setup first (scqo.cli.build_session does) or pass state_path to "
+            "Session directly.")
+    state_path = (str(setup_state_path(cfg.data_root, cfg.device, cooldown_id, setup_name))
+                  if saved else None)
     return Session(
         backend,
         state_path=state_path,

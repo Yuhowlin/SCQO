@@ -121,10 +121,14 @@ machine actually drives a cluster; finding/loading/viewing saved data never need
 ## 2. The lab config: `~\.scqo\config.toml`
 
 Since v0.5.0 this file is TINY: it says where the data lives — everything else
-follows the DEVICE. Which instrument a sample hangs on, and where that instrument's
-vendor config files live, is a NAMED setup in the sample's own cooldown registry
-(`<data_root>\<device>\cooldowns.toml`, below); the scqo state file is pure
-convention (`<data_root>\<device>\scqo_state.json` — no key for it). Create the
+follows the DEVICE. Which instrument a sample hangs on is a NAMED setup in the
+sample's own cooldown registry (`<data_root>\<device>\cooldowns.toml`, below); ALL
+folder locations are pure convention, DERIVED from the registry keys — no path key
+anywhere: each (cooldown, setup) context has
+`<data_root>\<device>\<cooldown>\<setup>\backend_config\` (the vendor config files)
+and the sibling `...\<setup>\scqo\` (SCQO's `scqo_state.json` calibration +
+`physical.json` measured physics; the sibling split keeps SCQO files out of the QM
+backend's QUAM state-directory load). Create the
 config at `~\.scqo\config.toml` (Windows: `C:\Users\<you>\.scqo\config.toml`;
 macOS: `/Users/<you>/.scqo/config.toml`). Save it as **UTF-8 without BOM** —
 Python's `tomllib` rejects UTF-16 and BOM'd files. Normal editors do this by
@@ -161,8 +165,9 @@ setup era. The operator's checklist:
 
 1. Record the change in chipA's cooldown registry: hand-add a new NAMED setup block
    to the ACTIVE cycle (a new insertion = a new cycle via `scqo device cooldown
-   start`) — `[<cycle>.setup.qm_main]` with `backend = "qm"` and a new
-   `instrument_config` folder. Users then switch with `scqo user --setup qm_main`.
+   start`) — `[<cycle>.setup.qm_main]` with `backend = "qm"`, and create its DERIVED
+   `<cycle>\qm_main\backend_config\` vendor folder. Users then switch with
+   `scqo user --setup qm_main`.
 2. Build the new vendor config as usual (wiring/attenuation are new-fridge facts).
    **Seed the frequencies from the sample's last known values**: open the viewer's
    Device page (it reads saved snapshots, so it works after the old instrument is
@@ -293,32 +298,37 @@ packaging = "PCB v3, Al box"
 # end = 2026-08-01                # absent = this cycle is ACTIVE
 
 [cd8.setup.qblox_main]
-backend = "qblox"                                    # qblox | qm | simulated
-instrument_config = 'D:\qpu_data\chipA\qblox_cd8'    # folder with ALL vendor config files
+backend = "qblox"                  # qblox | qm | simulated
 
 [cd8.setup.qm_highpower]           # the same sample, also wired to the OPX1000
 backend = "qm"
-instrument_config = 'D:\qpu_data\chipA\qm_cd8'
 note = "high-power readout line"
 ```
+
+No path keys: the vendor-config folder is **derived from the keys** —
+`<device>\cd8\<setup>\backend_config\`. For each real setup create that folder and
+copy the vendor files in under canonical names; SCQO keeps its own
+`scqo_state.json` + `physical.json` in the sibling `cd8\<setup>\scqo\`
+(auto-created). Nothing can dangle: the TOML keys ARE the folder locations.
 
 The rules (validated LOUDLY at run start — this file stamps runs AND selects the
 instrument, so a broken one fails before any instrument time is spent):
 
-- A setup table carries EXACTLY `backend` (required: `qblox` | `qm` | `simulated`),
-  `instrument_config` and an optional `note` — any other key is refused loudly.
-  There are no `since` dates (the NAME is the identity) and no port-map pairs:
-  wiring lives in the vendor config files inside `instrument_config`.
-- `instrument_config` is required for real backends and **forbidden** for
-  `"simulated"` (the built-in demo has nothing to configure). It names a folder
-  holding ALL the vendor's config files under their **canonical names** —
-  qblox: `dut_config.json` + `hw_config.json`; qm: `state.json` + `wiring.json`.
-  A relative path resolves against the registry's own folder; suggested layout:
-  `<data_root>\<device>\<backend>_<cycle>\`.
-- **Two setups of one cycle must NEVER point at the same folder** — a config folder
-  carries live state, and two setups writing one folder corrupt both. Duplicates
-  within a cycle are refused outright; `scqo doctor` additionally warns when the
-  ACTIVE cycles of two different devices share one.
+- A setup table carries EXACTLY `backend` (required: `qblox` | `qm` | `simulated`)
+  and an optional `note` — any other key is refused loudly. There are no `since`
+  dates (the NAME is the identity), no port-map pairs (wiring lives in the vendor
+  config files), and no `instrument_config` path (retired in v0.9 — see below).
+- **The vendor-config folder is DERIVED, never typed**:
+  `<device>\<cooldown>\<setup>\backend_config\`, holding ALL the vendor's config
+  files under their **canonical names** — qblox: `dut_config.json` +
+  `hw_config.json`; qm: `state.json` + `wiring.json`. Simulated setups have no
+  folder. Writing `instrument_config` in the registry is refused loudly, naming
+  the derived folder. (Consequences by construction: a path can never dangle when
+  folders move, two setups can never share a vendor folder, and SCQO's sibling
+  `scqo\` folder can never be swept up by the QM backend's QUAM load.)
+- Starting a NEW cooldown = new folders: copy the vendor files into
+  `<newcid>\<setup>\backend_config\` — each cycle keeps its own wiring snapshot,
+  which is the registry's whole point.
 - Setup names are letters/digits/`_`/`-` only (they travel as CLI arguments and
   index values) and are **immutable for the life of their cycle**: renaming one is
   declaring a NEW setup — the accept era guard and run provenance compare names, so
@@ -379,8 +389,10 @@ and the commands regrouped.**
 - **The registry format above replaces v0.6's.** The old `[[<id>.setup]]` array
   form is refused loudly (the message names the file and the new form); `since`
   dates and port-map pairs are refused as unknown keys — rewrite each block as a
-  `[<id>.setup.<name>]` sub-table carrying only `backend`/`instrument_config`/
-  `note`. Wiring now lives ONLY in the vendor config folder.
+  `[<id>.setup.<name>]` sub-table. (v0.7 blocks carried `backend`/
+  `instrument_config`/`note`; since v0.9 `instrument_config` is DERIVED — write
+  only `backend` [+ `note`], see the v0.9 note.) Wiring now lives ONLY in the
+  vendor config folder.
 - **Commands regrouped, no aliases:** the calibration view `scqo device` is now
   **`scqo state`** (flags unchanged: `--history`/`--physical`/`--sources`);
   `scqo devices` → **`scqo device list`** (or bare `scqo device`), `scqo sample
@@ -441,6 +453,40 @@ and the commands regrouped.**
   machines; tagged servers follow §5. Old state files load as-is (the new field
   backfills from the vendor config on first load).
 
+**Upgrading to v0.9.0 (fresh-start policy, no migration): state + physics are per
+(cooldown, setup), in their own `scqo\` folders.** Two users on two setups of one
+sample no longer share (or clobber) a file, and the on-disk tree mirrors
+`device → cooldown → setup`.
+
+- **The per-device `scqo_state.json` and device-level `physical.json` are RETIRED —
+  simply not read.** Each (cooldown, setup) context has a
+  `<data_root>\<device>\<cooldown>\<setup>\scqo\` folder holding its own
+  `scqo_state.json` (calibration + history) and `physical.json` (measured physics +
+  history). Delete old files at will; in pull mode calibration reseeds from the
+  vendor config anyway. History starts fresh per context (rows carry `setup=`).
+- **The `instrument_config` key is RETIRED — the vendor folder is DERIVED from the
+  keys**: `<device>\<cooldown>\<setup>\backend_config\` (a setup table is just
+  `backend` + optional `note`). Delete any `instrument_config` lines and keep the
+  vendor files in the derived folder; a typed path is refused loudly naming it.
+  SCQO never writes there — its own files live in the sibling
+  `<cooldown>\<setup>\scqo\` — so the QM backend's QUAM state-directory load
+  (which merges every loose `*.json` and rejects unknown keys) can never sweep up
+  SCQO files, and no dangling path is possible. Setup names differing only by
+  letter case are refused too (they are folder names now). Cooldown ids must be
+  filename-safe for the same reason.
+- **`physical.json` is per (cooldown, setup)** — a measured T1/T2 is contextual, so
+  a noisy chain's number never overwrites a clean one's; they are simply different
+  files. `scqo state --physical` shows THIS context's values (flat); compare across
+  setups/cooldowns via `scqo find` or the viewer trends page (both stamp cooldown +
+  setup). The setup-independent "true" physics stays the Phase-3 `sample.json`
+  roll-up. Saves MERGE under a lock file, so two same-context sessions can't erase
+  each other's rows.
+- **`scqo state` prints a context header** (device / setup / cooldown / state
+  file) so you always know whose numbers you're reading.
+- **Nothing else to migrate:** the run index is unchanged (schema v7, no reindex);
+  no entry-point changes — `git pull` suffices on dev machines, tagged servers
+  follow §5. `scqo doctor` lists every setup's `scqo_state.json` path.
+
 **Upgrading a dev machine (tracks `main`, editable installs):** `git pull` in every
 repo is normally ALL it takes — code and new subcommands are picked up immediately.
 Re-run the §1 `uv pip install -e` lines only when the release notes in
@@ -456,15 +502,16 @@ folder and prints every remaining step paste-ready (it never edits shared files)
 
 1. **Manager, at insertion**: record the first cycle —
    `scqo device cooldown start cd1 --fridge <name> --packaging <text>` (an EMPTY
-   cycle) — then hand-add one `[cd1.setup.<name>]` block per measurement setup to
-   the new `cooldowns.toml` (for real backends first create the
-   `instrument_config` folder and copy the vendor files in under the canonical
-   names).
+   cycle) — then hand-add one `[cd1.setup.<name>]` block per measurement setup
+   (just `backend` + optional `note`) to the new `cooldowns.toml`; for real
+   backends create the DERIVED folder `cd1\<name>\backend_config\` and copy the
+   vendor files in under the canonical names.
 2. **Optional**: a `devices.toml` entry (description/design facts for the viewer).
 3. **Users**: `scqo user --device <name>` — that is the whole selection (a
    single-setup cycle auto-selects; several → `scqo user --setup <name>`).
    Everything else auto-creates on first use: `<data_root>\<name>\` run folders,
-   `scqo_state.json`, the index row, viewer pages. Verify with `scqo device list`.
+   each context's `<cooldown>\<setup>\scqo\` folder, the index row, viewer pages.
+   Verify with `scqo device list`.
 
 ### Cleaning state — from "just the index" to factory reset
 
@@ -473,13 +520,13 @@ Most "clean-up" needs are lighter than a factory reset. The ladder, mildest firs
 1. **Rebuild the index only** (always safe — the folders are the truth): delete
    ALL `index.sqlite*` files (`-wal`/`-shm` siblings too) in the data_root, then
    `python -m scqo <data_root>`. Fixes a stale/corrupt index; loses nothing.
-2. **Reset a device's instrument state**: delete
-   `<data_root>\<device>\scqo_state.json` — it reseeds from the vendor config at
-   the next session (fresh-start rule; the change history in it is lost).
-   **Do NOT reflexively delete `physical.json` next to it**: that file IS the
-   sample's measured-physics ledger (T1/T2, arch/dispersive fits + their history)
-   and does NOT reseed from anywhere — delete it only if you truly mean to
-   discard those measurements.
+2. **Reset a context's state**: delete that (cooldown, setup)'s
+   `<data_root>\<device>\<cooldown>\<setup>\scqo\scqo_state.json` — calibration
+   reseeds from the vendor config at the next session (fresh-start rule; the change
+   history in it is lost). **Do NOT reflexively delete `physical.json` next to it**:
+   that file IS that context's measured-physics ledger (T1/T2, arch/dispersive fits +
+   their history) and does NOT reseed from anywhere — delete it only if you truly
+   mean to discard those measurements.
 3. **Factory reset** — everything below.
 
 ### Factory reset (make a machine "new" again)
@@ -504,7 +551,7 @@ mirror propagates deletions on its next scheduled sync; copy anything you want t
 keep OFF the NAS first** — then delete each account's `~\.scqo\` personal files.
 Keep (or recreate) the machine-wide `SCQO_CONFIG` shared config file, `git fetch
 --tags && git checkout <new tag>` in each repo, and per the fresh-start rule delete
-`scqo_state.json` (it reseeds from the vendor configs). Re-seed the registries
+the per-context `scqo\` folders (calibration reseeds from the vendor configs). Re-seed the registries
 (`devices.toml`, per-device `cooldowns.toml` via `scqo device cooldown start` +
 hand-added setup blocks) before the first measurement so runs are stamped from day
 one.
@@ -549,7 +596,7 @@ writes at the server's data — §5):
    ```
 
    then hand-add the cycle's one setup to `D:\qpu_data_dev\simdev\cooldowns.toml`
-   (any editor, UTF-8 no BOM; `simulated` takes no `instrument_config`):
+   (any editor, UTF-8 no BOM; `simulated` needs no vendor folder):
 
    ```toml
    [cd1.setup.practice]
@@ -766,9 +813,9 @@ read-only command.
 | `lab config not found` | your `--config`/`$SCQO_CONFIG` path is wrong (intentional loud failure — better than silently unsaved) |
 | `# lab config: built-in defaults ...` in the catalog header | no `~\.scqo\config.toml` yet: runs work but are **not saved** — do section 2. A personal `user.toml` does NOT rescue this: the overlay needs a base config |
 | `... not allowed in a user overlay` | your `~\.scqo\user.toml` sets a machine-wiring key — only `device` / `setup` / `default_tags` / `parameters_file` are personal (section 2) |
-| `invalid cooldown registry ...` (corrupt TOML) or `<path>\cooldowns.toml: ...` at run start | `cooldowns.toml` is broken (unparseable file, two open cycles, the retired `[[<id>.setup]]` array form — setups are NAMED `[<id>.setup.<name>]` sub-tables since v0.7.0, an unknown setup key — `since`/port maps are retired, allowed keys are exactly `backend`/`instrument_config`/`note`, a real-backend setup without `instrument_config`, two setups sharing a folder...) — it stamps runs AND selects the instrument, so it fails BEFORE instrument time is spent; `scqo device cooldown` (no args) is the validator |
+| `invalid cooldown registry ...` (corrupt TOML) or `<path>\cooldowns.toml: ...` at run start | `cooldowns.toml` is broken (unparseable file, two open cycles, a non-filename-safe cooldown id, the retired `[[<id>.setup]]` array form — setups are NAMED `[<id>.setup.<name>]` sub-tables since v0.7.0, an unknown setup key — `since`/port maps and `instrument_config` are retired, allowed keys are exactly `backend`/`note`, casefold-twin setup names...) — it stamps runs AND selects the instrument, so it fails BEFORE instrument time is spent; `scqo device cooldown` (no args) is the validator |
 | `device ... has no cooldown registry yet` / `no ACTIVE cooldown cycle` at run start | intentional refusal: with a device selected, every run must resolve a setup — the message names the exact `scqo device cooldown start` line. The same refusal appears after `scqo device cooldown end` until the next cycle starts |
-| `cycle ... has no setups yet — runs need one` | the cycle was started empty (that is normal): the manager hand-adds a `[<cycle>.setup.<name>]` block (backend + `instrument_config`) to the device's `cooldowns.toml` — the refusal prints the exact block to paste |
+| `cycle ... has no setups yet — runs need one` | the cycle was started empty (that is normal): the manager hand-adds a `[<cycle>.setup.<name>]` block (backend [+ note]) to the device's `cooldowns.toml` and, for real backends, creates the derived `<cycle>\<name>\backend_config\` folder — the refusal prints the exact block to paste |
 | `cycle ... has N setups and none is selected` | the ACTIVE cycle offers several measurement setups and runs will not guess — pick yours once: `scqo user --setup <name>` (personal; a single-setup cycle needs no selection) |
 | `setup 'x' ... does not exist in the ACTIVE cycle` | stale selection — typically an old name after a new cycle started. `scqo user --setup <name>` picks a current one (bare `scqo user` lists what a run resolves to); `scqo user --clear-setup` returns to auto-selection |
 | self-test: `missing package: qblox_scheduler` | install the driver into this env (section 1, second install line) |

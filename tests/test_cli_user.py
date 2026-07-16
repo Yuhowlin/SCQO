@@ -13,7 +13,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-#: a healthy single-setup cycle (auto-selects; simulated needs no instrument_config)
+#: a healthy single-setup cycle (auto-selects; simulated needs no vendor folder)
 SINGLE_SETUP = (
     "[cd1]\nstart = 2026-07-01\nfridge = \"BF1\"\n\n"
     '[cd1.setup.sim_main]\nbackend = "simulated"\nnote = "demo"\n'
@@ -22,7 +22,7 @@ SINGLE_SETUP = (
 TWO_SETUPS = (
     "[cd1]\nstart = 2026-07-02\n\n"
     '[cd1.setup.alpha]\nbackend = "simulated"\n\n'
-    '[cd1.setup.beta]\nbackend = "qblox"\ninstrument_config = "qblox_cfg"\n'
+    '[cd1.setup.beta]\nbackend = "qblox"\n'
 )
 
 
@@ -160,7 +160,7 @@ def test_combined_device_and_setup_validates_against_that_device(tmp_path):
     registries = {
         "chipA": SINGLE_SETUP,
         "chipB": '[cd1]\nstart = 2026-07-02\n\n'
-                 '[cd1.setup.qm_top]\nbackend = "qm"\ninstrument_config = "qm_cfg"\n',
+                 '[cd1.setup.qm_top]\nbackend = "qm"\n',
     }
     config = _lab(tmp_path, registries)
 

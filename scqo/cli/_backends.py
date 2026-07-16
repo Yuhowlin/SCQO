@@ -8,7 +8,8 @@ Real instruments are served by DRIVER packages that register a factory under the
 
 A factory is ``build_backend(cfg: LabConfig, setup: dict) -> Backend`` — ``setup``
 is the device's SELECTED named setup record from its cooldown registry (``backend``,
-the ``instrument_config`` folder holding the vendor config files, optional ``note``).
+optional ``note``, plus the DERIVED ``instrument_config`` vendor folder injected by
+``load_cooldowns`` — ``<device>/<cooldown>/<setup>/backend_config``, never typed).
 ``simulated`` (demo qubits, synthetic data) is built in here, so query commands,
 practice runs and CI need no driver at all.
 """
@@ -121,7 +122,7 @@ def resolve_device_setup(cfg: LabConfig) -> tuple[str, str, dict] | None:
         raise SystemExit(
             f"device {cfg.device!r} has no cooldown registry yet — the manager runs:\n"
             f"  {start_fix}\n"
-            f"then hand-adds a [cd1.setup.<name>] block (backend + instrument_config) to\n"
+            f"then hand-adds a [cd1.setup.<name>] block (backend [+ note]) to\n"
             f"  {registry}"
         )
     active = active_cooldown(cycles)
@@ -136,12 +137,12 @@ def resolve_device_setup(cfg: LabConfig) -> tuple[str, str, dict] | None:
         if err.reason == "none":
             raise SystemExit(
                 f"cycle {cid!r} of device {cfg.device!r} has no setups yet — runs need one.\n"
-                f"Hand-add a named setup block to {registry}\n"
-                f"(the manager creates the folder and copies the vendor config files in under\n"
-                f"canonical names first):\n\n"
+                f"Hand-add a named setup block to {registry}:\n\n"
                 f"  [{cid}.setup.<name>]\n"
-                f'  backend = "qblox"                # qblox | qm | simulated\n'
-                f"  instrument_config = '<folder>'   # omit for simulated"
+                f'  backend = "qblox"                # qblox | qm | simulated\n\n'
+                f"(for real backends the manager then creates the DERIVED vendor folder\n"
+                f"<device>/{cid}/<name>/backend_config/ and copies the vendor config files in\n"
+                f"under canonical names; simulated needs no folder)"
             ) from None
         if err.reason == "ambiguous":
             raise SystemExit(

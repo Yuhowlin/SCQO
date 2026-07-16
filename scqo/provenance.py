@@ -7,10 +7,12 @@ still equals the live value. A drifted value (the vendor reseeded at startup,
 qualibrate wrote QUAM directly, someone hand-edited a config) is reported as
 "external" — a run is NEVER credited for a value the device no longer runs.
 
-Pure functions over plain dicts, no I/O: the viewer feeds them the state files
-(``scqo_state.json`` config+history / ``physical.json`` values+history), the
-Session feeds them its live state (:meth:`scqo.session.Session.live_sources`),
-and both get the same answer for the same facts.
+Pure functions over plain dicts, no I/O: the viewer feeds them a context's state
+files (``scqo_state.json`` config+history / ``physical.json`` values+history in the
+same ``<cooldown>/<setup>/scqo/`` folder — both per (cooldown, setup), so the whole
+file belongs to one context and no slicing/filtering is needed), the Session feeds
+them its live state (:meth:`scqo.session.Session.live_sources`), and both get the
+same answer for the same facts.
 """
 
 from __future__ import annotations

@@ -129,6 +129,10 @@ def test_run_accept_flag_applies_immediately(tmp_path):
     assert {s["status"] for s in result["suggestions"]} == {"accepted"}
     history = _run_cli(tmp_path, "state", "--history")
     assert result["run_id"] in history.stdout
+    # the context header says WHOSE state/history this is (per (cooldown, setup))
+    header = history.stdout.splitlines()[0]
+    assert header.startswith("# device: simdev") and "setup: main" in header
+    assert "cd1" in header and "main" in header and "scqo_state.json" in header
 
 
 def test_reject_needs_no_backend(tmp_path):
@@ -170,9 +174,12 @@ def test_accepted_physics_shows_in_device_physical(tmp_path):
     proc = _run_cli(tmp_path, "run", "qubit_relaxation", "--qubits", "q0", "--accept")
     assert proc.returncode == 0, proc.stderr
     physical = _run_cli(tmp_path, "state", "--physical")
-    assert "t1_s" in physical.stdout and "q0" in physical.stdout
+    # this context's flat physics: one row per (qubit, field) — no setup column
+    t1_row = next(line for line in physical.stdout.splitlines() if "t1_s" in line)
+    assert "q0" in t1_row
     history = _run_cli(tmp_path, "state", "--physical", "--history")
     assert "t1_s" in history.stdout and _result(proc)["run_id"] in history.stdout
+    assert "setup=main" in history.stdout  # rows still carry the measuring setup
 
 
 def test_device_sources_traces_current_values(tmp_path):
@@ -196,8 +203,8 @@ def test_device_sources_traces_current_values(tmp_path):
     src2 = _run_cli(tmp_path, "state", "--sources")
     assert run_a in next(line for line in src2.stdout.splitlines() if "readout_freq" in line)
 
-    # strict match: a hand-edited value credits no run
-    state_path = tmp_path / "data" / "simdev" / "scqo_state.json"
+    # strict match: a hand-edited value credits no run (per-(cooldown, setup) file)
+    state_path = tmp_path / "data" / "simdev" / "cd1" / "main" / "scqo" / "scqo_state.json"
     data = json.loads(state_path.read_text(encoding="utf-8"))
     data["config"]["q0"]["readout_freq"] = 9.9e9  # another tool wrote the config
     state_path.write_text(json.dumps(data), encoding="utf-8")

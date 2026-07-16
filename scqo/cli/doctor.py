@@ -35,7 +35,7 @@ def _setup_checks(cfg, backends: dict) -> list[tuple[str, str, str]]:
     from ._backends import SERVED_BY
 
     fix = ("scqo device cooldown start cd1 [--fridge <name>] — then hand-add "
-           "[cd1.setup.<name>] blocks (backend + instrument_config)")
+           "[cd1.setup.<name>] blocks (backend [+ note])")
     try:
         cycles = load_cooldowns(cfg.data_root, cfg.device)
     except ValueError as err:
@@ -54,7 +54,7 @@ def _setup_checks(cfg, backends: dict) -> list[tuple[str, str, str]]:
         if err.reason == "none":
             return [(FAIL, "cooldowns", f"cycle {cid!r} ACTIVE but has NO setups — runs will "
                                         f"refuse; hand-add [{cid}.setup.<name>] blocks "
-                                        "(backend + instrument_config) to its cooldowns.toml")]
+                                        "(backend [+ note]) to its cooldowns.toml")]
         if err.reason == "ambiguous":
             return [(FAIL, "cooldowns", f"cycle {cid!r} has {len(err.available)} setups and none "
                                         f"is selected — runs will refuse for this account; pick "
@@ -96,41 +96,16 @@ def _setup_checks(cfg, backends: dict) -> list[tuple[str, str, str]]:
         if not f.is_dir():
             out.append((WARN, "instr config", f"setup {other!r}: {f} does not exist on this "
                                               "machine (fine unless someone selects it here)"))
+    # Per-(cooldown, setup) state files: <device>/<cid>/<setup>/scqo/scqo_state.json.
+    # Auto-created on first save (always under data_root, so the viewer always sees
+    # them), so absence is informational, not a failure.
+    from scqo.datastore import setup_state_path
+
+    for sname in cycle.get("setup", {}):
+        spath = setup_state_path(cfg.data_root, cfg.device, cid, sname)
+        out.append((OK, "state", f"setup {sname!r}: {spath} "
+                                 f"({'exists' if spath.is_file() else 'not created yet'})"))
     return out
-
-
-def _shared_folder_scan(data_root) -> list[tuple[str, str, str]]:
-    """WARN when ACTIVE-cycle setups of two devices share an instrument_config folder.
-
-    ALL setups of each ACTIVE cycle are scanned (any account may select any of them);
-    within-cycle sharing is already refused by load_cooldowns.
-    """
-    from scqo.datastore import COOLDOWNS_FILE, active_cooldown, load_cooldowns
-
-    seen: dict[str, str] = {}
-    warnings = []
-    for reg in sorted(Path(data_root).glob(f"*/{COOLDOWNS_FILE}")):
-        device = reg.parent.name
-        try:
-            cycles = load_cooldowns(data_root, device)
-        except ValueError:
-            continue  # its own doctor run reports this; don't fail the scan
-        active = active_cooldown(cycles)
-        if active is None:
-            continue
-        for name, setup in active[1].get("setup", {}).items():
-            folder = setup.get("instrument_config")
-            if not folder:
-                continue
-            key = os.path.normcase(folder)
-            mine = f"{device}:{name}"
-            if key in seen:
-                warnings.append((WARN, "shared config",
-                                 f"setups {seen[key]} and {mine} are ACTIVE on the SAME folder "
-                                 f"{folder} — their writebacks will corrupt each other"))
-            else:
-                seen[key] = mine
-    return warnings
 
 
 def main(argv: list[str] | None = None, prog: str | None = None) -> int:
@@ -190,7 +165,6 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
             checks.append((OK, "registries", f"devices.toml entries: {len(load_device_registry(cfg.data_root))}"))
             if cfg.device is not None:
                 checks.extend(_setup_checks(cfg, backends))
-            checks.extend(_shared_folder_scan(cfg.data_root))
 
         try:
             from ._backends import ensure_demo_experiments

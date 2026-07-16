@@ -54,45 +54,28 @@ each account picks its own with <code>scqo user --setup &lt;name&gt;</code>):</p
 </table>
 {% elif active_cycle %}
 <p class="muted">{{ active_cycle }} has no setups yet — hand-add [{{ active_cycle }}.setup.&lt;name&gt;]
-blocks (backend + instrument_config) to <code>cooldowns.toml</code>; runs refuse until one exists.</p>
+blocks (backend [+ note]) to <code>cooldowns.toml</code>; runs refuse until one exists.</p>
 {% endif %}
 {% endif %}
 
-{% if state %}
-{% if state_authority == "state" %}
-<p class="muted">Current calibration — from <code>scqo_state.json</code> (deferred accepts included).
-Values link to the run that set them{% if latest %} · latest run: <a href="/run/{{ latest.run_id }}">{{ latest.run_id }}</a>{% endif %}.</p>
-{% else %}
+{% for sec in sections %}
+<h3>Calibration{% if sec.name %} — setup <b>{{ sec.name }}</b>{% if sec.backend %} ({{ sec.backend }}){% endif %}{% endif %}</h3>
+{% if sec.authority == "state" %}
+<p class="muted">Current calibration — from <code>{{ sec.state_path }}</code> (deferred accepts included).
+Values link to the run that set them{% if sec.latest_run %} · latest run: <a href="/run/{{ sec.latest_run.run_id }}">{{ sec.latest_run.run_id }}</a>{% endif %}.</p>
+{% elif sec.authority == "snapshot" %}
 <p class="muted">Last observed calibration — from
-  <a href="/run/{{ latest.run_id }}">{{ latest.run_id }}</a> (device_after snapshot).</p>
-{% endif %}
-<table>
-  <tr><th>qubit</th>{% for f in state_fields %}<th>{{ f }}</th>{% endfor %}</tr>
-  {% for q, fields in state.items() %}
-  <tr><td>{{ q }}</td>
-    {% for f in state_fields %}{% set v = fields.get(f) %}{% set src = state_sources.get(q, {}).get(f) %}{% set fmt = "%.8g" | format(v) if v is number else (v if v is not none else "-") %}<td>
-      {%- if src and src.status == "run" %}<a href="/run/{{ src.run_id }}" title="{{ (src.timestamp or '')[:19] }} · {{ src.operator or '-' }}">{{ fmt }}</a>
-      {%- elif src and src.status == "external" %}{{ fmt }} <span class="ext">(externally changed)</span>
-      {%- elif src and src.status == "manual" %}{{ fmt }} <span class="muted">(manual)</span>
-      {%- else %}{{ fmt }}{% endif %}</td>{% endfor %}
-  </tr>
-  {% endfor %}
-</table>
-<p class="muted">A linked value is LIVE from that run (strict match); (externally changed) = the
-current value matches no SCQO record — reseeded by the vendor or written by another tool.</p>
+  <a href="/run/{{ sec.snapshot_run.run_id }}">{{ sec.snapshot_run.run_id }}</a>
+  (device_after snapshot; no state file yet).</p>
 {% else %}
-<p>No runs yet — the device page shows the last run's device_after snapshot.</p>
+<p class="muted">No state yet — this setup has no saved calibration and no runs.</p>
 {% endif %}
-
-{% if physical %}
-<h3>Physical parameters</h3>
-<p class="muted">Instrument-independent measured physics of the sample (<code>physical.json</code>) —
-values land here when a run's suggested updates are accepted.</p>
+{% if sec.state %}
 <table>
-  <tr><th>qubit</th>{% for f in physical_fields %}<th>{{ f }}</th>{% endfor %}</tr>
-  {% for q, fields in physical.items() %}
+  <tr><th>qubit</th>{% for f in sec.state_fields %}<th>{{ f }}</th>{% endfor %}</tr>
+  {% for q, fields in sec.state.items() %}
   <tr><td>{{ q }}</td>
-    {% for f in physical_fields %}{% set v = fields.get(f) %}{% set src = physical_sources.get(q, {}).get(f) %}{% set fmt = "%.8g" | format(v) if v is number else (v if v is not none else "-") %}<td>
+    {% for f in sec.state_fields %}{% set v = fields.get(f) %}{% set src = sec.sources.get(q, {}).get(f) %}{% set fmt = "%.8g" | format(v) if v is number else (v if v is not none else "-") %}<td>
       {%- if src and src.status == "run" %}<a href="/run/{{ src.run_id }}" title="{{ (src.timestamp or '')[:19] }} · {{ src.operator or '-' }}">{{ fmt }}</a>
       {%- elif src and src.status == "external" %}{{ fmt }} <span class="ext">(externally changed)</span>
       {%- elif src and src.status == "manual" %}{{ fmt }} <span class="muted">(manual)</span>
@@ -100,10 +83,45 @@ values land here when a run's suggested updates are accepted.</p>
   </tr>
   {% endfor %}
 </table>
-{% if physical_history %}
+{% endif %}
+{% if sec.history %}
+<h4>Change history{% if sec.name %} — {{ sec.name }}{% endif %}</h4>
 <table>
   <tr><th>when</th><th>qubit</th><th>field</th><th>old</th><th>new</th><th>experiment</th><th>operator</th><th>run</th></tr>
-  {% for h in physical_history %}
+  {% for h in sec.history %}
+  <tr>
+    <td>{{ h.timestamp[:19] }}</td><td>{{ h.qubit }}</td><td>{{ h.field }}</td>
+    <td>{{ "%.8g" | format(h.old) if h.old is number else h.old }}</td>
+    <td>{{ "%.8g" | format(h.new) if h.new is number else h.new }}</td>
+    <td>{{ h.experiment }}</td>
+    <td>{{ h.operator or "-" }}</td>
+    <td>{% if h.run_id %}<a href="/run/{{ h.run_id }}">{{ h.run_id }}</a>{% else %}-{% endif %}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% elif sec.authority == "state" %}
+<p class="muted">No change history yet at {{ sec.state_path }}.</p>
+{% endif %}
+{% if sec.physical_rows %}
+<h4>Physical parameters{% if sec.name %} — {{ sec.name }}{% endif %}</h4>
+<p class="muted">Measured physics for this (cooldown, setup) — each value is a measurement
+THROUGH this setup; compare across setups/cooldowns via the trends page, never average.</p>
+<table>
+  <tr><th>qubit</th><th>field</th><th>value</th></tr>
+  {% for r in sec.physical_rows %}
+  <tr><td>{{ r.qubit }}</td><td>{{ r.field }}</td>
+    {% set src = r.source %}{% set fmt = "%.8g" | format(r.value) if r.value is number else r.value %}<td>
+      {%- if src and src.status == "run" %}<a href="/run/{{ src.run_id }}" title="{{ (src.timestamp or '')[:19] }} · {{ src.operator or '-' }}">{{ fmt }}</a>
+      {%- elif src and src.status == "external" %}{{ fmt }} <span class="ext">(externally changed)</span>
+      {%- elif src and src.status == "manual" %}{{ fmt }} <span class="muted">(manual)</span>
+      {%- else %}{{ fmt }}{% endif %}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% if sec.physical_history %}
+<table>
+  <tr><th>when</th><th>qubit</th><th>field</th><th>old</th><th>new</th><th>experiment</th><th>operator</th><th>run</th></tr>
+  {% for h in sec.physical_history %}
   <tr>
     <td>{{ h.timestamp[:19] }}</td><td>{{ h.qubit }}</td><td>{{ h.field }}</td>
     <td>{{ "%.8g" | format(h.old) if h.old is number else (h.old if h.old is not none else "-") }}</td>
@@ -116,23 +134,11 @@ values land here when a run's suggested updates are accepted.</p>
 </table>
 {% endif %}
 {% endif %}
-
-<h3>Change history</h3>
-{% if history %}
-<table>
-  <tr><th>when</th><th>qubit</th><th>field</th><th>old</th><th>new</th><th>experiment</th><th>operator</th><th>run</th></tr>
-  {% for h in history %}
-  <tr>
-    <td>{{ h.timestamp[:19] }}</td><td>{{ h.qubit }}</td><td>{{ h.field }}</td>
-    <td>{{ "%.8g" | format(h.old) if h.old is number else h.old }}</td>
-    <td>{{ "%.8g" | format(h.new) if h.new is number else h.new }}</td>
-    <td>{{ h.experiment }}</td>
-    <td>{{ h.operator or "-" }}</td>
-    <td>{% if h.run_id %}<a href="/run/{{ h.run_id }}">{{ h.run_id }}</a>{% else %}-{% endif %}</td>
-  </tr>
-  {% endfor %}
-</table>
+{% endfor %}
+{% if sections %}
+<p class="muted">A linked value is LIVE from that run (strict match); (externally changed) = the
+current value matches no SCQO record — reseeded by the vendor or written by another tool.</p>
 {% else %}
-<p class="muted">No change history found{% if state_path %} at {{ state_path }}{% else %} (no state_path configured){% endif %}.</p>
+<p>No runs and no setups yet — nothing to show for this device.</p>
 {% endif %}
 {% endblock %}

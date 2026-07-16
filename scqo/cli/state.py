@@ -1,10 +1,13 @@
 """Show the device's current calibration state — and who changed what, when.
 
-    scqo state                        # calibration table per qubit
+State is per SETUP (v0.9.0): the first output line names the device, the resolved
+setup and its state file, so two users of one sample know whose numbers they see.
+
+    scqo state                        # calibration table per qubit (YOUR setup)
     scqo state --history              # last 20 changes (old -> new + cause + operator)
     scqo state --history 100 --qubit q0
-    scqo state --physical             # the sample's measured physics (physical.json)
-    scqo state --physical --history   # ... and its change history
+    scqo state --physical             # the sample ledger: one row per qubit/field/SETUP
+    scqo state --physical --history   # ... and its change history (rows carry setup=)
     scqo state --sources              # which run set each CURRENT value (both stores)
 """
 
@@ -33,15 +36,15 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
         parser.error("--sources always covers both stores; do not combine it with --history/--physical")
 
     sess, cfg = build_session(args.config)
+    _print_context(sess, cfg)
 
     if args.sources:
         return _print_sources(sess, args.qubit)
 
     if args.history is None:
-        state = sess.physical_state() if args.physical else sess.device_state()
-        if args.physical and not state:
-            print("no physical parameters recorded yet (accept a run that proposes them)")
-            return 0
+        if args.physical:
+            return _print_physical(sess, args.qubit)
+        state = sess.device_state()
         fields = sorted({f for q in state.values() for f in q})
         print(f"{'qubit':8s}" + "".join(f"{f:>16s}" for f in fields))
         for qubit, values in state.items():
@@ -60,11 +63,48 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
     for r in records[-args.history:]:
         old = f"{r['old']:.6g}" if isinstance(r["old"], float) else r["old"]
         new = f"{r['new']:.6g}" if isinstance(r["new"], float) else r["new"]
+        setup = f"  setup={r['setup']}" if r.get("setup") else ""
         print(f"{r['timestamp'][:19]}  {r['qubit']:4s} {r['field']:14s} {old} -> {new}"
               f"  ({r.get('experiment') or '?'}  run={r.get('run_id') or '-'}"
-              f"  by={r.get('operator') or '-'})")
+              f"  by={r.get('operator') or '-'}{setup})")
     if not records:
         print("no recorded changes yet")
+    return 0
+
+
+def _print_context(sess, cfg) -> None:
+    """One `#` line saying WHOSE state/history follows — state is per SETUP
+    (v0.9.0), so two users of one sample see different tables."""
+    if not cfg.device:
+        print("# built-in demo device (nothing saved)")
+        return
+    print(f"# device: {cfg.device}   setup: {sess.setup_name or '-'}   "
+          f"cooldown: {sess.cooldown_id or '-'}   state: {sess.state_path or '-'}")
+
+
+def _print_physical(sess, qubit_filter: str | None) -> int:
+    """This context's measured physics (one (cooldown, setup) file). Each value is a
+    measurement THROUGH this setup; compare across setups/cooldowns via the run index
+    or the viewer trends page, not here."""
+    values = sess.physical_state()  # flat {qubit: {field: value}} for this context
+    order = {f: i for i, f in enumerate(PHYSICAL_FIELDS)}
+    rows = sorted(
+        ((q, f, v)
+         for q, fields in values.items()
+         for f, v in fields.items()
+         if not qubit_filter or q == qubit_filter),
+        key=lambda r: (r[0], order.get(r[1], 99)),
+    )
+    if not rows:
+        if qubit_filter and values:  # ledger has data, just none for this qubit
+            print(f"no physical parameters recorded for qubit {qubit_filter!r}")
+        else:
+            print("no physical parameters recorded yet (accept a run that proposes them)")
+        return 0
+    print(f"{'qubit':8s}{'field':20s}{'value':>14s}")
+    for q, f, v in rows:
+        value = f"{v:>14.6g}" if isinstance(v, float) else f"{str(v):>14s}"
+        print(f"{q:8s}{f:20s}{value}")
     return 0
 
 

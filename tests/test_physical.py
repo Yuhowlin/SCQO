@@ -44,20 +44,21 @@ def test_round_trip_and_provenance(tmp_path, monkeypatch):
     monkeypatch.setattr("scqo.config._current_operator", lambda: "alice")
     path = tmp_path / "physical.json"
 
-    store = PhysicalStore(path)
+    store = PhysicalStore(path, setup="qm_main")
     assert store.get("q0", "t1_s") is None  # never measured -> None, no KeyError
     store.record("q0", "t1_s", 25e-6, experiment="qubit_relaxation", run_id="run-01")
     store.record("q0", "t1_s", 26e-6, experiment="qubit_relaxation", run_id="run-02")
     store.save()
 
     data = json.loads(path.read_text(encoding="utf-8"))
-    assert data["values"]["q0"]["t1_s"] == 26e-6
+    assert data["values"]["q0"]["t1_s"] == 26e-6  # FLAT — the file is one context
     assert [h["old"] for h in data["history"]] == [None, 25e-6]  # old -> new chain
 
-    reloaded = PhysicalStore(path)
+    reloaded = PhysicalStore(path, setup="qm_main")
     assert reloaded.snapshot() == {"q0": {"t1_s": 26e-6}}
     (h1, h2) = reloaded.history()
     assert (h1.experiment, h1.run_id, h1.operator) == ("qubit_relaxation", "run-01", "alice")
+    assert h1.setup == "qm_main"  # stamped for self-describing rows
     assert h2.old == 25e-6 and h2.new == 26e-6
 
 
@@ -94,7 +95,8 @@ def test_flux_experiments_physics_lands_on_accept(tmp_path):
     assert sess.device_state() == state_before  # no instrument knob involved
     assert sess.history() == []
 
-    # persisted on disk under the device folder, next to scqo_state.json
+    # persisted on disk at the device-level fallback (a setup-less direct-API
+    # session with a data_root but no cooldown/setup), flat values
     payload = json.loads((tmp_path / "data" / "devA" / "physical.json").read_text(encoding="utf-8"))
     assert payload["values"]["q0"]["ej_sum_ghz"] == physical["ej_sum_ghz"]
 

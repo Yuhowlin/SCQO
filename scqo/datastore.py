@@ -19,10 +19,13 @@ and are skipped). Deleting the index is always safe — remove all ``index.sqlit
 together (the ``-wal``/``-shm`` siblings too) and rerun ``python -m scqo <data_root>``.
 
 Concurrency note: on a local disk, WAL mode + the 10 s busy retry + short-lived
-connections make SIMULTANEOUS same-PC sessions safe — e.g. two students measuring two
-different samples: they share no rows (PK ``(run_id, device)``), no folders, and no
-state files; index writes are ~1 ms per run and simply queue. Worst case an index
-write is skipped, the run folder is already on disk and ``reindex`` heals the cache.
+connections make SIMULTANEOUS same-PC sessions safe — two students on two samples,
+or two setups of ONE sample: they share no rows (PK ``(run_id, device)``), no
+folders, and no SCQO state/physics files (each (cooldown, setup) has its own
+``scqo/`` folder — see :func:`setup_scqo_dir`; even two same-context sessions merge
+``physical.json`` under a lock on save). Index writes are ~1 ms per run and simply
+queue. Worst case an index write is skipped, the run folder is already on disk and
+``reindex`` heals the cache.
 If ``data_root`` lives on a network share, keep ALL writing Sessions on one PC
 (SQLite WAL is not reliable across SMB/NFS clients); when instruments move to separate
 control PCs, give each PC its own local ``data_root`` (= physical per-sample
@@ -51,8 +54,11 @@ RECORD_FILE = "record.json"
 INDEX_FILE = "index.sqlite"
 DEVICES_FILE = "devices.toml"  # optional human-edited sample registry (see load_device_registry)
 COOLDOWNS_FILE = "cooldowns.toml"  # per device: <data_root>/<device>/cooldowns.toml (see load_cooldowns)
+STATE_FILE = "scqo_state.json"  # SCQO calibration state, inside the setup's scqo/ folder
+SCQO_SUBDIR = "scqo"  # per (device, cooldown, setup): <device>/<cooldown>/<setup>/scqo/ (see setup_scqo_dir)
+BACKEND_CONFIG_SUBDIR = "backend_config"  # the vendor-config sibling: <cooldown>/<setup>/backend_config/
 SETUP_BACKENDS = ("qblox", "qm", "simulated")  # legal [<cycle>.setup.<name>] backend values
-SETUP_KEYS = ("backend", "instrument_config", "note")  # the ONLY keys a setup table may carry
+SETUP_KEYS = ("backend", "note")  # the ONLY keys a setup table may carry (paths are DERIVED)
 # Setup names travel as CLI arguments, index values and URL query params — keep them plain.
 _SETUP_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
@@ -626,25 +632,24 @@ def load_cooldowns(data_root: str | Path, device: str) -> dict:
 
     One table per cycle (start, fridge, packaging, note; ``end`` absent = ACTIVE),
     each holding NAMED ``[<id>.setup.<name>]`` sub-tables — the name IS the setup's
-    identity (stamped on runs, selected via ``scqo user --setup``). A setup is one
-    whole measurement arrangement of the cycle and carries EXACTLY: ``backend``
-    (required, one of :data:`SETUP_BACKENDS`), ``instrument_config`` (folder holding
-    ALL vendor config files under canonical names — required for real backends,
-    forbidden for "simulated") and optional ``note``. Wiring lives in the vendor
-    config folder, not here; a cycle may have ZERO setups (runs refuse until the
-    manager hand-adds one).
+    identity (stamped on runs, selected via ``scqo user --setup``). A setup table
+    carries EXACTLY: ``backend`` (required, one of :data:`SETUP_BACKENDS`) and an
+    optional ``note`` — nothing else. The vendor-config folder is DERIVED from the
+    keys (:func:`setup_backend_config_dir`: ``<device>/<cid>/<name>/backend_config/``)
+    and injected into the loaded dict as ``setup["instrument_config"]`` for real
+    backends, so factories/doctor/viewer read one key that can never dangle. Wiring
+    lives in the vendor config folder, not here; a cycle may have ZERO setups (runs
+    refuse until the manager hand-adds one).
 
     Validation is LOUD — this file stamps and drives every run: corrupt TOML, a
-    non-table cycle, more than one open cycle, the retired v0.6 ``[[<id>.setup]]``
-    array form, a bad setup name, unknown setup keys (``since``/port maps are
-    retired), a missing/unknown backend, a missing/forbidden ``instrument_config``,
-    or two setups in one cycle sharing a folder (live state written back by runs —
-    sharing corrupts it) all raise ValueError naming the file.
-    ``instrument_config`` is expanduser'd, resolved (relative paths against the
-    registry's folder) and written back normalized, so every consumer sees one form.
-    Folder EXISTENCE is deliberately NOT checked here — analysis machines must read
-    registries whose instrument paths don't exist locally; the driver factory and
-    ``scqo doctor`` check existence. An absent file returns {}.
+    non-table cycle, a non-filename-safe cooldown id, more than one open cycle, the
+    retired v0.6 ``[[<id>.setup]]`` array form, a bad or casefold-twin setup name,
+    unknown setup keys (``since``/port maps retired in v0.7; ``instrument_config``
+    retired in v0.9 — the path is derived), or a missing/unknown backend all raise
+    ValueError naming the file and the fix. Folder EXISTENCE is deliberately NOT
+    checked here — analysis machines must read registries whose instrument folders
+    don't exist locally; the driver factory and ``scqo doctor`` check existence.
+    An absent file returns {}.
     """
     path = Path(data_root) / device / COOLDOWNS_FILE
     if not path.is_file():
@@ -658,9 +663,24 @@ def load_cooldowns(data_root: str | Path, device: str) -> dict:
             cycles = tomllib.load(f)
     except tomllib.TOMLDecodeError as err:
         raise ValueError(f"invalid cooldown registry {path}: {err}") from None
+    cids: dict[str, str] = {}
     for cid, cycle in cycles.items():
         if not isinstance(cycle, dict):
             raise ValueError(f"{path}: top-level keys must be cycle tables like [cd8]; {cid!r} is not")
+        if not _SETUP_NAME_RE.match(cid):
+            # The cooldown id becomes a folder segment (<cooldown>/<setup>/scqo/) and
+            # an index value, so it must be filename/query-safe like a setup name.
+            raise ValueError(f"{path}: cooldown id {cid!r} must be letters/digits/_/- only "
+                             "(it becomes a folder name and an index value)")
+        if cid.casefold() in cids:
+            # Same reason as the setup-name twin check: on a case-insensitive
+            # filesystem (Windows) [cd2] and [CD2] would ALIAS one folder tree —
+            # a new cycle would silently inherit and overwrite the ended cycle's
+            # state files and vendor wiring snapshot.
+            raise ValueError(f"{path}: cooldown ids {cids[cid.casefold()]!r} and {cid!r} differ "
+                             "only by letter case — their folders cannot tell them apart; "
+                             "pick a new id")
+        cids[cid.casefold()] = cid
         setups = cycle.get("setup", {})
         if isinstance(setups, list):
             raise ValueError(
@@ -672,49 +692,47 @@ def load_cooldowns(data_root: str | Path, device: str) -> dict:
                              f"[{cid}.setup.qblox_main]")
         # Zero setups is legal: an empty cycle loads fine; runs refuse at session-build
         # time with a message naming the hand-edit fix (the manager adds blocks later).
-        folders: dict[str, str] = {}
+        names: dict[str, str] = {}
         for name, setup in setups.items():
             if not _SETUP_NAME_RE.match(name):
                 raise ValueError(f"{path}: setup name {name!r} in cycle {cid!r} must be "
                                  "letters/digits/_/- only (it becomes a CLI argument and an "
                                  "index value)")
+            if name.casefold() in names:
+                # The setup name is a folder segment (<cooldown>/<name>/...) — on a
+                # case-insensitive filesystem (Windows) "Main" and "main" would share
+                # one folder, and selections/era guards would confuse humans anyway.
+                raise ValueError(f"{path}: setups {names[name.casefold()]!r} and {name!r} in "
+                                 f"cycle {cid!r} differ only by letter case — their folders and "
+                                 "selections cannot tell them apart; rename one")
+            names[name.casefold()] = name
+            # Join with the SAME `device` argument the scqo-sibling helpers use
+            # (setup_scqo_dir/setup_state_path) — never path.parent.name, which
+            # would silently diverge for a device string containing a separator.
+            derived = setup_backend_config_dir(data_root, device, cid, name).resolve()
+            if "instrument_config" in setup:
+                # Retired in v0.9 (the path was a second source of truth that could
+                # dangle when folders moved): the folder is DERIVED from the keys.
+                raise ValueError(
+                    f"{path}: [{cid}.setup.{name}]: 'instrument_config' was retired in v0.9 — "
+                    f"the vendor folder is derived from the keys: {derived}. Delete the line "
+                    "and keep the vendor files there (canonical names).")
             unknown = sorted(k for k in setup if k not in SETUP_KEYS)
             if unknown:
                 raise ValueError(
                     f"{path}: [{cid}.setup.{name}] has unknown key(s): {', '.join(unknown)} — "
                     f"allowed keys: {', '.join(SETUP_KEYS)}. v0.7.0 retired 'since' dates (the "
-                    "setup NAME is its identity) and port-map pairs (wiring lives in the vendor "
-                    "instrument_config folder).")
+                    "setup NAME is its identity) and port-map pairs; v0.9 retired "
+                    "'instrument_config' (the vendor folder is derived from the keys).")
             backend = setup.get("backend")
             if backend not in SETUP_BACKENDS:
                 raise ValueError(f"{path}: [{cid}.setup.{name}]: 'backend' must be one of "
                                  f"{', '.join(SETUP_BACKENDS)}, got {backend!r}")
-            folder = setup.get("instrument_config")
-            if backend == "simulated":
-                if folder is not None:
-                    raise ValueError(f"{path}: [{cid}.setup.{name}]: 'simulated' takes no "
-                                     "instrument_config (the demo device is built in)")
-                continue
-            if not folder:
-                raise ValueError(f"{path}: [{cid}.setup.{name}]: backend {backend!r} needs "
-                                 "'instrument_config' (folder with the vendor config files "
-                                 "under canonical names)")
-            if not isinstance(folder, str):
-                # TOML happily parses unquoted dates/ints/bools — keep the LOUD
-                # ValueError contract (a TypeError from Path() names no file).
-                raise ValueError(f"{path}: [{cid}.setup.{name}]: 'instrument_config' must be a "
-                                 f"quoted path string, got {type(folder).__name__}")
-            resolved = Path(folder).expanduser()
-            if not resolved.is_absolute():
-                resolved = path.parent / resolved
-            normalized = os.path.normcase(str(resolved.resolve()))
-            if normalized in folders:
-                raise ValueError(f"{path}: setups {folders[normalized]!r} and {name!r} in cycle "
-                                 f"{cid!r} point at the same instrument_config folder "
-                                 f"({folder!r}) — each setup writes live state back; sharing a "
-                                 "folder corrupts it")
-            folders[normalized] = name
-            setup["instrument_config"] = str(resolved.resolve())  # one form for all consumers
+            if backend != "simulated":
+                # Injected (not user-typed) so factories/doctor/viewer keep reading one
+                # key; absolute = "one form for all consumers". Simulated has no vendor
+                # folder — the key stays absent, as before.
+                setup["instrument_config"] = str(derived)
     open_cycles = [cid for cid, cycle in cycles.items() if "end" not in cycle]
     if len(open_cycles) > 1:
         raise ValueError(
@@ -770,6 +788,49 @@ def resolve_setup(cycle: dict, name: str | None = None) -> tuple[str, dict]:
     raise SetupResolutionError(
         f"this cycle has {len(setups)} setups and none is selected ({', '.join(setups)})",
         reason="ambiguous", available=list(setups))
+
+
+def _setup_dir(data_root: str | Path, device: str, cooldown: str, setup_name: str) -> Path:
+    """The one folder per (device, cooldown, setup): ``<data_root>/<device>/
+    <cooldown>/<setup_name>/``. Both ``cooldown`` and ``setup_name`` become path
+    segments, so both must be filename-safe (``_SETUP_NAME_RE``)."""
+    for part, what in ((cooldown, "cooldown id"), (setup_name, "setup name")):
+        if not part or not _SETUP_NAME_RE.match(part):
+            raise ValueError(f"a setup path needs a {what} (letters/digits/_/- only), got {part!r}")
+    return Path(data_root) / device / cooldown / setup_name
+
+
+def setup_scqo_dir(data_root: str | Path, device: str, cooldown: str,
+                   setup_name: str) -> Path:
+    """The SCQO-owned folder for one (device, cooldown, setup):
+    ``<data_root>/<device>/<cooldown>/<setup_name>/scqo/``.
+
+    It holds this context's ``scqo_state.json`` (calibration + history) and
+    ``physical.json`` (measured physics + history). It is the FIXED SIBLING of the
+    setup's vendor-config folder (:func:`setup_backend_config_dir`), never inside
+    it: the QM backend's vendor folder IS QUAM's state directory and ``Quam.load()``
+    ``rglob("*.json")``-merges everything under it, so SCQO files must live OUTSIDE
+    that folder — here they always do, by construction."""
+    return _setup_dir(data_root, device, cooldown, setup_name) / SCQO_SUBDIR
+
+
+def setup_backend_config_dir(data_root: str | Path, device: str, cooldown: str,
+                             setup_name: str) -> Path:
+    """A real setup's vendor-config folder — DERIVED from the registry keys, never
+    typed: ``<data_root>/<device>/<cooldown>/<setup_name>/backend_config/``. It holds
+    ALL the vendor's config files under canonical names (qblox: ``dut_config.json`` +
+    ``hw_config.json``; qm: ``state.json`` + ``wiring.json``); simulated setups have
+    none. :func:`load_cooldowns` injects it as ``setup["instrument_config"]`` so
+    factories/doctor/viewer read one key regardless."""
+    return _setup_dir(data_root, device, cooldown, setup_name) / BACKEND_CONFIG_SUBDIR
+
+
+def setup_state_path(data_root: str | Path, device: str, cooldown: str,
+                     setup_name: str) -> Path:
+    """This context's SCQO calibration state file — ``<scqo dir>/scqo_state.json``
+    (see :func:`setup_scqo_dir`). The per-device ``<device>/scqo_state.json`` and the
+    v0.9 ``.scqo``-in-instrument_config layouts are both retired (fresh start)."""
+    return setup_scqo_dir(data_root, device, cooldown, setup_name) / STATE_FILE
 
 
 

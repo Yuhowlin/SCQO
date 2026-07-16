@@ -172,4 +172,4 @@ or per-command shims.
 
 ## Status
 Current published release: **v0.8.0** — see `RELEASES.toml` for the combo manifest and required upgrade actions. Release history lives in git tags + `RELEASES.toml`, not here.
-Work in progress on `main`: **v0.9.0** — per-(cooldown, setup) SCQO state + physics folders (`<data_root>/<device>/<cooldown>/<setup>/scqo/`) so two users on two setups of one sample no longer share or clobber state.
+Work in progress on `main`: **v0.9.0** — per-(cooldown, setup) SCQO state + physics folders (`<data_root>/<device>/<cooldown>/<setup>/scqo/`) so two users on two setups of one sample no longer share or clobber state. ALL folder locations are DERIVED from the registry keys: a `[<cid>.setup.<name>]` table is exactly `backend` + optional `note`; the vendor folder is the sibling `<cid>/<name>/backend_config/`, injected by `load_cooldowns` as `setup["instrument_config"]` (typed paths are refused — they can dangle). The sibling split keeps SCQO files out of QUAM's state-directory rglob by construction.
