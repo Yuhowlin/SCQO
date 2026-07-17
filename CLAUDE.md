@@ -126,7 +126,12 @@ ONE data_root + ONE index for all samples (`find_runs(device=...)` / `--device` 
 per-sample DBs are rejected). Each user selects the sample and setup (`device`/`setup`
 in user.toml; `scqo user`); which instrument carries it — and where its vendor config
 folder lives — is a fact of the SELECTED named setup of the device's ACTIVE cooldown
-cycle (`[<cycle>.setup.<name>]` in its cooldowns.toml, v0.7.0), never a config key.
+cycle (`[<cycle>.setup.<name>]` in its cooldowns.toml), never a config key. ALL folder
+locations are DERIVED from the registry keys: a setup table is exactly `backend` +
+optional `note`; its vendor folder is the sibling `<cid>/<name>/backend_config/`,
+injected by `load_cooldowns` as `setup["instrument_config"]` (typed paths are refused —
+they can dangle). That sibling split is load-bearing: it keeps SCQO's own files out of
+QUAM's state-directory rglob by construction.
 Instrument-independent sample facts live in the optional human-edited registry
 `<data_root>/devices.toml` (`datastore.load_device_registry`; rendered by the viewer).
 Instrument-DEPENDENT measured values (thermal population etc.) stay in run records with
@@ -175,5 +180,4 @@ or per-command shims.
 - `D:\github\QBLOX_training` — read-only Qblox reference docs (`docs/applications/superconducting/single_qubit_experiment_helpers/experiment.py`, `cal*.py`, `custom_elements.py`).
 
 ## Status
-Current published release: **v0.8.0** — see `RELEASES.toml` for the combo manifest and required upgrade actions. Release history lives in git tags + `RELEASES.toml`, not here.
-Work in progress on `main`: **v0.9.0** — per-(cooldown, setup) SCQO state + physics folders (`<data_root>/<device>/<cooldown>/<setup>/scqo/`) so two users on two setups of one sample no longer share or clobber state. ALL folder locations are DERIVED from the registry keys: a `[<cid>.setup.<name>]` table is exactly `backend` + optional `note`; the vendor folder is the sibling `<cid>/<name>/backend_config/`, injected by `load_cooldowns` as `setup["instrument_config"]` (typed paths are refused — they can dangle). The sibling split keeps SCQO files out of QUAM's state-directory rglob by construction. Also in v0.9.0: change history lives in append-only `.history.jsonl` sidecars next to the values-only `scqo_state.json`/`physical.json` (`scqo/_state_io.py`; both stores merge history under a lock — same-setup sessions never clobber rows), and `scqo suggest <run_id> q.field=value` attaches a human-read value to a run as an `origin="operator"` pending suggestion (the estimator-failed-but-the-figure-didn't flow), decided via the normal accept guards.
+Current published release: **v0.9.0** — see `RELEASES.toml` for the combo manifest and required upgrade actions. Release history lives in git tags + `RELEASES.toml`, not here.
