@@ -3,6 +3,15 @@
 # scqat at its pinned tag (scqat versions independently: its own pyproject/tag line).
 # Hand-edited at release time by the manager (see RELEASING.md).
 
+[v0-10-2]
+date = 2026-07-21
+scqo = "v0.10.2"                 # resonator_spectroscopy gains analysis_method (lorentzian|circle) + baseline_order
+lchqbdriver = "v0.10.1"          # unchanged: probe-only, inherits the estimator switch for free
+lchqmdriver = "v0.10.1"          # unchanged: probe-only, inherits the estimator switch for free
+scqo-contrib = "v0.10.1"         # unchanged
+scqat = "v0.1.8"                 # NEW: multi-method resonator estimator (joint-bg lorentzian + Probst circle)
+notes = "Resonator spectroscopy analysis becomes multi-method. resonator_spectroscopy gains two Parameters: analysis_method ('lorentzian' default | 'circle') and baseline_order (0/1/2, lorentzian only). 'lorentzian' is a joint Lorentzian + polynomial-background fit of the power |IQ|^2 that REPLACES the old quantile subtract-then-fit baseline (no legacy path) -- it removes the f_res/kappa bias the value-based quiet-quantile mask produced on sloped/curved backgrounds (a horizontal band of points collapsed the order-1 baseline to nearly flat). 'circle' is a native Probst notch-model fit of the complex S21 (power-Lorentzian-seeded, multi-start over cable-delay candidates + full-model complex least-squares, delay fixed per candidate to avoid the delay/alpha/phi0 degeneracy; phase-less data gated out by a circularity test) that also yields Qi/Qc/phi0/delay; validated on real QM 5Q4C data against the vendored NCU resonator_tools (Qi within 4%, delay within 0.1 ns). The estimator + both fitters live in scqat, bumped to v0.1.8 (the combo MUST pin it -- SCQO.estimate() forwards method=/baseline_order= into scqat.estimators.resonator_spectroscopy, and the circle method + fit_notch_circle/fit_lorentzian_bg do not exist in the older v0.1.7 tag). Drivers unchanged: LCHQB/LCHQM resonator_spectroscopy is probe-only and inherits the switch, so lchqbdriver/lchqmdriver/scqo-contrib stay pinned at v0.10.1 (analysis-only combo). UPGRADE REQUIRES: git fetch --tags && git checkout v0.10.2 (scqo) and scqat at v0.1.8, then re-run `uv pip install -e . --no-deps` in each editable env (refreshes the version scqo doctor reports and registers the new estimator methods). No data action: old run folders and the index (schema v7) are unchanged. BEHAVIOR: additive and non-breaking to the schema; the DEFAULT method stays 'lorentzian' so existing calls keep working, but because the baseline algorithm changed a re-fit of the SAME raw data can shift f_r/kappa slightly (more accurate on sloped backgrounds). 'circle' needs genuine phase and FAILS GRACEFULLY (outcome FAILED, no writeback) on the simulated backend whose Q quadrature is noise; on real hardware it returns f_r/kappa plus Qi/Qc. Circle's extra quality factors appear in the run result but are not yet proposed to Resonator physical fields (follow-up)."
+
 [v0-10-1]
 date = 2026-07-21
 scqo = "v0.10.1"                 # 7 single-qubit experiments (Yuhowlin) + the drag_beta pushed field

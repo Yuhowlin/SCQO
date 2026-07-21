@@ -9,7 +9,7 @@ is the total resonator decay rate ``kappa_tot_hz``. A driver only adds ``probe()
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 import numpy as np
 from pydantic import Field
@@ -29,6 +29,20 @@ class ResonatorSpectroscopyParameters(TargetSelection, AveragingParameters):
     num_points: int = Field(101, gt=1, description="Number of frequency points in the sweep.")
     readout_amplitude: float | None = Field(
         None, gt=0, description="Optional readout amplitude override; None keeps the device value."
+    )
+    analysis_method: Literal["lorentzian", "circle"] = Field(
+        "lorentzian",
+        description=(
+            "Fit model: 'lorentzian' = joint Lorentzian + polynomial-background fit of the "
+            "power |IQ|^2 (fast, magnitude-only). 'circle' = Probst notch-model fit of the "
+            "complex S21 — calibrates cable delay/asymmetry analytically and also yields "
+            "Qi/Qc, but needs meaningful phase data (it may fail on the simulated backend, "
+            "whose Q quadrature is noise)."
+        ),
+    )
+    baseline_order: int = Field(
+        1, ge=0, le=2,
+        description="lorentzian only: polynomial background order (0=const, 1=slope, 2=+curvature).",
     )
 
 
@@ -96,7 +110,13 @@ class ResonatorSpectroscopy(Experiment):
         full_freq = np.array([detuning + old_freqs[q] for q in targets])
         prepared = prepared.assign_coords(full_freq=(("target", "detuning"), full_freq))
 
-        results = per_qubit_results(prepared, ResonatorSpectroscopyEstimator(), artifact_dir=self.artifact_dir)
+        results = per_qubit_results(
+            prepared,
+            ResonatorSpectroscopyEstimator(),
+            artifact_dir=self.artifact_dir,
+            method=self.params.analysis_method,
+            baseline_order=self.params.baseline_order,
+        )
 
         result = ResonatorSpectroscopyResult()
         for qubit in self.params.targets:
