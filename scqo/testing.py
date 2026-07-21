@@ -46,6 +46,14 @@ class _InMemoryQubit(QubitView):
         self._state["pi_amp"] = float(value)
 
     @property
+    def drag_beta(self) -> float:
+        return self._state.get("drag_beta", 0.0)
+
+    @drag_beta.setter
+    def drag_beta(self, value: float) -> None:
+        self._state["drag_beta"] = float(value)
+
+    @property
     def readout_amp(self) -> float:
         return self._state["readout_amp"]
 

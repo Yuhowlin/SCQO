@@ -43,7 +43,7 @@ class QubitSQRBParameters(QubitSelection, AveragingParameters):
         description="Use logarithmic depth scaling (1, 2, 4, 8, 16...)."
     )
     use_state_discrimination: bool = Field(
-        True,
+        False,
         description="Use state discrimination to classify |0> vs |1> population."
     )
     seed: Optional[int] = Field(
@@ -69,6 +69,30 @@ class QubitSQRBParameters(QubitSelection, AveragingParameters):
             return depths
 
 
+class SQRBContract(DatasetContract):
+    """Custom contract for SQRB supporting either raw (I, Q) or state classification (state)."""
+
+    def validate(self, ds: xr.Dataset) -> None:
+        problems: list[str] = []
+        for dim in self.dims:
+            if dim not in ds.dims:
+                problems.append(f"missing dimension {dim!r}")
+            if dim not in ds.coords:
+                problems.append(f"missing coordinate {dim!r}")
+        
+        has_iq = "I" in ds.data_vars and "Q" in ds.data_vars
+        has_state = "state" in ds.data_vars
+        has_i = "I" in ds.data_vars
+        
+        if not (has_iq or has_state or has_i):
+            problems.append("dataset must contain data variables ('I', 'Q') or ('state',)")
+        
+        if problems:
+            raise ContractError(
+                f"dataset does not conform to SQRB contract: " + "; ".join(problems)
+            )
+
+
 class QubitSQRBResult(Result):
     """Result of QubitSQRB."""
     pass
@@ -83,16 +107,16 @@ class QubitSQRB(Experiment):
     )
     Parameters: ClassVar[type[QubitSQRBParameters]] = QubitSQRBParameters
     Result: ClassVar[type[QubitSQRBResult]] = QubitSQRBResult
-    Contract: ClassVar[DatasetContract] = DatasetContract(
-        sweeps=("depth", "sequence_idx"),
+    Contract: ClassVar[DatasetContract] = SQRBContract(
+        sweeps=("sequence_idx", "depth"),
         sweep_units=("", ""),
         variables=("I", "Q")
     )
 
     def define_sweep(self) -> dict[str, np.ndarray]:
         return {
+            "sequence_idx": np.arange(self.params.num_random_sequences),
             "depth": self.params.get_depths(),
-            "sequence_idx": np.arange(self.params.num_random_sequences)
         }
 
     def simulate(self, coords: dict[str, np.ndarray]) -> dict[str, np.ndarray]:

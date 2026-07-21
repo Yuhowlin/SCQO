@@ -88,6 +88,7 @@ FIELDS: dict[str, FieldSpec] = {
     "readout_freq": FieldSpec("Hz", "Resonator readout frequency.", push=True),
     "drive_freq": FieldSpec("Hz", "Qubit 0->1 drive frequency.", push=True),
     "pi_amp": FieldSpec("", "Amplitude of the calibrated pi (x180) pulse.", push=True),
+    "drag_beta": FieldSpec("", "DRAG coefficient / pre-factor.", push=True),
     "readout_amp": FieldSpec("", "Amplitude of the readout pulse (dimensionless, within "
                                  "the backend's current output-power configuration).", push=True),
     # Keep readout_power_dbm LAST among the pushed fields: _push_config pushes in

@@ -195,7 +195,7 @@ class QubitTomography(Experiment):
         
         result = QubitTomographyResult()
         for qubit in self.params.qubits:
-            r = results[qubit]
+            r = results.get(qubit, {})
             result.fit[qubit] = r
-            result.outcomes[qubit] = Outcome.SUCCESSFUL if r.get("success", False) else Outcome.FAILED
+            result.outcomes[qubit] = Outcome.SUCCESSFUL if (r and r.get("success", False)) else Outcome.FAILED
         return result

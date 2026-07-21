@@ -16,8 +16,8 @@ from scqo.experiments._sim import stable_seed
 class QubitDragEquatorParameters(QubitSelection, AveragingParameters):
     """Inputs for a 3-line symmetric equator DRAG calibration experiment."""
 
-    min_beta: float = Field(-2.0, description="Minimum DRAG beta coefficient.")
-    max_beta: float = Field(2.0, description="Maximum DRAG beta coefficient.")
+    min_beta: float = Field(-0.5, description="Minimum DRAG beta coefficient.")
+    max_beta: float = Field(0.5, description="Maximum DRAG beta coefficient.")
     num_beta_points: int = Field(41, gt=1, description="Number of beta sweep points.")
     pulse_repetitions: int = Field(3, gt=0, description="Number of alternating pi pulses. Must be odd.")
 
@@ -59,7 +59,7 @@ class QubitDragEquator(Experiment):
             self.params.num_beta_points,
         )
         return {
-            "seq_idx": np.array([0, 1, 2]),
+            "seq_idx": np.array([0, 1]),
             "beta": beta,
         }
 
@@ -80,12 +80,10 @@ class QubitDragEquator(Experiment):
             opt_beta = rng.uniform(-0.5, 0.5)
             noise = 0.015
             
-            # Seq 0: X90 -> (Y180)^N
+            # Seq 0: Rx(pi) - Ry(pi/2)
             i_data[k, 0] = 0.5 + 0.3 * np.tanh(beta - opt_beta) + rng.normal(0, noise, n_beta)
-            # Seq 1: X90 -> (-Y180)^N
+            # Seq 1: Ry(pi) - Rx(pi/2)
             i_data[k, 1] = 0.5 - 0.3 * np.tanh(beta - opt_beta) + rng.normal(0, noise, n_beta)
-            # Seq 2: X90 -> (X180)^N
-            i_data[k, 2] = 0.5 + rng.normal(0, noise, n_beta)
             
             q_data[k, :] = rng.normal(0, noise, (n_seq, n_beta))
 
@@ -111,7 +109,13 @@ class QubitDragEquator(Experiment):
                 "beta": [float(x) for x in r["beta"]],
                 "seq0": [float(x) for x in r["seq0"]],
                 "seq1": [float(x) for x in r["seq1"]],
-                "seq2": [float(x) for x in r["seq2"]],
             }
             result.outcomes[qubit] = Outcome.SUCCESSFUL if r.get("success", False) else Outcome.FAILED
         return result
+
+    def update(self) -> None:
+        if self.result is None:
+            return
+        for qubit, fit in self.result.fit.items():
+            if self.result.outcomes[qubit] is Outcome.SUCCESSFUL and fit.get("opt_beta") is not None:
+                self.device.qubit(qubit).drag_beta = fit["opt_beta"]

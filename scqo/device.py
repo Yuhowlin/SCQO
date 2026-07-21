@@ -60,6 +60,15 @@ class QubitView(ABC):
 
     @property
     @abstractmethod
+    def drag_beta(self) -> float:
+        """DRAG coefficient / pre-factor."""
+
+    @drag_beta.setter
+    @abstractmethod
+    def drag_beta(self, value: float) -> None: ...
+
+    @property
+    @abstractmethod
     def readout_amp(self) -> float:
         """Amplitude of the readout pulse (dimensionless, within the backend's
         current output-power configuration)."""

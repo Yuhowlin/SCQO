@@ -25,9 +25,9 @@ from scqo.backend import Backend
 #: Demo device for the built-in simulated backend (unified across the lab — the QM
 #: repo's old q1/q2 demo names were retired with the CLI consolidation).
 DEMO_QUBITS = {
-    "q0": {"readout_freq": 5.95e9, "drive_freq": 3.87e9, "pi_amp": 0.20, "readout_amp": 0.25,
+    "q0": {"readout_freq": 5.95e9, "drive_freq": 3.87e9, "pi_amp": 0.20, "drag_beta": 0.0, "readout_amp": 0.25,
            "readout_power_dbm": -25.0},
-    "q1": {"readout_freq": 6.05e9, "drive_freq": 4.01e9, "pi_amp": 0.18, "readout_amp": 0.22,
+    "q1": {"readout_freq": 6.05e9, "drive_freq": 4.01e9, "pi_amp": 0.18, "drag_beta": 0.0, "readout_amp": 0.22,
            "readout_power_dbm": -27.0},
 }
 

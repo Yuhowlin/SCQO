@@ -111,3 +111,10 @@ class QubitDragAlternating(Experiment):
             }
             result.outcomes[qubit] = Outcome.SUCCESSFUL if r.get("success", False) else Outcome.FAILED
         return result
+
+    def update(self) -> None:
+        if self.result is None:
+            return
+        for qubit, fit in self.result.fit.items():
+            if self.result.outcomes[qubit] is Outcome.SUCCESSFUL and fit.get("opt_beta") is not None:
+                self.device.qubit(qubit).drag_beta = fit["opt_beta"]
