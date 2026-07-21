@@ -41,6 +41,28 @@ def _cli(env: dict, tmp_path: Path, *args: str) -> subprocess.CompletedProcess:
     )
 
 
+def _components(tmp_path: Path) -> None:
+    """A configured device needs its roster (components.toml) to build sessions."""
+    device_dir = tmp_path / "data" / "simdev"
+    device_dir.mkdir(parents=True, exist_ok=True)
+    (device_dir / "components.toml").write_text(
+        'schema = 1\n'
+        '[components.q0]\n'
+        'physical   = "FixedTransmon"\n'
+        'instrument = "ReadableTransmon"\n'
+        'operations = ["rx", "readout"]\n'
+        '[components.q0_res]\n'
+        'physical = "Resonator"\n'
+        '[components.q0_ro]\n'
+        'members  = { transmon = "q0", resonator = "q0_res" }\n'
+        'physical = "ReadoutLine"\n'
+        '[components.q0_xy]\n'
+        'physical = "XYControl"\n'
+        'members  = { transmon = "q0" }\n',
+        encoding="utf-8",
+    )
+
+
 def _run_record(proc: subprocess.CompletedProcess) -> tuple[dict, dict]:
     """(the result JSON `scqo run` prints, the persisted record.json)."""
     result = json.loads(proc.stdout.split("\nsaved:")[0])
@@ -50,6 +72,7 @@ def _run_record(proc: subprocess.CompletedProcess) -> tuple[dict, dict]:
 
 def test_cooldown_lifecycle(tmp_path):
     env = _env(tmp_path)
+    _components(tmp_path)
 
     # 1. `start` records an EMPTY cycle. The v0.6 --backend/--instrument-config
     #    flags are RETIRED (setups are hand-added named blocks now).
@@ -71,7 +94,7 @@ def test_cooldown_lifecycle(tmp_path):
     assert "has no setups yet" in show.stdout
 
     # 2. a run REFUSES while the cycle has zero setups (paste-ready skeleton shown)
-    proc = _cli(env, tmp_path, "run", "resonator_spectroscopy", "--qubits", "q0")
+    proc = _cli(env, tmp_path, "run", "resonator_spectroscopy", "--targets", "q0")
     assert proc.returncode != 0
     assert "has no setups yet" in proc.stderr
     assert "[cd1.setup.<name>]" in proc.stderr
@@ -80,7 +103,7 @@ def test_cooldown_lifecycle(tmp_path):
     #    and the run record carries the cycle + setup NAME + backend provenance
     reg.write_text(reg.read_text(encoding="utf-8")
                    + '\n[cd1.setup.practice]\nbackend = "simulated"\n', encoding="utf-8")
-    proc = _cli(env, tmp_path, "run", "resonator_spectroscopy", "--qubits", "q0")
+    proc = _cli(env, tmp_path, "run", "resonator_spectroscopy", "--targets", "q0")
     assert proc.returncode == 0, proc.stderr
     r1, rec1 = _run_record(proc)
     assert rec1["cooldown"] == "cd1" and rec1["setup"] == "practice"
@@ -89,7 +112,7 @@ def test_cooldown_lifecycle(tmp_path):
     # 4. a SECOND setup makes the cycle ambiguous -> runs refuse, naming both + the fix
     reg.write_text(reg.read_text(encoding="utf-8")
                    + '\n[cd1.setup.alt]\nbackend = "simulated"\n', encoding="utf-8")
-    proc = _cli(env, tmp_path, "run", "resonator_spectroscopy", "--qubits", "q0")
+    proc = _cli(env, tmp_path, "run", "resonator_spectroscopy", "--targets", "q0")
     assert proc.returncode != 0
     assert "practice" in proc.stderr and "alt" in proc.stderr
     assert "scqo user --setup" in proc.stderr
@@ -103,7 +126,7 @@ def test_cooldown_lifecycle(tmp_path):
     proc = _cli(env_user, tmp_path, "user", "--setup", "practice")
     assert proc.returncode == 0, proc.stderr
     assert 'setup = "practice"' in user_toml.read_text(encoding="utf-8")
-    proc = _cli(env_user, tmp_path, "run", "resonator_spectroscopy", "--qubits", "q0")
+    proc = _cli(env_user, tmp_path, "run", "resonator_spectroscopy", "--targets", "q0")
     assert proc.returncode == 0, proc.stderr
     r2, rec2 = _run_record(proc)
     assert rec2["cooldown"] == "cd1" and rec2["setup"] == "practice"
@@ -127,7 +150,7 @@ def test_cooldown_lifecycle(tmp_path):
     assert proc.returncode == 0, proc.stderr
     assert reg.with_suffix(".toml.bak").is_file()
     # …and later runs REFUSE loudly instead of stamping ""
-    proc = _cli(env_user, tmp_path, "run", "resonator_spectroscopy", "--qubits", "q0")
+    proc = _cli(env_user, tmp_path, "run", "resonator_spectroscopy", "--targets", "q0")
     assert proc.returncode != 0
     assert "no ACTIVE cooldown cycle" in proc.stderr
 

@@ -13,7 +13,7 @@ folder <code>{{ path }}</code></p>
 {% if result.fit %}
 <h3>Fit</h3>
 <table>
-  <tr><th>qubit</th><th>quantity</th><th>value</th></tr>
+  <tr><th>target</th><th>quantity</th><th>value</th></tr>
   {% for q, fit in result.fit.items() %}{% for k, v in fit.items() %}
   <tr><td>{{ q }}</td><td>{{ k }}</td><td>{{ "%.6g" | format(v) if v is number else v }}</td></tr>
   {% endfor %}{% endfor %}
@@ -32,11 +32,11 @@ folder <code>{{ path }}</code></p>
 {% if suggestions %}
 <h3>Suggested updates</h3>
 <table>
-  <tr><th>qubit</th><th>field</th><th>store</th><th>before</th><th>after</th><th>status</th><th>on device</th><th>decided</th><th>comment</th></tr>
+  <tr><th>component</th><th>field</th><th>store</th><th>before</th><th>after</th><th>status</th><th>on device</th><th>decided</th><th>comment</th></tr>
   {% for s in suggestions %}
   {% set od = on_device[loop.index0] if on_device else None %}
   <tr {% if s.status == "pending" %}class="changed"{% endif %}>
-    <td>{{ s.qubit }}</td><td>{{ s.field }}</td><td>{{ s.store }}</td>
+    <td>{{ s.component }}</td><td>{{ s.field }}</td><td>{{ s.store }}</td>
     <td>{{ "%.8g" | format(s.before) if s.before is number else (s.before if s.before is not none else "(unmeasured)") }}</td>
     <td>{{ "%.8g" | format(s.after) if s.after is number else s.after }}</td>
     <td>{% if s.status == "pending" %}<b>pending</b>{% else %}{{ s.status }}{% endif %}
@@ -58,10 +58,10 @@ folder <code>{{ path }}</code></p>
 {% if diff %}
 <h3>Device before → after</h3>
 <table>
-  <tr><th>qubit</th><th>field</th><th>before</th><th>after</th></tr>
+  <tr><th>component</th><th>field</th><th>before</th><th>after</th></tr>
   {% for d in diff %}
   <tr {% if d.changed %}class="changed"{% endif %}>
-    <td>{{ d.qubit }}</td><td>{{ d.field }}</td>
+    <td>{{ d.component }}</td><td>{{ d.field }}</td>
     <td>{{ "%.8g" | format(d.before) if d.before is number else d.before }}</td>
     <td>{{ "%.8g" | format(d.after) if d.after is number else d.after }}</td>
   </tr>

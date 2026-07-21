@@ -15,5 +15,5 @@ import os
 # tk.tcl") and the artifact fallback would silently drop the figure PNGs.
 os.environ.setdefault("MPLBACKEND", "Agg")
 
-from ._backends import build_session, default_qubits  # noqa: E402,F401  (driver-wrapper API)
+from ._backends import build_session, default_targets  # noqa: E402,F401  (driver-wrapper API)
 from ._engine import run_experiment_cli  # noqa: E402,F401

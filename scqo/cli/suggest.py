@@ -1,7 +1,7 @@
 """Attach YOUR manually-read value to a saved run — when the fit failed but the figure didn't.
 
-    scqo suggest RUN_ID q0.readout_freq=5.912e9
-    scqo suggest RUN_ID q0.f_r_hz=5.912e9 q0.kappa_hz=1.1e6 --comment "read off the dip"
+    scqo suggest RUN_ID q1.readout_freq=5.912e9
+    scqo suggest RUN_ID q1_res.f_r_hz=5.912e9 q1_res.kappa_tot_hz=1.1e6 --comment "read off the dip"
 
 An estimator sometimes fails on data whose figure shows the answer plainly (a
 clearly visible dip the fit chased past). Read the value off the run's saved
@@ -14,9 +14,11 @@ follows immediately (Enter = decide later); in scripts, decide with:
 scqo accept RUN_ID.
 
 Values are plain numbers (5.912e9, 2.5e-05). Fields may be calibration knobs
-(readout_freq, pi_amp, ...) or physical parameters (t1_s, f_r_hz, ...) — the
-owning store is routed automatically. Needs a persisted run: a run that failed
-before it was saved has no run_id to attach to.
+(q1.readout_freq, q1.pi_amp, ...) or physical parameters (q1.t1_s,
+q1_res.f_r_hz, ...) — the owning store is routed by the component's category. Needs a persisted run: a run that failed
+before it was saved has no run_id to attach to. A value with NO run behind it
+(experience, not a figure) is `scqo set` instead — it writes immediately,
+recorded as (manual).
 """
 
 from __future__ import annotations
@@ -32,8 +34,8 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
     parser = argparse.ArgumentParser(prog=prog, description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("run_id", help="the run whose figure/data justifies the value")
-    parser.add_argument("assignments", nargs="+", metavar="QUBIT.FIELD=VALUE",
-                        help="one or more values to propose, e.g. q0.readout_freq=5.912e9")
+    parser.add_argument("assignments", nargs="+", metavar="COMPONENT.FIELD=VALUE",
+                        help="one or more values to propose, e.g. q1.readout_freq=5.912e9")
     parser.add_argument("--comment", default="",
                         help="why the manual value, e.g. 'estimator missed the dip'")
     parser.add_argument("--config", help="lab config path (default: $SCQO_CONFIG or ~/.scqo/config.toml)")
@@ -44,7 +46,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
         key, sep, raw = token.partition("=")
         if not sep or not key or not raw:
             raise SystemExit(
-                f"bad assignment {token!r} - expected QUBIT.FIELD=VALUE (e.g. q0.readout_freq=5.912e9)"
+                f"bad assignment {token!r} - expected COMPONENT.FIELD=VALUE (e.g. q1.readout_freq=5.912e9)"
             )
         assignments[key] = _parse_value(raw)
 

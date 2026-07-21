@@ -62,9 +62,18 @@ device-state update + history → next decision.
 
 ```
 scqo/
-  parameters.py   # Parameters base + QubitSelection / AveragingParameters mixins (decision surface)
+  parameters.py   # Parameters base + TargetSelection / AveragingParameters mixins (decision surface)
   result.py       # Outcome enum + Result base (extraction surface)
-  device.py       # QubitView / DeviceModel ABCs (neutral field names)
+  categories.py   # the CATEGORY catalog: FieldSpec + CategorySpec per component category
+                  #   (FixedTransmon/FluxTunableTransmon/Resonator/ReadoutLine/XYControl/
+                  #   ZControl/Coupling physical; ReadableTransmon/TransmonPair instrument;
+                  #   pair roles high/low + optional coupler satellite) - the schema source
+  roster.py       # components.toml loader: per-device component roster (names, two
+                  #   category slots, members/topology, operations, DESIGN values)
+  device.py       # ComponentView + make_view_base(category) / DeviceModel ABCs
+  fieldmap.py     # VendorBinding/VendorOnly shapes: the DRIVER-declared field catalog
+                  #   (neutral field -> vendor path/unit/convert DESCRIPTION + the
+                  #   backend-unique inventory) rendered by `scqo state --fields`
   physical.py     # PHYSICAL_FIELDS + PhysicalStore: the SAMPLE's instrument-independent
                   #   measured physics (T1/T2, arch/dispersive fits) -> the context's
                   #   scqo/physical.json (+ physical.history.jsonl sidecar)
@@ -76,12 +85,12 @@ scqo/
   backend.py      # Backend ABC: .device + .acquire(experiment) -> xarray.Dataset
   experiment.py   # Experiment ABC: physics half (define_sweep/simulate/estimate/update) + backend half (probe)
   registry.py     # @register / get / catalog  (AI's menu of measurements)
-  session.py      # Session: catalog() / run() / accept() / reject() / suggest() /
+  session.py      # Session: catalog() / run() / accept() / reject() / suggest() / set_values() /
                   #   find_runs() / load_run() / device_state() / physical_state() / history()
   datastore.py    # DataStore + RunRecord: every run saved to a folder, indexed in SQLite (rebuildable)
   labconfig.py    # ~/.scqo/config.toml -> LabConfig + make_session (students never edit repos)
   testing.py      # InMemoryDevice + SimulatedBackend (run with no instrument)
-  cli/            # the `scqo` command (run/find/accept/suggest/tag/state/user/
+  cli/            # the `scqo` command (run/find/accept/suggest/set/tag/state/user/
                   #   device/doctor): ONE engine, any-directory;
                   #   the device's SELECTED named setup picks the backend, resolved via
                   #   the scqo.backends entry-point group; simulated is built in
@@ -102,6 +111,8 @@ scqo/
                                 #   sweep down -> revert; absolute-dBm window -> readout_power_dbm + readout_freq
     resonator_spectroscopy_power_chain.py  # CAREFUL punchout: steps the output chain per point
                                 #   (amp ~0.5 for SNR; wide, cross-backend) -> readout_power_dbm + readout_freq
+    pair_zz_coupler.py          # residual ZZ vs coupler bias (echo fringe per bias) -> the pair's
+                                #   coupler_decouple_v (ZZ-off point) + zz_hz (Coupling physical fact)
 tests/test_end_to_end.py        # catalog -> run -> writeback, no hardware
 tests/test_datastore.py         # run folders + index + tags + reindex, no hardware
 ```
@@ -173,6 +184,17 @@ Parameters, Result, `estimate`, `simulate` and `update` are inherited unchanged.
 
 **`scqo run <name>` is the single CLI entry point** — never add wrappers, launcher stubs,
 or per-command shims.
+
+### The placement rule (digest — full text: TUTORIAL §10; bench: `scqo state --rule`)
+Classify each USE of a quantity, in order, first match wins:
+(1) gone when the run ends → per-run Parameters; (2) true of the chip in the dark
+(no instrument SETTING realizes it; setup coordinates OK if declared) → PHYSICAL_FIELDS;
+(3) measured but a vendor knob realizes it (TOF) → write the vendor knob, catalog unit;
+(4) a knob the loop reads/writes vendor-neutrally → neutral FIELDS (absolute at a declared
+plane = portable; chain-fraction = non-portable, twin or catalogued scale);
+(5) measured, no knob → gate scalar = FIELDS push=False, else run-record-only;
+(6) rest = vendor config, catalogued with kind realizer/candidate/vendor/unique —
+unique locks experiments to that instrument.
 
 ### Reference backends
 - `D:\github\LCHQMDriver` — Quantum Machines (qm-qua / quam / qualibrate); QM reference impl (`calibrations/LCH_*.py`, `customized/node/*/parameters.py`, `quam_config/my_quam.py`).

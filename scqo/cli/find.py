@@ -1,7 +1,7 @@
 """Find saved measurement runs — the "where is my data" command.
 
     scqo find                                    # latest runs
-    scqo find --experiment qubit_ramsey --qubit q1
+    scqo find --experiment qubit_ramsey --target q1
     scqo find --cooldown cd8 --setup qblox_main --since 2026-07-01
     scqo find --show 20260704-153012-qubit_ramsey-01   # full record
 
@@ -23,7 +23,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
     parser = argparse.ArgumentParser(prog=prog, description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--experiment", help="filter by experiment name")
-    parser.add_argument("--qubit", help="filter by measured qubit, e.g. q0")
+    parser.add_argument("--target", help="filter by measured component, e.g. q0")
     parser.add_argument("--tag", help="filter by tag, e.g. cooldown7")
     parser.add_argument("--since", help="ISO date/time lower bound, e.g. 2026-07-01")
     parser.add_argument("--until", help="ISO date/time upper bound")
@@ -50,7 +50,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
         return 0
 
     runs = store.find_runs(
-        experiment=args.experiment, qubit=args.qubit, tag=args.tag, since=args.since,
+        experiment=args.experiment, target=args.target, tag=args.tag, since=args.since,
         until=args.until, outcome=args.outcome, device=args.device,
         operator=args.operator, cooldown=args.cooldown, setup=args.setup,
         pending=True if args.pending else None, limit=args.limit,
@@ -60,10 +60,10 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
         return 0
     for r in runs:
         tags = ",".join(r["tags"]) if r["tags"] else "-"
-        qubits = ",".join(r["qubits"])
+        targets = ",".join(r.get("targets") or r.get("qubits") or [])
         operator = r.get("operator") or "-"
         pend = f"pend:{r['suggestions_pending']}" if r.get("suggestions_pending") else ""
-        print(f"{r['run_id']:44s} {r['outcome']:10s} {qubits:12s} {operator:10s} {tags:20s} {pend:8s} {r['path']}")
+        print(f"{r['run_id']:44s} {r['outcome']:10s} {targets:12s} {operator:10s} {tags:20s} {pend:8s} {r['path']}")
     print(f"\n({len(runs)} run(s); data_root = {store.data_root})")
     return 0
 

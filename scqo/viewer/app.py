@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from .._state_io import read_history
-from ..config import FIELDS
+from ..categories import CATEGORIES
 from ..datastore import (
     STATE_FILE,
     DataStore,
@@ -29,17 +29,34 @@ from ..datastore import (
     load_device_registry,
     setup_scqo_dir,
 )
-from ..physical import PHYSICAL_FIELDS, PHYSICAL_FILE
+from ..physical import PHYSICAL_FILE
 from ..provenance import live_run_map, live_sources, summarize_live
 
 #: quantities never tracked as device state (instrument-dependent; recorded decision)
 _FIT_ONLY_TRENDS = ("p_e_given_g",)
 #: fit quantities offered as one-click trend links (free-text also accepted):
 #: measured physics first, then calibration knobs — derived from the field tables.
+def _catalog_fields(side: str, push: bool | None = None) -> list[str]:
+    """Catalog field names of one side in declaration order (dedup across categories)."""
+    out: list[str] = []
+    for spec in CATEGORIES.values():
+        if spec.side != side:
+            continue
+        for f, fs in spec.fields.items():
+            if push is not None and fs.push != push:
+                continue
+            if f not in out:
+                out.append(f)
+    return out
+
+
+PHYSICAL_FIELD_ORDER = _catalog_fields("physical")
+INSTRUMENT_FIELD_ORDER = _catalog_fields("instrument")
+
 TREND_QUANTITIES = (
-    *PHYSICAL_FIELDS,
-    *(f for f, s in FIELDS.items() if not s.push),
-    *(f for f, s in FIELDS.items() if s.push),
+    *PHYSICAL_FIELD_ORDER,
+    *_catalog_fields("instrument", push=False),
+    *_catalog_fields("instrument", push=True),
     *_FIT_ONLY_TRENDS,
 )
 
@@ -115,7 +132,7 @@ def create_app(
     def runs_page(
         request: Request,
         experiment: str = "",
-        qubit: str = "",
+        target: str = "",
         tag: str = "",
         outcome: str = "",
         since: str = "",
@@ -129,7 +146,7 @@ def create_app(
     ):
         rows = store.find_runs(
             experiment=experiment or None,
-            qubit=qubit or None,
+            target=target or None,
             tag=tag or None,
             outcome=outcome or None,
             since=since or None,
@@ -160,7 +177,7 @@ def create_app(
                 "live_by_run": live_by_run,
                 "experiments": store.distinct_experiments(),
                 "devices": store.distinct_devices(),
-                "filters": {"experiment": experiment, "qubit": qubit, "tag": tag,
+                "filters": {"experiment": experiment, "target": target, "tag": tag,
                             "outcome": outcome, "since": since, "until": until,
                             "device": device, "operator": operator,
                             "cooldown": cooldown, "setup": setup,
@@ -184,7 +201,7 @@ def create_app(
         for q in sorted(set(before) | set(after)):
             for field in sorted(set(before.get(q, {})) | set(after.get(q, {}))):
                 b, a = before.get(q, {}).get(field), after.get(q, {}).get(field)
-                diff.append({"qubit": q, "field": field, "before": b, "after": a,
+                diff.append({"component": q, "field": field, "before": b, "after": a,
                              "changed": b != a})
         # Is each ACCEPTED value still the one the device runs? (aligned with the
         # suggestions list; None for non-accepted rows / no source info). Resolved
@@ -196,7 +213,7 @@ def create_app(
         on_device = []
         for s in record.get("suggestions", []):
             sources = phys_sources if s.get("store") == "physical" else inst_sources
-            src = sources.get(s.get("qubit"), {}).get(s.get("field"))
+            src = sources.get(s.get("component"), {}).get(s.get("field"))
             if s.get("status") != "accepted" or src is None:
                 on_device.append(None)
             elif src["status"] == "run" and src["run_id"] == run_id:
@@ -252,16 +269,16 @@ def create_app(
         return RedirectResponse(url=f"/run/{run_id}", status_code=303)
 
     @app.get("/trends", response_class=HTMLResponse)
-    def trends_page(request: Request, qubit: str = "q1", quantity: str = "t1_s", device: str = ""):
+    def trends_page(request: Request, target: str = "q1", quantity: str = "t1_s", device: str = ""):
         # qubit names repeat across samples ("q1" exists on every chip), so the
         # trend defaults to the configured device rather than mixing samples.
         dev = device or device_name
-        rows = store.fit_trend(qubit, quantity, device=dev) if qubit and quantity else []
+        rows = store.fit_trend(target, quantity, device=dev) if target and quantity else []
         svg = _trend_svg(rows)
         return templates.TemplateResponse(
             request,
             "trends.html",
-            {"qubit": qubit, "quantity": quantity, "rows": rows, "svg": svg,
+            {"target": target, "quantity": quantity, "rows": rows, "svg": svg,
              "quantities": TREND_QUANTITIES, "device": dev,
              "devices": store.distinct_devices()},
         )
@@ -273,10 +290,10 @@ def create_app(
         history = _read_history(scqo_dir / PHYSICAL_FILE) if scqo_dir else []
         values = data.get("values", {})
         observed = {f for fields in values.values() for f in fields}
-        fields = [f for f in PHYSICAL_FIELDS if f in observed] + sorted(observed - set(PHYSICAL_FIELDS))
+        fields = [f for f in PHYSICAL_FIELD_ORDER if f in observed] + sorted(observed - set(PHYSICAL_FIELD_ORDER))
         sources = live_sources(values, history)
         rows = [
-            {"qubit": q, "field": f, "value": values[q][f],
+            {"component": q, "field": f, "value": values[q][f],
              "source": sources.get(q, {}).get(f)}
             for q in sorted(values) for f in fields if f in values[q]
         ]
@@ -313,7 +330,7 @@ def create_app(
             "name": name, "backend": backend,
             "state": state, "authority": authority, "snapshot_run": snapshot_run,
             "latest_run": own_latest,
-            "state_fields": [f for f in FIELDS if f in observed] + sorted(observed - set(FIELDS)),
+            "state_fields": [f for f in INSTRUMENT_FIELD_ORDER if f in observed] + sorted(observed - set(INSTRUMENT_FIELD_ORDER)),
             "sources": _instrument_sources(scqo_dir),
             "history": history, "state_path": str(scqo_dir / STATE_FILE) if scqo_dir else "",
             "physical_rows": phys["rows"], "physical_history": phys["history"],
@@ -347,7 +364,7 @@ def create_app(
                 "name": "", "backend": latest[0].get("backend", ""),
                 "state": snapshot, "authority": "snapshot", "snapshot_run": latest[0],
                 "latest_run": latest[0],
-                "state_fields": [f for f in FIELDS if f in observed] + sorted(observed - set(FIELDS)),
+                "state_fields": [f for f in INSTRUMENT_FIELD_ORDER if f in observed] + sorted(observed - set(INSTRUMENT_FIELD_ORDER)),
                 "sources": {}, "history": [], "state_path": "",
                 "physical_rows": [], "physical_history": [],
             }]

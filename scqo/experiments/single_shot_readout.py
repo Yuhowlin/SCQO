@@ -23,11 +23,11 @@ from .._scqat import per_qubit_results
 from ._sim import stable_seed
 from ..contract import DatasetContract
 from ..experiment import Experiment
-from ..parameters import Parameters, QubitSelection
+from ..parameters import Parameters, TargetSelection
 from ..result import Outcome, Result
 
 
-class SingleShotReadoutParameters(QubitSelection, Parameters):
+class SingleShotReadoutParameters(TargetSelection, Parameters):
     """Inputs for a single-shot readout-fidelity measurement."""
 
     num_shots: int = Field(2000, gt=99, description="Shots per prepared state (each recorded individually).")
@@ -52,6 +52,7 @@ class SingleShotReadout(Experiment):
     Contract: ClassVar[DatasetContract] = DatasetContract(
         sweeps=("prepared_state", "shot_idx"), sweep_units=("state", "shot"), variables=("I", "Q")
     )
+    required_operations: ClassVar[tuple[str, ...]] = ("readout",)
 
     params: SingleShotReadoutParameters
 
@@ -63,11 +64,11 @@ class SingleShotReadout(Experiment):
 
     def simulate(self, coords: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         n_shots = coords["shot_idx"].size
-        qubits = self.params.qubits
-        rng = np.random.default_rng(stable_seed("single_shot_readout", *qubits))
-        i_data = np.empty((len(qubits), 2, n_shots))
+        targets = self.params.targets
+        rng = np.random.default_rng(stable_seed("single_shot_readout", *targets))
+        i_data = np.empty((len(targets), 2, n_shots))
         q_data = np.empty_like(i_data)
-        for k in range(len(qubits)):
+        for k in range(len(targets)):
             sep = rng.uniform(3.5, 5.0)  # blob separation in units of sigma
             p_thermal = rng.uniform(0.01, 0.05)  # |e> population in the "ground" prep
             p_decay = rng.uniform(0.03, 0.08)  # relaxation during readout
@@ -86,14 +87,14 @@ class SingleShotReadout(Experiment):
         from scqat.estimators.state_discrimination import StateDiscriminationEstimator
 
         # scqat's contract: I/Q over (prepared_state, shot_idx) — names already match.
-        prepared = self.dataset.transpose("qubit", "prepared_state", "shot_idx")
+        prepared = self.dataset.transpose("target", "prepared_state", "shot_idx")
 
         results = per_qubit_results(
             prepared, StateDiscriminationEstimator(), artifact_dir=self.artifact_dir
         )
 
         result = SingleShotReadoutResult()
-        for qubit in self.params.qubits:
+        for qubit in self.params.targets:
             r = results[qubit]
             counts = np.asarray(r["direct_counts"], dtype=float)  # (prepared_state, label), rows sum to 1
             # The GMM's center order is not guaranteed to match the prepared-state
@@ -127,4 +128,4 @@ class SingleShotReadout(Experiment):
             return
         for qubit, fit in self.result.fit.items():
             if self.result.outcomes[qubit] is Outcome.SUCCESSFUL:
-                self.device.qubit(qubit).readout_fidelity = fit["readout_fidelity"]
+                self.device.component(qubit).readout_fidelity = fit["readout_fidelity"]

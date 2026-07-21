@@ -38,8 +38,8 @@ def per_qubit_results(
     from scqat.parsers import repetition_data
 
     out: dict[str, dict] = {}
-    for sq in repetition_data(prepared, repetition_dim="qubit"):
-        qubit_name = sq["qubit"].values.item()
+    for sq in repetition_data(prepared, repetition_dim="target"):
+        qubit_name = sq["target"].values.item()
         out_dir = str(artifact_dir / str(qubit_name)) if artifact_dir is not None else None
         try:
             results, figures = estimator.analyze(

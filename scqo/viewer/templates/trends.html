@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Trends{% endblock %}
 {% block content %}
-<h2>Trend: {{ quantity }} on {{ qubit }} <span class="muted">({{ device }})</span></h2>
+<h2>Trend: {{ quantity }} on {{ target }} <span class="muted">({{ device }})</span></h2>
 <form class="filters" method="get" action="/trends">
   <select name="device">
     {% for d in devices %}
@@ -10,10 +10,10 @@
     <option value="{{ device }}" selected>{{ device }}</option>
     {% endfor %}
   </select>
-  <input name="qubit" value="{{ qubit }}" size="6">
+  <input name="target" value="{{ target }}" size="6">
   <input name="quantity" value="{{ quantity }}" size="14">
   <button>Show</button>
-  {% for q in quantities %}<a href="/trends?device={{ device }}&qubit={{ qubit }}&quantity={{ q }}">{{ q }}</a>&nbsp; {% endfor %}
+  {% for q in quantities %}<a href="/trends?device={{ device }}&target={{ target }}&quantity={{ q }}">{{ q }}</a>&nbsp; {% endfor %}
 </form>
 {% if svg %}
 {{ svg | safe }}
@@ -29,6 +29,6 @@
   {% endfor %}
 </table>
 {% else %}
-<p>No fitted values of <code>{{ quantity }}</code> for <code>{{ qubit }}</code> yet — run an experiment that reports it.</p>
+<p>No fitted values of <code>{{ quantity }}</code> for <code>{{ target }}</code> yet — run an experiment that reports it.</p>
 {% endif %}
 {% endblock %}

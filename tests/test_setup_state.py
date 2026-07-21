@@ -18,13 +18,35 @@ import pytest
 from scqo._state_io import read_history
 from scqo.config import RecordingDevice
 from scqo.datastore import load_cooldowns, setup_scqo_dir, setup_state_path
-from scqo.testing import InMemoryDevice
+from scqo.testing import InMemoryDevice, demo_roster
 
 
 def _vendor() -> InMemoryDevice:
     return InMemoryDevice(
         {"q0": {"readout_freq": 5.95e9, "drive_freq": 3.87e9, "pi_amp": 0.2, "readout_amp": 0.25}}
     )
+
+
+def _roster():
+    return demo_roster(qubits=("q0",))
+
+
+#: The one-per-device roster file build_session requires post-cutover.
+_COMPONENTS_TOML = """\
+schema = 1
+[components.q0]
+physical   = "FixedTransmon"
+instrument = "ReadableTransmon"
+operations = ["rx", "readout"]
+[components.q0_res]
+physical = "Resonator"
+[components.q0_ro]
+physical = "ReadoutLine"
+members  = { transmon = "q0", resonator = "q0_res" }
+[components.q0_xy]
+physical = "XYControl"
+members  = { transmon = "q0" }
+"""
 
 
 def _write_cooldowns(data_root: Path, device: str, text: str) -> Path:
@@ -139,21 +161,21 @@ def test_change_records_carry_the_setup(tmp_path):
     """Every write — run-driven or manual — is stamped with the session's setup,
     and the stamp round-trips through the state file."""
     path = str(tmp_path / "scqo_state.json")
-    dev = RecordingDevice(_vendor(), state_path=path, setup="alpha")
-    dev.qubit("q0").pi_amp = 0.3  # a manual write, no run context
+    dev = RecordingDevice(_vendor(), _roster(), state_path=path, setup="alpha")
+    dev.component("q0").pi_amp = 0.3  # a manual write, no run context
     assert [r.setup for r in dev.history()] == ["alpha"]
     dev.save()
 
-    again = RecordingDevice(_vendor(), state_path=path, on_load="push", setup="beta")
+    again = RecordingDevice(_vendor(), _roster(), state_path=path, on_load="push", setup="beta")
     assert [r.setup for r in again.history()] == ["alpha"]  # loaded rows keep theirs
-    again.qubit("q0").pi_amp = 0.4
+    again.component("q0").pi_amp = 0.4
     assert [r.setup for r in again.history()] == ["alpha", "beta"]
 
 
 def test_setupless_device_stamps_none(tmp_path):
     """Direct-API sessions without a setup still record — with setup=None."""
-    dev = RecordingDevice(_vendor())
-    dev.qubit("q0").pi_amp = 0.3
+    dev = RecordingDevice(_vendor(), _roster())
+    dev.component("q0").pi_amp = 0.3
     assert dev.history()[0].setup is None
 
 
@@ -198,7 +220,7 @@ def test_physical_same_context_concurrent_save_no_clobber(tmp_path):
 
 
 def test_physical_same_field_concurrent_newest_wins(tmp_path, monkeypatch):
-    """Two same-context sessions record the SAME (qubit, field): the later
+    """Two same-context sessions record the SAME (component, field): the later
     measurement wins on merge (not older-save-wins), and the persisted value matches
     its crediting record so provenance never shows it as 'external'."""
     from scqo import physical
@@ -224,28 +246,29 @@ def test_physical_same_field_concurrent_newest_wins(tmp_path, monkeypatch):
     assert info["status"] == "run" and info["run_id"] == "run-b"  # credited, not external
 
 
-def test_physical_non_float_legacy_values_dropped(tmp_path):
-    """Fresh start: a stray non-numeric (e.g. old nested) value is not read; history
-    is never rewritten."""
+def test_physical_pre_cutover_file_is_archived_aside(tmp_path):
+    """Fresh start: a physical.json without the "schema": 2 stamp is pre-cutover —
+    archived as *.v1.bak on first contact (values and any sidecar both) and never
+    read; the store starts empty and the next save writes a clean v2 file."""
     from scqo.physical import PhysicalStore
 
     path = tmp_path / "physical.json"
     path.write_text(json.dumps({
-        "values": {"q0": {"t1_s": {"alpha": 25e-6}}},  # old nested shape — a dict, not a float
+        "values": {"q0": {"t1_s": 25e-6}},
         "history": [{"timestamp": "2026-01-01T00:00:00+08:00", "qubit": "q0",
                      "field": "t1_s", "old": None, "new": 25e-6}],
     }), encoding="utf-8")
     store = PhysicalStore(path, setup="alpha")
+    assert (tmp_path / "physical.json.v1.bak").is_file()  # old bytes preserved...
+    assert not path.exists()                              # ...but never read
     assert store.get("q0", "t1_s") is None
-    assert store.snapshot() == {"q0": {}}
-    assert len(store.history()) == 1  # embedded history loads (pre-split fallback)
+    assert store.snapshot() == {} and store.history() == []
 
-    # the first save splits the embedded history into the sidecar and strips it
     store.record("q0", "t2_echo_s", 12e-6)
     store.save()
     data = json.loads(path.read_text(encoding="utf-8"))
-    assert "history" not in data
-    assert [r["new"] for r in read_history(path)] == [25e-6, 12e-6]
+    assert data["schema"] == 2 and "history" not in data
+    assert [r["new"] for r in read_history(path)] == [12e-6]  # v1 rows never merged
 
 
 def test_physical_save_takes_over_stale_lock_then_times_out_on_fresh(tmp_path, monkeypatch):
@@ -350,13 +373,14 @@ def test_physical_lock_is_released_only_by_its_owner(tmp_path):
 
 def test_persist_is_atomic_and_leaves_no_temp(tmp_path):
     path = tmp_path / "sub" / "scqo_state.json"  # parent created on first save
-    dev = RecordingDevice(_vendor(), state_path=str(path), setup="alpha")
-    dev.qubit("q0").pi_amp = 0.3
+    dev = RecordingDevice(_vendor(), _roster(), state_path=str(path), setup="alpha")
+    dev.component("q0").pi_amp = 0.3
     dev.save()
     assert path.is_file()
     assert list(path.parent.glob("*.tmp")) == []
     assert list(path.parent.glob("*.lock")) == []  # released after the save
     data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["schema"] == 2  # the component-cutover stamp
     assert "history" not in data  # values-only: history lives in the sidecar
     assert read_history(path)[0]["setup"] == "alpha"
 
@@ -366,21 +390,22 @@ def test_device_history_merges_same_setup_sessions(tmp_path):
     other's history rows — saves merge under the lock (values stay last-writer-wins,
     reseeded from the vendor in pull mode)."""
     path = str(tmp_path / "scqo_state.json")
-    a = RecordingDevice(_vendor(), state_path=path, setup="alpha")
-    b = RecordingDevice(_vendor(), state_path=path, setup="alpha")  # both pre-save
+    a = RecordingDevice(_vendor(), _roster(), state_path=path, setup="alpha")
+    b = RecordingDevice(_vendor(), _roster(), state_path=path, setup="alpha")  # both pre-save
 
-    a.qubit("q0").pi_amp = 0.3
+    a.component("q0").pi_amp = 0.3
     a.save()
-    b.qubit("q0").drive_freq = 3.9e9
+    b.component("q0").drive_freq = 3.9e9
     b.save()  # must NOT erase a's pi_amp row
 
     rows = {(r["field"], r["new"]) for r in read_history(path)}
     assert rows == {("pi_amp", 0.3), ("drive_freq", 3.9e9)}
 
 
-def test_state_file_legacy_embedded_history_fallback(tmp_path):
-    """A pre-split scqo_state.json (main's WIP wrote these) still loads its embedded
-    history; the next save splits it into the sidecar and strips the old key."""
+def test_pre_cutover_state_file_is_archived_on_save_path_too(tmp_path):
+    """The v2 gate applies at the SAVE-merge site as well: a pre-cutover
+    scqo_state.json (no schema stamp, embedded "history") is archived aside on
+    first contact and its rows never leak into the v2 sidecar."""
     path = tmp_path / "scqo_state.json"
     path.write_text(json.dumps({
         "config": {"q0": {"readout_freq": 5.9e9, "drive_freq": 3.87e9,
@@ -389,27 +414,29 @@ def test_state_file_legacy_embedded_history_fallback(tmp_path):
                      "field": "pi_amp", "old": 0.2, "new": 0.3, "setup": "alpha"}],
     }), encoding="utf-8")
 
-    dev = RecordingDevice(_vendor(), state_path=str(path), setup="alpha")
-    assert [r.new for r in dev.history()] == [0.3]  # embedded history loaded
-    dev.qubit("q0").pi_amp = 0.4
+    dev = RecordingDevice(_vendor(), _roster(), state_path=str(path), setup="alpha")
+    assert (tmp_path / "scqo_state.json.v1.bak").is_file()  # archived, not read
+    assert dev.history() == []
+    assert dev.component("q0").pi_amp == 0.2  # reseeded from the vendor
+    dev.component("q0").pi_amp = 0.4
     dev.save()
 
     data = json.loads(path.read_text(encoding="utf-8"))
-    assert "history" not in data  # split out on the first save
-    assert [r["new"] for r in read_history(path)] == [0.3, 0.4]  # nothing lost
+    assert data["schema"] == 2 and "history" not in data
+    assert [r["new"] for r in read_history(path)] == [0.4]  # v1 rows never resurrect
 
 
 def test_values_only_reset_keeps_history_sidecar(tmp_path):
     """The documented reset (delete scqo_state.json) reseeds calibration from the
     vendor but never silently drops provenance: the sidecar still loads."""
     path = tmp_path / "scqo_state.json"
-    dev = RecordingDevice(_vendor(), state_path=str(path), setup="alpha")
-    dev.qubit("q0").pi_amp = 0.3
+    dev = RecordingDevice(_vendor(), _roster(), state_path=str(path), setup="alpha")
+    dev.component("q0").pi_amp = 0.3
     dev.save()
 
     path.unlink()  # the reset: values gone, sidecar stays
-    fresh = RecordingDevice(_vendor(), state_path=str(path), setup="alpha")
-    assert fresh.qubit("q0").pi_amp == 0.2  # reseeded from the vendor
+    fresh = RecordingDevice(_vendor(), _roster(), state_path=str(path), setup="alpha")
+    assert fresh.component("q0").pi_amp == 0.2  # reseeded from the vendor
     assert [r.new for r in fresh.history()] == [0.3]  # provenance continuous
 
 
@@ -428,9 +455,9 @@ def test_read_history_skips_torn_trailing_line(tmp_path, capsys):
     from scqo._state_io import history_path
 
     history_path(path).write_text(
-        '{"timestamp": "2026-07-01T10:00:00+08:00", "qubit": "q0", '
+        '{"timestamp": "2026-07-01T10:00:00+08:00", "component": "q0", '
         '"field": "t1_s", "old": null, "new": 2.5e-05}\n'
-        '{"timestamp": "2026-07-01T10:01:00+08:00", "qubit": "q0", "fi',  # torn
+        '{"timestamp": "2026-07-01T10:01:00+08:00", "component": "q0", "fi',  # torn
         encoding="utf-8")
     rows = read_history(path)
     assert [r["new"] for r in rows] == [2.5e-05]
@@ -452,6 +479,7 @@ def test_two_users_two_setups_end_to_end(tmp_path, monkeypatch):
         '[cd1]\nstart = 2026-07-01\n'
         '[cd1.setup.alpha]\nbackend = "simulated"\n'
         '[cd1.setup.beta]\nbackend = "simulated"\n', encoding="utf-8")
+    (ddir / "components.toml").write_text(_COMPONENTS_TOML, encoding="utf-8")
     config = tmp_path / "config.toml"
     config.write_text(
         f"[lab]\ndevice = \"chipT\"\ndata_root = '{(tmp_path / 'data').as_posix()}'\n",
@@ -461,13 +489,13 @@ def test_two_users_two_setups_end_to_end(tmp_path, monkeypatch):
 
     user.write_text('setup = "alpha"\n', encoding="utf-8")
     sess_a, _ = _backends.build_session(str(config))
-    res_a = sess_a.run("resonator_spectroscopy", {"qubits": ["q0"]}, update="apply")
-    t1_a = sess_a.run("qubit_relaxation", {"qubits": ["q0"]}, update="apply")
+    res_a = sess_a.run("resonator_spectroscopy", {"targets": ["q0"]}, update="apply")
+    t1_a = sess_a.run("qubit_relaxation", {"targets": ["q0"]}, update="apply")
 
     user.write_text('setup = "beta"\n', encoding="utf-8")
     sess_b, _ = _backends.build_session(str(config))
-    res_b = sess_b.run("resonator_spectroscopy", {"qubits": ["q0"]}, update="apply")
-    t1_b = sess_b.run("qubit_relaxation", {"qubits": ["q0"]}, update="apply")
+    res_b = sess_b.run("resonator_spectroscopy", {"targets": ["q0"]}, update="apply")
+    t1_b = sess_b.run("qubit_relaxation", {"targets": ["q0"]}, update="apply")
 
     scqo_a = ddir / "cd1" / "alpha" / "scqo"
     scqo_b = ddir / "cd1" / "beta" / "scqo"
@@ -484,7 +512,7 @@ def test_two_users_two_setups_end_to_end(tmp_path, monkeypatch):
     assert not (ddir / "scqo_state.json").exists()  # no retired per-device file
 
     # independent physical stores, each FLAT with only its own setup's measurements
-    # (the resonator run also proposes f_r/kappa sample physics)
+    # (the resonator run also proposes f_r/kappa sample physics on q0_res)
     phys_a = json.loads((scqo_a / "physical.json").read_text(encoding="utf-8"))
     phys_b = json.loads((scqo_b / "physical.json").read_text(encoding="utf-8"))
     assert isinstance(phys_a["values"]["q0"]["t1_s"], float)

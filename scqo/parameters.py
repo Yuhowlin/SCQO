@@ -21,10 +21,14 @@ class Parameters(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
 
-class QubitSelection(Parameters):
-    """Mixin: which qubits an experiment runs on."""
+class TargetSelection(Parameters):
+    """Mixin: which components an experiment runs on.
 
-    qubits: list[str] = Field(..., description="Names of the qubits to measure, e.g. ['q0', 'q1'].")
+    Targets are roster component names whose INSTRUMENT category matches the
+    experiment's ``target_category`` (validated pre-probe by the Session).
+    """
+
+    targets: list[str] = Field(..., description="Component names to measure, e.g. ['q0', 'q1'].")
 
 
 class AveragingParameters(Parameters):

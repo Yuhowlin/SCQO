@@ -8,8 +8,8 @@ from __future__ import annotations
 from scqo.provenance import live_run_map, live_sources, summarize_live
 
 
-def _rec(qubit, field, new, run_id=None, **extra):
-    return {"timestamp": "2026-07-12T10:00:00+08:00", "qubit": qubit, "field": field,
+def _rec(component, field, new, run_id=None, **extra):
+    return {"timestamp": "2026-07-12T10:00:00+08:00", "component": component, "field": field,
             "old": None, "new": new, "experiment": "resonator_spectroscopy",
             "run_id": run_id, "operator": "shiau", **extra}
 
@@ -55,7 +55,7 @@ def test_operator_suggested_value_credits_the_run(tmp_path):
     record carries the operator's proposal, so the credit is truthful)."""
     from scqo import Session, register
     from scqo.experiments import ResonatorSpectroscopy
-    from scqo.testing import InMemoryDevice, SimulatedBackend
+    from scqo.testing import InMemoryDevice, SimulatedBackend, demo_roster
 
     @register
     class _PvResonatorSpectroscopy(ResonatorSpectroscopy):  # idempotent re-register
@@ -63,8 +63,8 @@ def test_operator_suggested_value_credits_the_run(tmp_path):
             return None
 
     sess = Session(SimulatedBackend(InMemoryDevice({"q0": {"readout_freq": 5.95e9}})),
-                   data_root=tmp_path / "data", device_name="devA")
-    result = sess.run("resonator_spectroscopy", {"qubits": ["q0"]}, update="none")
+                   demo_roster(), data_root=tmp_path / "data", device_name="devA")
+    result = sess.run("resonator_spectroscopy", {"targets": ["q0"]}, update="none")
     sess.suggest(result["run_id"], {"q0.t1_s": 2.5e-5}, comment="read off the decay")
     sess.accept(result["run_id"])
 

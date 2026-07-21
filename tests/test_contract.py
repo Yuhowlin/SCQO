@@ -48,7 +48,7 @@ CASES = [
 
 def _acquire(cls):
     backend = SimulatedBackend(_device())
-    exp = cls(backend, cls.Parameters(qubits=["q0", "q1"]))
+    exp = cls(backend, cls.Parameters(targets=["q0", "q1"]))
     exp.sweep_axes = exp.define_sweep()
     return exp, backend.acquire(exp)
 
@@ -58,7 +58,7 @@ def test_simulated_probe_output_conforms(cls, sweep):
     exp, ds = _acquire(cls)
     # the declared contract's sweep axis matches define_sweep, and the dataset conforms
     assert cls.Contract.sweeps == (sweep,)
-    assert cls.Contract.dims == ("qubit", sweep)
+    assert cls.Contract.dims == ("target", sweep)
     exp.Contract.validate(ds)  # does not raise
     assert exp.Contract.conforms(ds)
 
@@ -71,7 +71,7 @@ def test_run_enforces_contract():
         def acquire(self, experiment):
             return super().acquire(experiment).drop_vars("I")
 
-    exp = _Ram(DropIBackend(_device()), _Ram.Parameters(qubits=["q0"]))
+    exp = _Ram(DropIBackend(_device()), _Ram.Parameters(targets=["q0"]))
     with pytest.raises(ContractError):
         exp.run()
 
@@ -97,14 +97,14 @@ def test_two_axis_contract():
     contract = DatasetContract(
         sweeps=("detuning_hz", "power_dbm"), sweep_units=("Hz", "dBm"), variables=("I", "Q")
     )
-    assert contract.dims == ("qubit", "detuning_hz", "power_dbm")
+    assert contract.dims == ("target", "detuning_hz", "power_dbm")
 
     det, pwr = np.linspace(-1e6, 1e6, 5), np.linspace(-50, -20, 3)
     data = np.zeros((2, det.size, pwr.size))
     ds2 = xr.Dataset(
-        {"I": (("qubit", "detuning_hz", "power_dbm"), data),
-         "Q": (("qubit", "detuning_hz", "power_dbm"), data)},
-        coords={"qubit": ["q0", "q1"], "detuning_hz": det, "power_dbm": pwr},
+        {"I": (("target", "detuning_hz", "power_dbm"), data),
+         "Q": (("target", "detuning_hz", "power_dbm"), data)},
+        coords={"target": ["q0", "q1"], "detuning_hz": det, "power_dbm": pwr},
     )
     contract.validate(ds2)  # conforms
 

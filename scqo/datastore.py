@@ -5,7 +5,7 @@ The **run folder is the truth**: each ``Session.run`` writes a self-contained fo
 
     <data_root>/<device_name>/<YYYY-MM-DD>/<run_id>/
         record.json          # RunRecord manifest — written LAST = completion marker
-        dataset.nc           # canonical contract-form dataset (dims qubit x sweep)
+        dataset.nc           # canonical contract-form dataset (dims target x sweep)
         parameters.json      # experiment name + validated Parameters
         result.json          # structured Result (outcomes / fit / error)
         device_before.json   # SCQO config snapshot before the run
@@ -50,7 +50,7 @@ from pydantic import BaseModel, Field
 from ._state_io import _file_lock
 from .config import _current_operator
 
-SCHEMA_VERSION = 7  # v7: named setups — setup_since column/field renamed setup (the setup's NAME)
+SCHEMA_VERSION = 8  # v8: component cutover — run targets column renamed from qubits
 RECORD_FILE = "record.json"
 INDEX_FILE = "index.sqlite"
 DEVICES_FILE = "devices.toml"  # optional human-edited sample registry (see load_device_registry)
@@ -76,7 +76,7 @@ CREATE TABLE IF NOT EXISTS runs (
   operator       TEXT NOT NULL DEFAULT '',
   cooldown       TEXT NOT NULL DEFAULT '',
   setup          TEXT NOT NULL DEFAULT '',
-  qubits         TEXT NOT NULL,
+  targets        TEXT NOT NULL,
   outcome        TEXT NOT NULL,
   outcomes       TEXT NOT NULL,
   fit            TEXT,
@@ -112,7 +112,7 @@ class RunRecord(BaseModel):
     operator: str = ""  # OS login of whoever ran it (multi-user SSH provenance)
     cooldown: str = ""  # active cooldown-cycle id when the run started ("" = none declared)
     setup: str = ""  # NAME of the setup in effect ("" = none declared / ambiguous unbound)
-    qubits: list[str]
+    targets: list[str]
     started_at: str  # ISO-8601 local time with UTC offset (matches the folder dates)
     ended_at: str
     outcome: str  # summary: successful | partial | failed | no_data
@@ -302,7 +302,7 @@ class DataStore:
             operator=_current_operator(),
             cooldown=cooldown,
             setup=setup,
-            qubits=list(params_dump.get("qubits", [])),
+            targets=list(params_dump.get("targets", [])),
             started_at=started_at,
             ended_at=ended_at,
             outcome=_summarize(outcomes),
@@ -326,7 +326,7 @@ class DataStore:
         self,
         *,
         experiment: str | None = None,
-        qubit: str | None = None,
+        target: str | None = None,
         tag: str | None = None,
         since: str | None = None,
         until: str | None = None,
@@ -343,9 +343,9 @@ class DataStore:
         if experiment is not None:
             where.append("experiment = ?")
             args.append(experiment)
-        if qubit is not None:
-            where.append("EXISTS (SELECT 1 FROM json_each(runs.qubits) WHERE value = ?)")
-            args.append(qubit)
+        if target is not None:
+            where.append("EXISTS (SELECT 1 FROM json_each(runs.targets) WHERE value = ?)")
+            args.append(target)
         if tag is not None:
             where.append("EXISTS (SELECT 1 FROM json_each(runs.tags) WHERE value = ?)")
             args.append(tag)
@@ -540,7 +540,13 @@ class DataStore:
             for record_path in sorted(self.data_root.glob(f"*/*/*/{RECORD_FILE}")):
                 run_dir = record_path.parent
                 try:
-                    record = RunRecord(**json.loads(record_path.read_text(encoding="utf-8")))
+                    data = json.loads(record_path.read_text(encoding="utf-8"))
+                    # THE one data exemption of the no-compat policy: run folders
+                    # are truth and are never fresh-started, so pre-cutover
+                    # records (key "qubits") stay findable under the new column.
+                    if "targets" not in data and "qubits" in data:
+                        data["targets"] = data.pop("qubits")
+                    record = RunRecord(**data)
                     parameters = json.loads((run_dir / "parameters.json").read_text(encoding="utf-8"))
                     result = json.loads((run_dir / "result.json").read_text(encoding="utf-8"))
                 except Exception as err:  # unreadable run folder: skip, keep indexing
@@ -582,7 +588,7 @@ class DataStore:
     def _upsert(db: sqlite3.Connection, record: RunRecord, parameters: dict, fit: dict) -> None:
         db.execute(
             "INSERT OR REPLACE INTO runs (run_id, started_at, ended_at, experiment, device,"
-            " backend, operator, cooldown, setup, qubits, outcome, outcomes, fit, tags,"
+            " backend, operator, cooldown, setup, targets, outcome, outcomes, fit, tags,"
             " note, error, parameters, updated_device, suggestions, suggestions_pending,"
             " path, schema_version)"
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -596,7 +602,7 @@ class DataStore:
                 record.operator,
                 record.cooldown,
                 record.setup,
-                json.dumps(record.qubits),
+                json.dumps(record.targets),
                 record.outcome,
                 json.dumps(record.outcomes),
                 json.dumps(_scrub(fit)),
@@ -615,7 +621,7 @@ class DataStore:
     @staticmethod
     def _row_to_dict(row: sqlite3.Row) -> dict:
         out = dict(row)
-        for key in ("qubits", "outcomes", "fit", "tags", "parameters", "suggestions"):
+        for key in ("targets", "outcomes", "fit", "tags", "parameters", "suggestions"):
             if out.get(key) is not None:
                 out[key] = json.loads(out[key])
         out["updated_device"] = bool(out["updated_device"])
@@ -641,8 +647,10 @@ def _load_toml_registry(path: Path) -> dict:
     else:  # pragma: no cover - py3.10 fallback
         import tomli as tomllib
     try:
-        with open(path, "rb") as f:
-            return tomllib.load(f)
+        # utf-8-sig: tolerate a UTF-8 BOM — Windows PowerShell 5.1's
+        # `Set-Content -Encoding utf8` writes one, and these registries are
+        # exactly the files operators write from PowerShell.
+        return tomllib.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, tomllib.TOMLDecodeError) as err:
         print(f"warning: ignoring unreadable {path}: {err}", file=sys.stderr)
         return {}
@@ -691,8 +699,8 @@ def load_cooldowns(data_root: str | Path, device: str) -> dict:
     else:  # pragma: no cover - py3.10 fallback
         import tomli as tomllib
     try:
-        with open(path, "rb") as f:
-            cycles = tomllib.load(f)
+        # utf-8-sig: tolerate a PowerShell-written UTF-8 BOM (see _load_toml_registry)
+        cycles = tomllib.loads(path.read_text(encoding="utf-8-sig"))
     except tomllib.TOMLDecodeError as err:
         raise ValueError(f"invalid cooldown registry {path}: {err}") from None
     cids: dict[str, str] = {}

@@ -39,10 +39,21 @@ class Experiment(ABC):
     Result: ClassVar[type[Result]]
     #: canonical dataset every backend's probe must emit (and estimate() consumes).
     Contract: ClassVar[DatasetContract]
+    #: instrument category the targets must have (roster-validated pre-probe).
+    target_category: ClassVar[str] = "ReadableTransmon"
+    #: operations every target must declare in the roster (e.g. ("rx", "readout")).
+    required_operations: ClassVar[tuple[str, ...]] = ()
+    #: instrument categories a ``flux_component`` Parameter may name (experiments
+    #: whose probe can only sweep a qubit z-line narrow this to ReadableTransmon;
+    #: irrelevant unless the experiment's Parameters carry ``flux_component``).
+    flux_component_categories: ClassVar[tuple[str, ...]] = ("ReadableTransmon", "TransmonPair")
 
     def __init__(self, backend: Backend, params: Parameters) -> None:
         self.backend = backend
         self.params = params
+        #: run tags appended by design-seeded anchors ("seeded:<comp>.<field>");
+        #: Session.run merges them into the persisted tags.
+        self.seed_tags: list[str] = []
         #: device state experiments read/write. Defaults to the backend's vendor device
         #: (standalone use, unrecorded); the Session swaps in a RecordingDevice so its
         #: runs are recorded into the authoritative SCQO config + history.
@@ -73,6 +84,43 @@ class Experiment(ABC):
         Optional. Enables the simulated backend, offline tests, and AI dry-runs.
         """
         raise NotImplementedError(f"{type(self).__name__} provides no simulator.")
+
+    # ------------------------------------------------------------------ anchors
+    def anchor(self, name: str, field: str) -> float:
+        """The sweep anchor for one instrument field: the STANDING value if set,
+        else the DESIGN fallback declared by the field's ``design_source``
+        (bring-up on a fresh chip: the resonator search window centers on the
+        design ``f_r_hz`` before anything is measured). A design-seeded anchor
+        tags the run ``"seeded:<component>.<field>"`` — searchable via
+        ``scqo find --tag``. Raises when neither exists (a clear bring-up
+        instruction beats a sweep around garbage)."""
+        view = self.device.component(name)
+        try:
+            value = getattr(view, field)
+        except (KeyError, AttributeError):
+            value = None
+        if value is not None:
+            return float(value)
+        spec = None
+        roster = getattr(self.device, "roster", None)
+        if roster is not None:
+            try:
+                _side, spec = roster.resolve(name, field)
+            except KeyError:
+                spec = None
+        source = getattr(spec, "design_source", None) if spec else None
+        if source is not None:
+            src_cat, src_field = source
+            src_name = name if src_cat is None else self.device.one(name, src_cat)
+            design = self.device.design(src_name, src_field)
+            if design is not None:
+                tag = f"seeded:{src_name}.{src_field}"
+                if tag not in self.seed_tags:
+                    self.seed_tags.append(tag)
+                return float(design)
+        raise ValueError(
+            f"{name}.{field} has no standing value and no design fallback — set it "
+            f"(scqo set {name}.{field}=...) or declare a design value in components.toml")
 
     # ------------------------------------------------------------------ backend
     @abstractmethod

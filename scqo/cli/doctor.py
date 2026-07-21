@@ -108,6 +108,24 @@ def _setup_checks(cfg, backends: dict) -> list[tuple[str, str, str]]:
     return out
 
 
+def _roster_check(cfg) -> tuple[str, str, str]:
+    """The device's component roster (components.toml) — REQUIRED to run; the
+    trial-phase rule keeps every consistency issue a WARNING, never a failure."""
+    from scqo.roster import COMPONENTS_FILE, load_components
+
+    device_dir = Path(cfg.data_root) / cfg.device
+    try:
+        roster = load_components(device_dir)
+    except FileNotFoundError:
+        return (FAIL, "roster", f"{device_dir / COMPONENTS_FILE} missing — required "
+                                f"since the component cutover; scqo state --rule + "
+                                f"TUTORIAL section 9 show the template")
+    except ValueError as err:
+        return (FAIL, "roster", str(err))
+    names = ", ".join(sorted(roster.components))
+    return (OK, "roster", f"{len(roster.components)} component(s): {names}")
+
+
 def main(argv: list[str] | None = None, prog: str | None = None) -> int:
     parser = argparse.ArgumentParser(prog=prog, description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -165,6 +183,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
             checks.append((OK, "registries", f"devices.toml entries: {len(load_device_registry(cfg.data_root))}"))
             if cfg.device is not None:
                 checks.extend(_setup_checks(cfg, backends))
+                checks.append(_roster_check(cfg))
 
         try:
             from ._backends import ensure_demo_experiments

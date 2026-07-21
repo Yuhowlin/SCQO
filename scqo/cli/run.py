@@ -1,7 +1,7 @@
 """Run any cataloged experiment; every run is saved + searchable.
 
     scqo run                                        # no arguments = show the menu
-    scqo run resonator_spectroscopy --qubits q1 --tag mytest --note "first try"
+    scqo run resonator_spectroscopy --targets q1 --tag mytest --note "first try"
     scqo run qubit_ramsey --set num_points=201
     scqo run resonator_spectroscopy --no-update     # analyze only, no writeback
 

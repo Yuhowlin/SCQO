@@ -12,7 +12,7 @@ import json
 import os
 import sys
 
-from ._backends import build_session, default_qubits, ensure_demo_experiments
+from ._backends import build_session, default_targets, ensure_demo_experiments
 from ._review import format_table, review_interactively
 
 
@@ -76,7 +76,8 @@ def run_experiment_cli(
     if experiment is None:
         parser.add_argument("experiment", nargs="?", help="experiment name; omit to list the catalog")
     parser.add_argument("--params", help="parameters as a JSON file path or an inline JSON string")
-    parser.add_argument("--qubits", nargs="+", help="qubits to measure (default: all in the device)")
+    parser.add_argument("--targets", nargs="+",
+                        help="components to measure (default: every ReadableTransmon in the roster)")
     parser.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
                         help="override one parameter (repeatable), e.g. --set num_points=201")
     parser.add_argument("--tag", action="append", default=[], dest="tags",
@@ -120,16 +121,16 @@ def run_experiment_cli(
             else:
                 msg += '\nExamples:  --params my_params.json   or   --params "{""num_points"": 201}"'
             raise SystemExit(msg)
-    if args.qubits:
-        params["qubits"] = args.qubits
+    if args.targets:
+        params["targets"] = args.targets
     for item in args.set:
         key, _, value = item.partition("=")
         params[key] = _parse_value(value)
     file_defaults = cfg.parameter_defaults.get(name, {})
     # All-device fallback only when NEITHER the command line nor the parameters file
-    # names qubits — a file-supplied qubit list must survive to the Session merge.
-    if "qubits" not in params and "qubits" not in file_defaults:
-        params["qubits"] = default_qubits(sess)
+    # names targets — a file-supplied target list must survive to the Session merge.
+    if "targets" not in params and "targets" not in file_defaults:
+        params["targets"] = default_targets(sess, name)
 
     applied = sorted(k for k in file_defaults if k not in params)
     if applied:  # stderr: stdout stays parseable JSON (| jq etc.)

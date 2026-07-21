@@ -102,11 +102,10 @@ def _load_parameter_defaults(path_setting: str | None) -> tuple[dict[str, dict],
         path = PARAMS_DEFAULT_PATH
         if not path.is_file():
             return {}, None
-    with open(path, "rb") as f:
-        try:
-            raw = tomllib.load(f)
-        except tomllib.TOMLDecodeError as err:
-            raise ValueError(f"invalid parameter-defaults file {path}: {err}") from None
+    try:  # utf-8-sig: tolerate a PowerShell-written UTF-8 BOM
+        raw = tomllib.loads(path.read_text(encoding="utf-8-sig"))
+    except tomllib.TOMLDecodeError as err:
+        raise ValueError(f"invalid parameter-defaults file {path}: {err}") from None
     for name, table in raw.items():
         if not isinstance(table, dict):
             raise ValueError(
@@ -137,11 +136,10 @@ def _load_user_overlay() -> tuple[dict, Path | None]:
         path = USER_DEFAULT_PATH
         if not path.is_file():
             return {}, None
-    with open(path, "rb") as f:
-        try:
-            raw = tomllib.load(f)
-        except tomllib.TOMLDecodeError as err:
-            raise ValueError(f"invalid user overlay {path}: {err}") from None
+    try:  # utf-8-sig: tolerate a PowerShell-written UTF-8 BOM
+        raw = tomllib.loads(path.read_text(encoding="utf-8-sig"))
+    except tomllib.TOMLDecodeError as err:
+        raise ValueError(f"invalid user overlay {path}: {err}") from None
     unknown = sorted(set(raw) - set(USER_ALLOWED_KEYS))
     if unknown:
         raise ValueError(
@@ -191,8 +189,8 @@ def load(path: str | Path | None = None) -> LabConfig:
     candidates = [Path(p) for p in (path, env, DEFAULT_PATH) if p]
     for candidate in candidates:
         if candidate.is_file():
-            with open(candidate, "rb") as f:
-                raw = tomllib.load(f)
+            # utf-8-sig: tolerate a PowerShell-written UTF-8 BOM
+            raw = tomllib.loads(candidate.read_text(encoding="utf-8-sig"))
             lab = raw.pop("lab", {})
             # Per-user overlay (personal keys only; applies only ON TOP of a found base
             # config). The user names the SAMPLE they work on; which instrument that
@@ -225,7 +223,7 @@ def load(path: str | Path | None = None) -> LabConfig:
     return LabConfig(parameter_defaults=parameter_defaults, parameters_source=parameters_source)
 
 
-def make_session(backend: Backend, cfg: LabConfig, *, backend_label: str,
+def make_session(backend: Backend, cfg: LabConfig, roster, *, backend_label: str,
                  setup_name: str = "", cooldown_id: str = "") -> Session:
     """Build a Session wired to the lab config (datastore, state file, default tags).
 
@@ -251,6 +249,7 @@ def make_session(backend: Backend, cfg: LabConfig, *, backend_label: str,
                   if saved else None)
     return Session(
         backend,
+        roster,
         state_path=state_path,
         data_root=cfg.data_root if saved else None,
         device_name=cfg.device or "device",

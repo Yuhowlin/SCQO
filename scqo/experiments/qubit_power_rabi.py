@@ -19,12 +19,12 @@ from pydantic import Field
 from .._scqat import per_qubit_results
 from ._sim import stable_seed
 from ..contract import DatasetContract
-from ..parameters import AveragingParameters, QubitSelection
+from ..parameters import AveragingParameters, TargetSelection
 from ..experiment import Experiment
 from ..result import Outcome, Result
 
 
-class QubitPowerRabiParameters(QubitSelection, AveragingParameters):
+class QubitPowerRabiParameters(TargetSelection, AveragingParameters):
     """Inputs for power Rabi."""
 
     min_amp_factor: float = Field(0.0, ge=0, description="Lowest drive amplitude, as a factor of current pi_amp.")
@@ -53,6 +53,7 @@ class QubitPowerRabi(Experiment):
     Contract: ClassVar[DatasetContract] = DatasetContract(
         sweeps=("amp_factor",), sweep_units=("dimensionless",), variables=("I", "Q")
     )
+    required_operations: ClassVar[tuple[str, ...]] = ("rx", "readout")
 
     params: QubitPowerRabiParameters
 
@@ -65,11 +66,11 @@ class QubitPowerRabi(Experiment):
 
     def simulate(self, coords: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         factor = coords["amp_factor"]
-        qubits = self.params.qubits
-        rng = np.random.default_rng(stable_seed("qubit_power_rabi", *qubits))
-        i_data = np.empty((len(qubits), factor.size))
+        targets = self.params.targets
+        rng = np.random.default_rng(stable_seed("qubit_power_rabi", *targets))
+        i_data = np.empty((len(targets), factor.size))
         q_data = np.empty_like(i_data)
-        for k in range(len(qubits)):
+        for k in range(len(targets)):
             factor_pi = rng.uniform(0.85, 1.15)  # miscalibration to recover (1.0 == perfect)
             population = 0.5 - 0.5 * np.cos(np.pi * factor / factor_pi)
             noise = 0.02
@@ -88,10 +89,10 @@ class QubitPowerRabi(Experiment):
         results = per_qubit_results(prepared, PowerRabiEstimator(), artifact_dir=self.artifact_dir)
 
         result = QubitPowerRabiResult()
-        for qubit in self.params.qubits:
+        for qubit in self.params.targets:
             r = results[qubit]
             factor_pi = float(r["opt_amp_prefactor"])
-            old = float(self.device.qubit(qubit).pi_amp)
+            old = float(self.device.component(qubit).pi_amp)
             result.fit[qubit] = {
                 "pi_amp": old * factor_pi,
                 "pi_amp_factor": factor_pi,
@@ -105,4 +106,4 @@ class QubitPowerRabi(Experiment):
             return
         for qubit, fit in self.result.fit.items():
             if self.result.outcomes[qubit] is Outcome.SUCCESSFUL:
-                self.device.qubit(qubit).pi_amp = fit["pi_amp"]
+                self.device.component(qubit).pi_amp = fit["pi_amp"]

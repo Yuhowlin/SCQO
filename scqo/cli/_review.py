@@ -6,8 +6,8 @@ facing goes to **stderr** — stdout stays parseable result JSON (``| jq`` safe)
 
 Selection grammar (``parse_selection``): ``a``/``all`` — every pending item;
 ``n``/``none``/empty — nothing (the default: no update); otherwise a comma/space
-list mixing displayed row numbers (1-based), qubit names (``q0``), field names
-(``readout_freq``) and ``qubit.field`` pairs. Pure functions here are unit-tested
+list mixing displayed row numbers (1-based), component names (``q0``, ``q0_res``),
+field names (``readout_freq``) and ``component.field`` pairs. Pure functions here are unit-tested
 without a TTY.
 """
 
@@ -16,7 +16,7 @@ from __future__ import annotations
 import sys
 from typing import Any
 
-from ..suggestions import field_spec, pending_count
+from ..suggestions import pending_count
 
 
 def _fmt_value(value: Any) -> str:
@@ -28,13 +28,12 @@ def _fmt_value(value: Any) -> str:
 def format_table(suggestions: list[dict]) -> str:
     """Numbered table of a run's suggestions (row numbers are stable: stored order)."""
     header = (
-        f"  {'#':>3} {'qubit':6} {'field':18} {'store':10} "
+        f"  {'#':>3} {'component':10} {'field':18} {'store':10} "
         f"{'current':>14}    {'suggested':>14}   status"
     )
     lines = [header]
     for i, s in enumerate(suggestions, start=1):
-        spec = field_spec(s["field"])
-        unit = f" {spec.unit}" if spec and spec.unit else ""
+        unit = f" {s['unit']}" if s.get("unit") else ""
         status = s.get("status", "pending")
         if s.get("decided_by"):
             status += f" (by {s['decided_by']})"
@@ -42,7 +41,7 @@ def format_table(suggestions: list[dict]) -> str:
             status += f" [operator: {s['proposed_by']}]" if s.get("proposed_by") else " [operator]"
         note = f"  # {s['comment']}" if s.get("comment") else ""
         lines.append(
-            f"  {i:>3} {s['qubit']:6} {s['field']:18} {s['store']:10} "
+            f"  {i:>3} {s['component']:10} {s['field']:18} {s['store']:10} "
             f"{_fmt_value(s.get('before')):>14} -> {_fmt_value(s['after']):>14}{unit}"
             f"   {status}{note}"
         )
@@ -70,12 +69,12 @@ def parse_selection(text: str, suggestions: list[dict], *, allow_decided: bool =
                 raise ValueError(f"row #{token} is already decided (re-decide with --reapply)")
             matches = [idx]
         elif "." in token:
-            qubit, _, field = token.partition(".")
+            name, _, field = token.partition(".")
             matches = [i for i in selectable
-                       if suggestions[i]["qubit"] == qubit and suggestions[i]["field"] == field]
+                       if suggestions[i]["component"] == name and suggestions[i]["field"] == field]
         else:
             matches = [i for i in selectable
-                       if token in (suggestions[i]["qubit"], suggestions[i]["field"])]
+                       if token in (suggestions[i]["component"], suggestions[i]["field"])]
         if not matches:
             raise ValueError(f"nothing {'selectable' if allow_decided else 'pending'} matches {token!r}")
         chosen += [i for i in matches if i not in chosen]
@@ -90,12 +89,12 @@ def format_summary(summary: dict) -> str:
     for item in summary.get("applied", []):
         was = item.get("current") if item.get("current") is not None else item.get("before")
         lines.append(
-            f"  applied  {item['qubit']}.{item['field']} "
+            f"  applied  {item['component']}.{item['field']} "
             f"{_fmt_value(was)} -> {_fmt_value(item['after'])}  [{item['store']}]"
         )
     for item in summary.get("stale", []):
         lines.append(
-            f"  SKIPPED  {item['qubit']}.{item['field']}: suggested from "
+            f"  SKIPPED  {item['component']}.{item['field']}: suggested from "
             f"{_fmt_value(item['before'])} but the current value is "
             f"{_fmt_value(item['current'])} (stale — --force to apply anyway)"
         )
@@ -157,7 +156,7 @@ def review_interactively(
         return None
     while True:
         answer = _ask(
-            "apply which updates? [a]ll / [n]one (default) / rows, qubit, field or qubit.field: "
+            "apply which updates? [a]ll / [n]one (default) / rows, component, field or component.field: "
         )
         try:
             # Decided rows are selectable here: the confirmation below replaces
@@ -191,22 +190,22 @@ def review_interactively(
             when = (item["decided_at"] or "")[:10] or "?"
             who = item["decided_by"] or "?"
             if item["status"] == "accepted":
-                question = (f"row {row} {item['qubit']}.{item['field']} was accepted {when} by {who} - "
+                question = (f"row {row} {item['component']}.{item['field']} was accepted {when} by {who} - "
                             f"re-apply (rollback, overwriting the current "
                             f"{_fmt_value(item['current'])})? [y/N]: ")
             else:
-                question = (f"row {row} {item['qubit']}.{item['field']} was rejected {when} by {who} - "
+                question = (f"row {row} {item['component']}.{item['field']} was rejected {when} by {who} - "
                             f"accept it after all? [y/N]: ")
             if not _confirm(question):
                 print(f"  skipped row {row} (unchanged)", file=sys.stderr)
                 continue
         elif item["status"] == "pending" and item["stale"] and not force:
-            print(f"row {row} {item['qubit']}.{item['field']}: suggested from "
+            print(f"row {row} {item['component']}.{item['field']}: suggested from "
                   f"{_fmt_value(item['before'])} but the current value is "
                   f"{_fmt_value(item['current'])} (changed since this run).", file=sys.stderr)
             if not _confirm(f"  overwrite {_fmt_value(item['current'])} -> "
                             f"{_fmt_value(item['after'])}? [y/N]: "):
-                print(f"  skipped {item['qubit']}.{item['field']} (stays pending)", file=sys.stderr)
+                print(f"  skipped {item['component']}.{item['field']} (stays pending)", file=sys.stderr)
                 continue
         kept.append(i)
 

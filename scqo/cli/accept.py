@@ -3,7 +3,7 @@
     scqo accept                                  # list runs with pending suggestions
     scqo accept RUN_ID --list                    # show the suggestion table, decide nothing
     scqo accept RUN_ID                           # terminal: pick interactively; script: apply ALL pending
-    scqo accept RUN_ID --qubit q0 --field readout_freq --comment "looks right"
+    scqo accept RUN_ID --component q0 --field readout_freq --comment "looks right"
     scqo accept RUN_ID --reject --comment "fit chased a noise spike"
     scqo accept RUN_ID --force                   # bypass the cooldown-era + staleness guards
     scqo accept RUN_ID --reapply --field readout_freq --comment "rolling back to this run"
@@ -52,17 +52,17 @@ def _load_record(store: DataStore, run_id: str) -> dict:
         raise SystemExit(err.args[0] if err.args else str(err))
 
 
-def _no_suggestions_hint(run_id: str, qubits: list[str]) -> str:
+def _no_suggestions_hint(run_id: str, targets: list[str]) -> str:
     """The estimator proposed nothing (it failed, or --no-update): name the escape
     hatch. Without this the fit-failed run is a dead end — the very moment someone
     needs to learn `scqo suggest` exists. ASCII only: this text reaches consoles in
     whatever codepage the lab runs."""
-    qubit = qubits[0] if qubits else "q0"  # the run's OWN first qubit: paste-ready
+    name = targets[0] if targets else "q0"  # the run's OWN first target: paste-ready
     return (
         f"{run_id}: no suggested updates recorded - the estimator proposed none.\n"
         f"If the run's figure shows the value, attach it yourself:\n"
-        f"  scqo suggest {run_id} {qubit}.FIELD=VALUE   "
-        f"(e.g. {qubit}.readout_freq=5.912e9)"
+        f"  scqo suggest {run_id} {name}.FIELD=VALUE   "
+        f"(e.g. {name}.readout_freq=5.912e9)"
     )
 
 
@@ -75,8 +75,8 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
                         help="show the run's suggestion table and exit (decides nothing)")
     parser.add_argument("--reject", action="store_true",
                         help="reject instead of apply (datastore-only, no instrument)")
-    parser.add_argument("--qubit", action="append", default=None,
-                        help="restrict to one qubit (repeatable)")
+    parser.add_argument("--component", action="append", default=None,
+                        help="restrict to one component (repeatable)")
     parser.add_argument("--field", action="append", default=None,
                         help="restrict to one field (repeatable), e.g. readout_freq")
     parser.add_argument("--comment", default="", help="decision comment stored with each item")
@@ -110,7 +110,8 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
         record = _load_record(store, args.run_id)
         suggestions = record.get("suggestions", [])
         if not suggestions:
-            print(_no_suggestions_hint(args.run_id, record.get("qubits", [])))
+            print(_no_suggestions_hint(args.run_id,
+                                       record.get("targets") or record.get("qubits") or []))
             return 0
         print(f"{args.run_id} ({pending_count(suggestions)} pending):")
         print(format_table(suggestions))
@@ -118,7 +119,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
 
     if args.reject:  # ------------------------------------------ datastore-only
         _load_record(store, args.run_id)  # loud unknown-run_id check first
-        summary = reject_suggestions(store, args.run_id, qubits=args.qubit,
+        summary = reject_suggestions(store, args.run_id, components=args.component,
                                      fields=args.field, comment=args.comment)
         print(json.dumps(summary, indent=2))
         return 0
@@ -130,7 +131,9 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
     # session path, whose wrong-device error names the sample to select.
     record = _load_record(store, args.run_id)
     if not record.get("suggestions") and record.get("device") == store.device_name:
-        print(_no_suggestions_hint(args.run_id, record.get("qubits", [])), file=sys.stderr)
+        print(_no_suggestions_hint(args.run_id,
+                                   record.get("targets") or record.get("qubits") or []),
+              file=sys.stderr)
         # stdout stays parseable: the same empty summary Session.accept would return
         print(json.dumps({"run_id": args.run_id, "applied": [], "stale": [],
                           "errors": [], "pending_left": 0}, indent=2))
@@ -139,7 +142,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
     from ._backends import build_session  # imports drivers: only the apply path pays
 
     sess, _ = build_session(args.config)
-    interactive = (args.qubit is None and args.field is None
+    interactive = (args.component is None and args.field is None
                    and sys.stdin.isatty() and sys.stderr.isatty())
     try:
         if interactive:
@@ -147,7 +150,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
                                            force=args.force, comment=args.comment,
                                            reapply=args.reapply)
             return 0 if summary is None else (1 if summary["errors"] or summary["stale"] else 0)
-        summary = sess.accept(args.run_id, qubits=args.qubit, fields=args.field,
+        summary = sess.accept(args.run_id, components=args.component, fields=args.field,
                               comment=args.comment, force=args.force, reapply=args.reapply)
     # device mismatch / era guard / unknown run_id — the message says the fix; a
     # 44-character run id makes typos the COMMON case, so never show a traceback.

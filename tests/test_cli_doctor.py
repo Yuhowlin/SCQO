@@ -30,6 +30,23 @@ def _lab_body(tmp_path: Path, device: str = "simdev") -> str:
     return f"[lab]\ndevice = \"{device}\"\ndata_root = '{(tmp_path / 'data').as_posix()}'\n"
 
 
+_COMPONENTS = """\
+schema = 1
+[components.q0]
+physical   = "FixedTransmon"
+instrument = "ReadableTransmon"
+operations = ["rx", "readout"]
+[components.q0_res]
+physical = "Resonator"
+[components.q0_ro]
+physical = "ReadoutLine"
+members  = { transmon = "q0", resonator = "q0_res" }
+[components.q0_xy]
+physical = "XYControl"
+members  = { transmon = "q0" }
+"""
+
+
 def test_healthy_simulated_setup_passes(tmp_path):
     data_root = tmp_path / "data"
     (data_root / "simdev").mkdir(parents=True)
@@ -37,6 +54,8 @@ def test_healthy_simulated_setup_passes(tmp_path):
         '[cd1]\nstart = 2026-07-01\n\n[cd1.setup.sim_main]\nbackend = "simulated"\n',
         encoding="utf-8",
     )
+    # required since the component cutover: the device's roster
+    (data_root / "simdev" / "components.toml").write_text(_COMPONENTS, encoding="utf-8")
     proc = _doctor(tmp_path, _lab_body(tmp_path))
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "all checks passed" in proc.stdout
@@ -44,7 +63,7 @@ def test_healthy_simulated_setup_passes(tmp_path):
     assert "'sim_main' (auto)" in proc.stdout  # single-setup cycle auto-selects
     # the per-(cooldown, setup) state file: named even before its first save
     assert "sim_main" in proc.stdout and "scqo_state.json (not created yet)" in proc.stdout
-    assert "13 experiment(s)" in proc.stdout  # simulated fills the catalog driver-less
+    assert "14 experiment(s)" in proc.stdout  # simulated fills the catalog driver-less
 
 
 def test_missing_registry_or_setup_fails(tmp_path):

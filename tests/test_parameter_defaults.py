@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from scqo import Session, register, registry
 from scqo.experiments import ResonatorSpectroscopy
-from scqo.testing import InMemoryDevice, SimulatedBackend
+from scqo.testing import InMemoryDevice, SimulatedBackend, demo_roster
 
 
 # Concrete demo experiment (probe is a no-op under SimulatedBackend); registering under
@@ -35,7 +35,7 @@ def _session(tmp_path=None, **kwargs) -> Session:
     if tmp_path is not None:
         kwargs.setdefault("data_root", tmp_path / "data")
         kwargs.setdefault("device_name", "devA")
-    return Session(SimulatedBackend(_device()), **kwargs)
+    return Session(SimulatedBackend(_device()), demo_roster(), **kwargs)
 
 
 # ---------------------------------------------------------------- merge precedence
@@ -43,7 +43,7 @@ def _session(tmp_path=None, **kwargs) -> Session:
 
 def test_run_merges_file_defaults(tmp_path):
     sess = _session(tmp_path, parameter_defaults={"resonator_spectroscopy": {"num_points": 51}})
-    result = sess.run("resonator_spectroscopy", {"qubits": ["q0"]})
+    result = sess.run("resonator_spectroscopy", {"targets": ["q0"]})
     assert result["outcomes"]["q0"] == "successful"
     # the persisted parameters are the fully-resolved values actually used
     assert sess.load_run(result["run_id"])["parameters"]["num_points"] == 51
@@ -51,19 +51,19 @@ def test_run_merges_file_defaults(tmp_path):
 
 def test_caller_params_beat_file_defaults(tmp_path):
     sess = _session(tmp_path, parameter_defaults={"resonator_spectroscopy": {"num_points": 51}})
-    result = sess.run("resonator_spectroscopy", {"qubits": ["q0"], "num_points": 75})
+    result = sess.run("resonator_spectroscopy", {"targets": ["q0"], "num_points": 75})
     assert sess.load_run(result["run_id"])["parameters"]["num_points"] == 75
 
 
 def test_code_defaults_when_no_table(tmp_path):
     sess = _session(tmp_path, parameter_defaults={"qubit_ramsey": {"num_points": 51}})
-    result = sess.run("resonator_spectroscopy", {"qubits": ["q0"]})
+    result = sess.run("resonator_spectroscopy", {"targets": ["q0"]})
     assert sess.load_run(result["run_id"])["parameters"]["num_points"] == 101  # pydantic default
 
 
-def test_file_defaults_can_supply_required_qubits():
-    """Even a required knob (qubits has no code default) may get a standing default."""
-    sess = _session(parameter_defaults={"resonator_spectroscopy": {"qubits": ["q1"]}})
+def test_file_defaults_can_supply_required_targets():
+    """Even a required knob (targets has no code default) may get a standing default."""
+    sess = _session(parameter_defaults={"resonator_spectroscopy": {"targets": ["q1"]}})
     result = sess.run("resonator_spectroscopy", {})
     assert result["outcomes"] == {"q1": "successful"}
 
@@ -75,7 +75,7 @@ def test_validation_error_returns_structured_failure():
     """Regression: a typo'd key used to raise a raw pydantic ValidationError across the
     'Session never raises' JSON boundary. It must come back as a structured failure."""
     sess = _session()
-    result = sess.run("resonator_spectroscopy", {"qubits": ["q0"], "frequncy_span_hz": 1e6})
+    result = sess.run("resonator_spectroscopy", {"targets": ["q0"], "frequncy_span_hz": 1e6})
     assert result["outcomes"] == {"q0": "failed"}
     assert "frequncy_span_hz" in result["error"]
 
@@ -86,7 +86,7 @@ def test_validation_error_names_defaults_file():
         parameter_defaults={"resonator_spectroscopy": {"frequncy_span_hz": 1e6}},
         parameter_defaults_source="X:/parameters.toml",
     )
-    result = sess.run("resonator_spectroscopy", {"qubits": ["q0"]})
+    result = sess.run("resonator_spectroscopy", {"targets": ["q0"]})
     assert result["outcomes"] == {"q0": "failed"}
     assert "X:/parameters.toml" in result["error"]
     assert "frequncy_span_hz" in result["error"]
@@ -96,7 +96,7 @@ def test_validation_failure_is_not_persisted(tmp_path):
     """Nothing touched the instrument and there is no dataset — a typo must not
     allocate a run folder or an index row."""
     sess = _session(tmp_path)
-    result = sess.run("resonator_spectroscopy", {"qubits": ["q0"], "nope": 1})
+    result = sess.run("resonator_spectroscopy", {"targets": ["q0"], "nope": 1})
     assert result["error"]
     assert "run_id" not in result and "data_path" not in result
     assert sess.find_runs() == []
@@ -107,7 +107,7 @@ def test_validation_failure_is_not_persisted(tmp_path):
 
 def test_catalog_overlays_effective_defaults():
     sess = _session(
-        parameter_defaults={"resonator_spectroscopy": {"num_points": 51, "qubits": ["q1"], "bogus_key": 1}},
+        parameter_defaults={"resonator_spectroscopy": {"num_points": 51, "targets": ["q1"], "bogus_key": 1}},
         parameter_defaults_source="X:/parameters.toml",
     )
     entry = next(e for e in sess.catalog() if e["name"] == "resonator_spectroscopy")
@@ -115,8 +115,8 @@ def test_catalog_overlays_effective_defaults():
     assert props["num_points"]["default"] == 51
     assert props["num_points"]["x-default-source"] == "X:/parameters.toml"
     # a file-supplied required key is no longer required for THIS session's callers
-    assert "qubits" not in entry["parameters_schema"].get("required", [])
-    assert props["qubits"]["default"] == ["q1"]
+    assert "targets" not in entry["parameters_schema"].get("required", [])
+    assert props["targets"]["default"] == ["q1"]
     # unknown keys are skipped by the overlay (they fail at run() instead)
     assert "bogus_key" not in props
 
@@ -124,6 +124,6 @@ def test_catalog_overlays_effective_defaults():
     raw = next(e for e in registry.catalog() if e["name"] == "resonator_spectroscopy")
     assert raw["parameters_schema"]["properties"]["num_points"]["default"] == 101
     assert "x-default-source" not in raw["parameters_schema"]["properties"]["num_points"]
-    assert "qubits" in raw["parameters_schema"]["required"]
+    assert "targets" in raw["parameters_schema"]["required"]
     plain = next(e for e in _session().catalog() if e["name"] == "resonator_spectroscopy")
     assert plain["parameters_schema"]["properties"]["num_points"]["default"] == 101

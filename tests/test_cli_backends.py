@@ -22,10 +22,29 @@ def _lab(tmp_path, device: str | None = "chipT") -> str:
     return _config(tmp_path, f"[lab]\n{device_line}data_root = '{data_root.as_posix()}'\n")
 
 
+_COMPONENTS = """\
+schema = 1
+[components.q0]
+physical   = "FixedTransmon"
+instrument = "ReadableTransmon"
+operations = ["rx", "readout"]
+[components.q0_res]
+physical = "Resonator"
+[components.q0_ro]
+physical = "ReadoutLine"
+members  = { transmon = "q0", resonator = "q0_res" }
+[components.q0_xy]
+physical = "XYControl"
+members  = { transmon = "q0" }
+"""
+
+
 def _registry(tmp_path, text: str) -> None:
     ddir = tmp_path / "data" / "chipT"
     ddir.mkdir(parents=True, exist_ok=True)
     (ddir / "cooldowns.toml").write_text(text, encoding="utf-8")
+    # a CONFIGURED device requires its component roster (components.toml)
+    (ddir / "components.toml").write_text(_COMPONENTS, encoding="utf-8")
 
 
 def _user_overlay(tmp_path, monkeypatch, body: str) -> str:

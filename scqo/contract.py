@@ -1,8 +1,8 @@
 """Canonical dataset contract per probing method.
 
 Each probing method declares the dataset its probe must emit (and its estimator
-consumes): the ``qubit`` dimension, the swept axis (name + unit), and the required
-data variables. This is the explicit API between *driving* (any instrument's probe)
+consumes): the ``target`` dimension (its values are TARGET names — qubit or pair
+components), the swept axis (name + unit), and the required data variables. This is the explicit API between *driving* (any instrument's probe)
 and *analysis* (the one shared estimator).
 
 It also makes "support" a single, testable property: an instrument **supports** a
@@ -37,23 +37,25 @@ class DatasetContract:
         sweep_units: documentary units per sweep axis (e.g. ``("dBm", "Hz")``);
             not enforced (xarray coords carry no units here).
         variables: data variables every conforming dataset must contain.
-        qubit_dim: the per-qubit dimension/coordinate name (default ``"qubit"``).
+        target_dim: the per-target dimension/coordinate name (default ``"target"``;
+            renamed from ``qubit`` at the pair cutover — the axis carries TARGET
+            names, which may be qubits or pairs).
     """
 
     sweeps: tuple[str, ...]
     sweep_units: tuple[str, ...]
     variables: tuple[str, ...]
-    qubit_dim: str = "qubit"
+    target_dim: str = "target"
 
     @property
     def dims(self) -> tuple[str, ...]:
-        """The dimensions every required variable must span: ``(qubit_dim, *sweeps)``."""
-        return (self.qubit_dim, *self.sweeps)
+        """The dimensions every required variable must span: ``(target_dim, *sweeps)``."""
+        return (self.target_dim, *self.sweeps)
 
     def validate(self, ds: xr.Dataset) -> None:
         """Raise :class:`ContractError` if ``ds`` does not conform.
 
-        Checks that ``qubit_dim`` and every sweep axis are present as both a dimension
+        Checks that ``target_dim`` and every sweep axis are present as both a dimension
         and a coordinate, and that each required variable exists and spans exactly that
         dimension set. Extra variables/coordinates are allowed (e.g. a probe may also
         emit ``Q`` for a method whose estimator only reads ``I``).

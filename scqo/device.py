@@ -1,93 +1,94 @@
-"""Device model — neutral names for qubit calibration state.
+"""Device model — per-category component views over a vendor device.
 
-An experiment's ``update()`` writes fitted quantities back through these neutral names.
-Each backend maps them onto its native model:
+A backend's :class:`DeviceModel` serves one :class:`ComponentView` per component
+NAME; the view's property surface is the component's INSTRUMENT category's
+pushed fields (physical fields never have vendor realizations — they exist only
+in the SCQO stores). The category catalog (:mod:`scqo.categories`) is the single
+schema source; the per-device roster (:mod:`scqo.roster`) decides which names
+exist and what they are.
 
-    neutral            QM / QUAM                        Qblox / QuantumDevice
-    -----------------  -------------------------------  -----------------------------
-    readout_freq       q.resonator.RF_frequency         q.clock_freqs.readout
-    drive_freq         q.f_01 / q.xy.RF_frequency       q.clock_freqs.f01
-    pi_amp             q.xy.operations['x180'].amp      q.rxy.amp180
-    readout_amp        q.resonator.operations           q.measure.pulse_amp
-                         ['readout'].amplitude
-    readout_power_dbm  full_scale_power_dbm + readout   output_att[port-clock] +
-                         amplitude (power_tools)          measure.pulse_amp (nominal
-                                                          +5 dBm full scale)
+Drivers subclass :func:`make_view_base` per category they realize::
 
-This keeps experiment physics free of any vendor attribute path.
+    class QbloxReadableTransmon(make_view_base("ReadableTransmon")):
+        # implement the generated abstract property pairs (readout_freq, ...)
+
+The AUTHORITATIVE per-backend field catalog (vendor paths, units, conversion
+descriptions) is each driver's ``fieldmap`` module — view it with
+``scqo state --fields``. This keeps experiment physics free of any vendor
+attribute path.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field as _field
+from functools import lru_cache
+
+from .categories import CATEGORIES
 
 
-class QubitView(ABC):
-    """Backend-agnostic accessor for one qubit's calibration parameters.
+class ComponentView(ABC):
+    """Backend-agnostic accessor for ONE component's vendor-realized fields.
 
-    Concrete backends override each property to read/write their native device tree.
-    Add more neutral fields here as experiments need them (T1, anharmonicity, ...).
+    Concrete per-category bases are produced by :func:`make_view_base`; drivers
+    implement the generated abstract properties against their native tree.
     """
 
     name: str
+    category: str
 
-    @property
-    @abstractmethod
-    def readout_freq(self) -> float:
-        """Resonator readout frequency (Hz)."""
 
-    @readout_freq.setter
-    @abstractmethod
-    def readout_freq(self, value: float) -> None: ...
+@dataclass(frozen=True)
+class ComponentInfo:
+    """One entry of a driver's derived inventory (the doctor's witness)."""
 
-    @property
-    @abstractmethod
-    def drive_freq(self) -> float:
-        """Qubit 0->1 drive frequency (Hz)."""
+    category: str
+    operations: tuple[str, ...] = ()
+    members: dict[str, str] = _field(default_factory=dict)
 
-    @drive_freq.setter
-    @abstractmethod
-    def drive_freq(self, value: float) -> None: ...
 
-    @property
-    @abstractmethod
-    def pi_amp(self) -> float:
-        """Amplitude of the calibrated pi (x180) pulse."""
+def _abstract_pair(field: str, doc: str) -> property:
+    def getter(self):  # pragma: no cover - abstract surface
+        raise NotImplementedError(field)
 
-    @pi_amp.setter
-    @abstractmethod
-    def pi_amp(self, value: float) -> None: ...
+    def setter(self, value):  # pragma: no cover - abstract surface
+        raise NotImplementedError(field)
 
-    @property
-    @abstractmethod
-    def readout_amp(self) -> float:
-        """Amplitude of the readout pulse (dimensionless, within the backend's
-        current output-power configuration)."""
+    getter.__isabstractmethod__ = True  # type: ignore[attr-defined]
+    setter.__isabstractmethod__ = True  # type: ignore[attr-defined]
+    # property.__isabstractmethod__ is read-only, COMPUTED from the accessors
+    # flagged above — do not assign it (AttributeError on CPython).
+    return property(getter, setter, doc=doc)
 
-    @readout_amp.setter
-    @abstractmethod
-    def readout_amp(self, value: float) -> None: ...
 
-    @property
-    @abstractmethod
-    def readout_power_dbm(self) -> float:
-        """Absolute readout pulse power at the instrument output port (dBm).
+@lru_cache(maxsize=None)
+def make_view_base(category: str) -> type[ComponentView]:
+    """The driver-facing abstract base for one INSTRUMENT category.
 
-        Setting it re-solves the backend's output chain (QM full_scale_power_dbm /
-        Qblox output_att) keeping the digital amplitude <= 0.5 full scale — so
-        ``readout_amp`` changes as a coupled side effect."""
-
-    @readout_power_dbm.setter
-    @abstractmethod
-    def readout_power_dbm(self, value: float) -> None: ...
+    Declares one abstract read/write property per PUSHED field of the category
+    — and ONLY pushed fields: record-only monitors (readout_fidelity) and all
+    physical fields have no vendor knob and must not burden driver classes.
+    ``requires_physical``-gated fields (idle_flux_v) ARE declared on the base;
+    a driver for a device that never realizes them declares them Unrealized in
+    its fieldmap instead of implementing them.
+    """
+    spec = CATEGORIES[category]
+    assert spec.side == "instrument", f"{category}: driver views are instrument-side"
+    ns: dict = {"category": category, "__doc__": f"Driver view base for {category}."}
+    for f, fs in spec.fields.items():
+        if fs.push:
+            ns[f] = _abstract_pair(f, f"{fs.doc} [{fs.unit}]" if fs.unit else fs.doc)
+    return type(f"{category}ViewBase", (ComponentView,), ns)
 
 
 class DeviceModel(ABC):
-    """Container of :class:`QubitView` objects plus persistence."""
+    """Container of :class:`ComponentView` objects plus persistence."""
 
     @abstractmethod
-    def qubit(self, name: str) -> QubitView:
-        """Return the view for a single qubit by name."""
+    def component(self, name: str) -> ComponentView:
+        """The view for one vendor-realized component by name. Raises KeyError
+        for names the vendor does not realize (bare resonators, interaction
+        terms — those are SCQO-store-only)."""
 
     @abstractmethod
     def save(self) -> None:
@@ -95,4 +96,12 @@ class DeviceModel(ABC):
 
     @abstractmethod
     def snapshot(self) -> dict:
-        """Return a JSON-serialisable snapshot of all qubit state (AI loop memory)."""
+        """JSON-serialisable ``{name: {field: value}}`` of vendor-realized state."""
+
+    def components(self) -> dict[str, ComponentInfo]:
+        """The driver's DERIVED inventory (name -> category/operations) read
+        from the vendor tree — a WITNESS the doctor cross-checks against the
+        authoritative roster, never the source of truth. Default: every
+        snapshot name is a ReadableTransmon with the standard operations."""
+        return {n: ComponentInfo("ReadableTransmon", operations=("rx", "readout"))
+                for n in self.snapshot()}

@@ -9,12 +9,14 @@ Public surface::
     from scqo import Session, Experiment, Parameters, Result, register, catalog
 """
 
-from .parameters import AveragingParameters, Parameters, QubitSelection
+from .parameters import AveragingParameters, Parameters, TargetSelection
 from .result import Outcome, Result
 from .contract import ContractError, DatasetContract
-from .config import ChangeRecord, RecordingDevice
-from .device import DeviceModel, QubitView
-from .physical import PHYSICAL_FIELDS, PhysicalStore
+from .categories import CATEGORIES, CategorySpec
+from .config import ChangeRecord, FieldSpec, RecordingDevice
+from .device import ComponentInfo, ComponentView, DeviceModel, make_view_base
+from .physical import PhysicalStore
+from .roster import Component, Roster, RosterError, load_components
 from .suggestions import Suggestion
 from .backend import Backend
 from .experiment import Experiment
@@ -25,19 +27,27 @@ from .session import Session
 
 __all__ = [
     "Parameters",
-    "QubitSelection",
+    "TargetSelection",
     "AveragingParameters",
     "Result",
     "Outcome",
     "DatasetContract",
     "ContractError",
+    "CATEGORIES",
+    "CategorySpec",
+    "FieldSpec",
     "ChangeRecord",
     "RecordingDevice",
     "PhysicalStore",
-    "PHYSICAL_FIELDS",
+    "Component",
+    "Roster",
+    "RosterError",
+    "load_components",
     "Suggestion",
     "DeviceModel",
-    "QubitView",
+    "ComponentView",
+    "ComponentInfo",
+    "make_view_base",
     "Backend",
     "Experiment",
     "register",

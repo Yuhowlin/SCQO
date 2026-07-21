@@ -17,7 +17,7 @@ import time
 from scqo import DataStore
 
 _COLS = (
-    "run_id, started_at, ended_at, experiment, device, backend, qubits, outcome, "
+    "run_id, started_at, ended_at, experiment, device, backend, targets, outcome, "
     "outcomes, fit, tags, note, error, parameters, updated_device, path, schema_version"
 )
 _SQL = f"INSERT INTO runs ({_COLS}) VALUES ({','.join('?' * 17)})"
@@ -30,7 +30,7 @@ def _row(device: str, i: int) -> tuple:
         f"r{i:07d}", ts, ts, "resonator_spectroscopy", device, "qblox",
         '["q1"]', "successful", '{"q1": "successful"}',
         '{"q1": {"readout_freq": 6.0e9}}', '["cooldown1"]', "", None, "{}",
-        1, f"{device}/2026-01-01/r{i:07d}", 3,
+        1, f"{device}/2026-01-01/r{i:07d}", 8,
     )
 
 

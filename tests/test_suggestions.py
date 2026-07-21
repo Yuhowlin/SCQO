@@ -15,7 +15,7 @@ from scqo import Outcome, PhysicalStore, RecordingDevice, Session, register
 from scqo.experiments import QubitRamsey, QubitRelaxation, ResonatorSpectroscopy
 from scqo.suggestions import SuggestionCapture, select_suggestions
 from scqo.cli._review import format_table, parse_selection
-from scqo.testing import InMemoryDevice, SimulatedBackend
+from scqo.testing import InMemoryDevice, SimulatedBackend, demo_roster
 
 
 @register
@@ -46,30 +46,38 @@ def _device() -> InMemoryDevice:
 
 
 def _session(tmp_path, **kwargs) -> Session:
-    return Session(SimulatedBackend(_device()), data_root=tmp_path / "data", device_name="devA", **kwargs)
+    return Session(SimulatedBackend(_device()), demo_roster(),
+                   data_root=tmp_path / "data", device_name="devA", **kwargs)
 
 
-RAMSEY_PARAMS = {"qubits": ["q1"], "frequency_detuning_hz": 1.0e6, "max_idle_time_ns": 4000, "num_points": 201}
+RAMSEY_PARAMS = {"targets": ["q1"], "frequency_detuning_hz": 1.0e6, "max_idle_time_ns": 4000, "num_points": 201}
+
+#: Ramsey update() writes the knob + its measured twin + T2* (capture order).
+RAMSEY_FIELDS = ["drive_freq", "f_01_hz", "t2_star_s"]
+#: Resonator-spectroscopy update(): readout_freq on the target, the fit's sample
+#: physics on the target's Resonator component.
+RESONATOR_FIELDS = ["readout_freq", "f_r_hz", "kappa_tot_hz"]
 
 
 # ------------------------------------------------------------------ capture shim
 
 
 def test_capture_routes_fields_and_records_before_values():
-    """One QubitView surface, two stores: FIELDS -> instrument, PHYSICAL_FIELDS ->
-    physical; before = current value (None for never-measured); capture order kept;
-    the vendor is never touched."""
+    """One component-view surface, two stores: instrument-category fields ->
+    instrument, physical-category fields -> physical; before = current value (None
+    for never-measured); capture order kept; the vendor is never touched."""
     inner = _device()
-    device = RecordingDevice(inner)
+    roster = demo_roster()
+    device = RecordingDevice(inner, roster)
     vendor_before = inner.snapshot()
-    capture = SuggestionCapture(device, PhysicalStore())
+    capture = SuggestionCapture(device, PhysicalStore(), roster)
 
-    view = capture.qubit("q0")
+    view = capture.component("q0")
     view.drive_freq = 3.9e9        # pushed instrument knob
     view.readout_fidelity = 0.97   # record-only instrument value
     view.t1_s = 25e-6              # physical (sample) parameter
 
-    got = [(s.qubit, s.field, s.store, s.before, s.after, s.status) for s in capture.suggestions]
+    got = [(s.component, s.field, s.store, s.before, s.after, s.status) for s in capture.suggestions]
     assert got == [
         ("q0", "drive_freq", "instrument", 3.87e9, 3.9e9, "pending"),
         ("q0", "readout_fidelity", "instrument", None, 0.97, "pending"),
@@ -82,11 +90,12 @@ def test_capture_routes_fields_and_records_before_values():
 
 
 def test_capture_refuses_non_finite_and_unknown_fields():
-    capture = SuggestionCapture(RecordingDevice(_device()), PhysicalStore())
+    roster = demo_roster()
+    capture = SuggestionCapture(RecordingDevice(_device(), roster), PhysicalStore(), roster)
     with pytest.raises(ValueError, match="non-finite"):
-        capture.qubit("q0").pi_amp = float("nan")
-    with pytest.raises(AttributeError, match="unknown device field 'pi_ampp'"):
-        capture.qubit("q0").pi_ampp = 0.3  # the typo must not vanish silently
+        capture.component("q0").pi_amp = float("nan")
+    with pytest.raises(AttributeError, match="has no field 'pi_ampp'"):
+        capture.component("q0").pi_ampp = 0.3  # the typo must not vanish silently
     assert capture.suggestions == []
 
 
@@ -94,16 +103,16 @@ def test_select_suggestions_filters_pending_only():
     from scqo.suggestions import Suggestion
 
     items = [
-        Suggestion(qubit="q0", field="readout_freq", store="instrument", before=1.0, after=2.0),
-        Suggestion(qubit="q0", field="t1_s", store="physical", before=None, after=3.0,
+        Suggestion(component="q0", field="readout_freq", store="instrument", before=1.0, after=2.0),
+        Suggestion(component="q0", field="t1_s", store="physical", before=None, after=3.0,
                    status="accepted"),
-        Suggestion(qubit="q1", field="readout_freq", store="instrument", before=1.0, after=2.5),
+        Suggestion(component="q1", field="readout_freq", store="instrument", before=1.0, after=2.5),
     ]
     assert select_suggestions(items) == [0, 2]  # pending only
-    assert select_suggestions(items, qubits=["q1"]) == [2]
+    assert select_suggestions(items, components=["q1"]) == [2]
     assert select_suggestions(items, fields=["readout_freq"]) == [0, 2]
     assert select_suggestions(items, indices=[1, 2]) == [2]  # decided index not selected
-    assert select_suggestions(items, qubits=["q0"], fields=["t1_s"]) == []
+    assert select_suggestions(items, components=["q0"], fields=["t1_s"]) == []
 
 
 # ------------------------------------------------------------------ selection grammar
@@ -111,11 +120,11 @@ def test_select_suggestions_filters_pending_only():
 
 def test_parse_selection_matrix():
     suggestions = [
-        {"qubit": "q0", "field": "readout_freq", "store": "instrument", "before": 1.0, "after": 2.0,
+        {"component": "q0", "field": "readout_freq", "store": "instrument", "before": 1.0, "after": 2.0,
          "status": "pending"},
-        {"qubit": "q0", "field": "t1_s", "store": "physical", "before": None, "after": 3.0,
+        {"component": "q0", "field": "t1_s", "store": "physical", "before": None, "after": 3.0,
          "status": "accepted"},
-        {"qubit": "q1", "field": "readout_freq", "store": "instrument", "before": 1.0, "after": 2.5,
+        {"component": "q1", "field": "readout_freq", "store": "instrument", "before": 1.0, "after": 2.5,
          "status": "pending"},
     ]
     assert parse_selection("", suggestions) == []
@@ -148,30 +157,32 @@ def test_apply_mode_equals_old_behavior_with_audit_trail(tmp_path):
     """update="apply" applies immediately through the same path: vendor updated,
     ChangeRecords stamped with the run_id, and the record carries accepted items."""
     sess = _session(tmp_path)
-    result = sess.run("resonator_spectroscopy", {"qubits": ["q0"]}, update="apply")
+    result = sess.run("resonator_spectroscopy", {"targets": ["q0"]}, update="apply")
     assert result["outcomes"]["q0"] == Outcome.SUCCESSFUL.value
 
     assert np.isclose(sess.device_state()["q0"]["readout_freq"], result["fit"]["q0"]["readout_freq"])
     (h,) = sess.history()
     assert h["run_id"] == result["run_id"] and h["experiment"] == "resonator_spectroscopy"
-    assert [s["field"] for s in result["suggestions"]] == ["readout_freq", "f_r_hz", "kappa_hz"]
+    assert [s["field"] for s in result["suggestions"]] == RESONATOR_FIELDS
+    # the sample physics lands on the qubit's Resonator component
+    assert [s["component"] for s in result["suggestions"]] == ["q0", "q0_res", "q0_res"]
     assert all(s["status"] == "accepted" and s["decided_by"] for s in result["suggestions"])
     # the sample physics landed in the physical store, stamped with the same run
-    assert {h["field"] for h in sess.history(store="physical")} == {"f_r_hz", "kappa_hz"}
+    assert {h["field"] for h in sess.history(store="physical")} == {"f_r_hz", "kappa_tot_hz"}
     row = sess.find_runs()[0]
     assert row["updated_device"] is True and row["suggestions_pending"] == 0
 
 
 def test_legacy_bool_updates_still_work(tmp_path):
     sess = _session(tmp_path)
-    r_false = sess.run("resonator_spectroscopy", {"qubits": ["q0"]}, update=False)
+    r_false = sess.run("resonator_spectroscopy", {"targets": ["q0"]}, update=False)
     assert r_false["suggestions"] == []  # "none": not even captured
     before = sess.device_state()["q0"]["readout_freq"]
-    r_true = sess.run("resonator_spectroscopy", {"qubits": ["q0"]}, update=True)
+    r_true = sess.run("resonator_spectroscopy", {"targets": ["q0"]}, update=True)
     assert sess.device_state()["q0"]["readout_freq"] != before  # "apply"
     assert {s["status"] for s in r_true["suggestions"]} == {"accepted"}
     with pytest.raises(ValueError, match="update must be"):
-        sess.run("resonator_spectroscopy", {"qubits": ["q0"]}, update="bogus")
+        sess.run("resonator_spectroscopy", {"targets": ["q0"]}, update="bogus")
 
 
 # ------------------------------------------------------------------ accept later
@@ -184,7 +195,7 @@ def test_accept_all_pending_by_run_id(tmp_path):
     state_before = sess.device_state()
 
     summary = sess.accept(run_id, comment="looks right")
-    assert [a["field"] for a in summary["applied"]] == ["drive_freq", "t2_star_s"]
+    assert [a["field"] for a in summary["applied"]] == RAMSEY_FIELDS
     assert summary["stale"] == [] and summary["errors"] == []
     assert summary["pending_left"] == 0
 
@@ -194,8 +205,9 @@ def test_accept_all_pending_by_run_id(tmp_path):
     assert sess.physical_state()["q1"]["t2_star_s"] == result["fit"]["q1"]["t2_star_s"]
     (h,) = sess.history()
     assert h["run_id"] == run_id and h["experiment"] == "qubit_ramsey"
-    (hp,) = sess.history(store="physical")
-    assert hp["run_id"] == run_id
+    for hp in sess.history(store="physical"):  # f_01_hz + t2_star_s
+        assert hp["run_id"] == run_id
+    assert [hp["field"] for hp in sess.history(store="physical")] == ["f_01_hz", "t2_star_s"]
 
     # the decision is on the record (truth) + index, and flips updated_device
     record = sess.load_run(run_id)["record"]
@@ -218,13 +230,14 @@ def test_partial_accept_and_reject_by_field(tmp_path):
 
     summary = sess.accept(run_id, fields=["t2_star_s"])
     assert [a["field"] for a in summary["applied"]] == ["t2_star_s"]
-    assert summary["pending_left"] == 1
+    assert summary["pending_left"] == 2
     assert sess.physical_state()["q1"]["t2_star_s"] == result["fit"]["q1"]["t2_star_s"]
     assert sess.device_state()["q1"]["drive_freq"] == drive_before  # knob NOT applied
     assert sess.history() == []  # ... so no instrument history either
 
     rejected = sess.reject(run_id, comment="fit chased a noise spike")
-    assert rejected["rejected"] == [{"qubit": "q1", "field": "drive_freq"}]
+    assert rejected["rejected"] == [{"component": "q1", "field": "drive_freq"},
+                                    {"component": "q1", "field": "f_01_hz"}]
     assert rejected["pending_left"] == 0
     record = sess.load_run(run_id)["record"]
     by_field = {s["field"]: s for s in record["suggestions"]}
@@ -242,11 +255,11 @@ def test_partial_accept_and_reject_by_field(tmp_path):
 
 def test_accept_in_fresh_session_days_later(tmp_path):
     """The run's Session is long gone: a brand-new Session applies by run_id."""
-    result = _session(tmp_path).run("resonator_spectroscopy", {"qubits": ["q0"]})
+    result = _session(tmp_path).run("resonator_spectroscopy", {"targets": ["q0"]})
 
     sess2 = _session(tmp_path)  # fresh session, same lab
     summary = sess2.accept(result["run_id"])
-    assert [a["field"] for a in summary["applied"]] == ["readout_freq", "f_r_hz", "kappa_hz"]
+    assert [a["field"] for a in summary["applied"]] == RESONATOR_FIELDS
     assert sess2.device_state()["q0"]["readout_freq"] == result["fit"]["q0"]["readout_freq"]
     (h,) = sess2.history()
     assert h["run_id"] == result["run_id"]
@@ -256,14 +269,14 @@ def test_accept_staleness_guard(tmp_path):
     """If the field changed since the run measured it, the item is skipped as stale
     (a newer calibration must not be silently clobbered); --force overrides."""
     sess = _session(tmp_path)
-    result = sess.run("resonator_spectroscopy", {"qubits": ["q0"]})
+    result = sess.run("resonator_spectroscopy", {"targets": ["q0"]})
     run_id = result["run_id"]
 
-    sess.device.qubit("q0").readout_freq = 6.2e9  # someone recalibrated in between
+    sess.device.component("q0").readout_freq = 6.2e9  # someone recalibrated in between
 
     summary = sess.accept(run_id)
     # only the recalibrated knob is stale; the (untouched) physical items apply
-    assert [a["field"] for a in summary["applied"]] == ["f_r_hz", "kappa_hz"]
+    assert [a["field"] for a in summary["applied"]] == ["f_r_hz", "kappa_tot_hz"]
     assert len(summary["stale"]) == 1 and summary["stale"][0]["field"] == "readout_freq"
     assert summary["stale"][0]["current"] == 6.2e9
     assert summary["pending_left"] == 1  # still decidable
@@ -278,7 +291,7 @@ def test_accept_cooldown_era_guard(tmp_path):
     """A value measured under another cooldown/setup era may not transfer: refuse
     without force."""
     sess = _session(tmp_path)
-    result = sess.run("resonator_spectroscopy", {"qubits": ["q0"]})  # stamps ("", "")
+    result = sess.run("resonator_spectroscopy", {"targets": ["q0"]})  # stamps ("", "")
 
     ddir = tmp_path / "data" / "devA"
     ddir.mkdir(parents=True, exist_ok=True)
@@ -292,26 +305,27 @@ def test_accept_cooldown_era_guard(tmp_path):
     assert sess.history() == []
 
     forced = sess.accept(result["run_id"], force=True)
-    assert [a["field"] for a in forced["applied"]] == ["readout_freq", "f_r_hz", "kappa_hz"]
+    assert [a["field"] for a in forced["applied"]] == RESONATOR_FIELDS
 
 
 def test_accept_refuses_wrong_device(tmp_path):
-    result = _session(tmp_path).run("resonator_spectroscopy", {"qubits": ["q0"]})
-    sess_b = Session(SimulatedBackend(_device()), data_root=tmp_path / "data", device_name="devB")
+    result = _session(tmp_path).run("resonator_spectroscopy", {"targets": ["q0"]})
+    sess_b = Session(SimulatedBackend(_device()), demo_roster(),
+                     data_root=tmp_path / "data", device_name="devB")
     with pytest.raises(RuntimeError, match="devA"):
         sess_b.accept(result["run_id"])
 
 
 class _VendorRejectsDriveFreq:
-    """Vendor device whose drive_freq knob rejects writes (per-qubit atomicity probe)."""
+    """Vendor device whose drive_freq knob rejects writes (per-component atomicity probe)."""
 
     def __init__(self, inner):
         self._inner = inner
 
-    def qubit(self, name):
-        view = self._inner.qubit(name)
+    def component(self, name):
+        view = self._inner.component(name)
 
-        class _Q:
+        class _V:
             def __getattr__(self, attr):
                 return getattr(view, attr)
 
@@ -320,7 +334,7 @@ class _VendorRejectsDriveFreq:
                     raise ValueError("vendor rejected drive_freq")
                 setattr(view, attr, value)
 
-        return _Q()
+        return _V()
 
     def snapshot(self):
         return self._inner.snapshot()
@@ -333,11 +347,11 @@ def test_reapply_rolls_back_to_older_run(tmp_path):
     """The regret flow: accept run A, then run B; --reapply on A restores A's value,
     with a fresh ChangeRecord linked to A (old = the live value it overwrote)."""
     sess = _session(tmp_path)
-    run_a = sess.run("resonator_spectroscopy", {"qubits": ["q0"]})
+    run_a = sess.run("resonator_spectroscopy", {"targets": ["q0"]})
     sess.accept(run_a["run_id"])
     value_a = sess.device_state()["q0"]["readout_freq"]
 
-    run_b = sess.run("resonator_spectroscopy", {"qubits": ["q0"]})
+    run_b = sess.run("resonator_spectroscopy", {"targets": ["q0"]})
     sess.accept(run_b["run_id"])
     value_b = sess.device_state()["q0"]["readout_freq"]
     assert value_b != value_a
@@ -347,7 +361,7 @@ def test_reapply_rolls_back_to_older_run(tmp_path):
     assert plain["applied"] == [] and sess.device_state()["q0"]["readout_freq"] == value_b
 
     rollback = sess.accept(run_a["run_id"], reapply=True, comment="B's fit chased a spike")
-    assert [a["field"] for a in rollback["applied"]] == ["readout_freq", "f_r_hz", "kappa_hz"]
+    assert [a["field"] for a in rollback["applied"]] == RESONATOR_FIELDS
     (item,) = [a for a in rollback["applied"] if a["field"] == "readout_freq"]
     assert item["current"] == value_b  # what the rollback overwrote — shown, not blocked
     assert rollback["stale"] == []  # staleness guard is OFF in reapply mode
@@ -364,7 +378,7 @@ def test_reapply_rolls_back_to_older_run(tmp_path):
 
 def test_reapply_accepts_previously_rejected(tmp_path):
     sess = _session(tmp_path)
-    result = sess.run("qubit_relaxation", {"qubits": ["q0"]})
+    result = sess.run("qubit_relaxation", {"targets": ["q0"]})
     sess.reject(result["run_id"], comment="not sure yet")
     assert sess.physical_state() == {}
 
@@ -377,7 +391,7 @@ def test_reapply_accepts_previously_rejected(tmp_path):
 
 def test_reapply_still_respects_era_guard(tmp_path):
     sess = _session(tmp_path)
-    result = sess.run("resonator_spectroscopy", {"qubits": ["q0"]})
+    result = sess.run("resonator_spectroscopy", {"targets": ["q0"]})
     sess.accept(result["run_id"])
 
     ddir = tmp_path / "data" / "devA"
@@ -393,9 +407,9 @@ def test_reapply_still_respects_era_guard(tmp_path):
 
 def test_parse_selection_allow_decided():
     suggestions = [
-        {"qubit": "q0", "field": "readout_freq", "store": "instrument", "before": 1.0,
+        {"component": "q0", "field": "readout_freq", "store": "instrument", "before": 1.0,
          "after": 2.0, "status": "accepted"},
-        {"qubit": "q0", "field": "t1_s", "store": "physical", "before": None,
+        {"component": "q0", "field": "t1_s", "store": "physical", "before": None,
          "after": 3.0, "status": "rejected"},
     ]
     with pytest.raises(ValueError, match="--reapply"):
@@ -412,7 +426,7 @@ def test_accept_dry_run_reports_guards_without_applying(tmp_path):
     sess = _session(tmp_path)
     result = sess.run("qubit_ramsey", RAMSEY_PARAMS)
     run_id = result["run_id"]
-    sess.device.qubit("q1").drive_freq = 4.1e9  # someone recalibrated -> stale
+    sess.device.component("q1").drive_freq = 4.1e9  # someone recalibrated -> stale
 
     ddir = tmp_path / "data" / "devA"
     ddir.mkdir(parents=True, exist_ok=True)
@@ -429,6 +443,7 @@ def test_accept_dry_run_reports_guards_without_applying(tmp_path):
     assert by_field["drive_freq"]["stale"] is True
     assert by_field["drive_freq"]["current"] == 4.1e9
     assert by_field["t2_star_s"]["stale"] is False  # physical value untouched
+    assert by_field["f_01_hz"]["stale"] is False
     assert {item["status"] for item in plan["items"]} == {"pending"}
 
     # nothing was applied, decided, or recorded
@@ -439,11 +454,11 @@ def test_accept_dry_run_reports_guards_without_applying(tmp_path):
 
 def test_accept_dry_run_includes_decided_items(tmp_path):
     sess = _session(tmp_path)
-    result = sess.run("resonator_spectroscopy", {"qubits": ["q0"]})
+    result = sess.run("resonator_spectroscopy", {"targets": ["q0"]})
     sess.accept(result["run_id"], comment="first")
 
     plan = sess.accept(result["run_id"], dry_run=True)  # no reapply flag needed
-    assert [item["field"] for item in plan["items"]] == ["readout_freq", "f_r_hz", "kappa_hz"]
+    assert [item["field"] for item in plan["items"]] == RESONATOR_FIELDS
     for item in plan["items"]:
         assert item["status"] == "accepted" and item["decided_by"]
         assert item["current"] == item["after"]  # its value IS the current one
@@ -488,13 +503,13 @@ def test_review_confirms_stale_overwrite(tmp_path, monkeypatch):
     from scqo.cli import _review
 
     sess = _session(tmp_path)
-    result = sess.run("resonator_spectroscopy", {"qubits": ["q0"]})
-    sess.device.qubit("q0").readout_freq = 6.2e9  # recalibrated since the run
+    result = sess.run("resonator_spectroscopy", {"targets": ["q0"]})
+    sess.device.component("q0").readout_freq = 6.2e9  # recalibrated since the run
 
     tty = _interactive(monkeypatch, ["a", "y", "checked the trace"])
     summary = _review.review_interactively(sess, result["run_id"], result["suggestions"])
 
-    assert [a["field"] for a in summary["applied"]] == ["readout_freq", "f_r_hz", "kappa_hz"]
+    assert [a["field"] for a in summary["applied"]] == RESONATOR_FIELDS
     assert summary["stale"] == []  # confirmed, not blocked
     assert sess.device_state()["q0"]["readout_freq"] == result["fit"]["q0"]["readout_freq"]
     prompted = tty.getvalue()
@@ -507,14 +522,14 @@ def test_review_declines_stale_stays_pending(tmp_path, monkeypatch):
     from scqo.cli import _review
 
     sess = _session(tmp_path)
-    result = sess.run("resonator_spectroscopy", {"qubits": ["q0"]})
-    sess.device.qubit("q0").readout_freq = 6.2e9
+    result = sess.run("resonator_spectroscopy", {"targets": ["q0"]})
+    sess.device.component("q0").readout_freq = 6.2e9
 
     # select all, Enter declines the stale readout_freq overwrite, empty comment
     _interactive(monkeypatch, ["a", "", ""])
     summary = _review.review_interactively(sess, result["run_id"], result["suggestions"])
 
-    assert [a["field"] for a in summary["applied"]] == ["f_r_hz", "kappa_hz"]
+    assert [a["field"] for a in summary["applied"]] == ["f_r_hz", "kappa_tot_hz"]
     assert sess.device_state()["q0"]["readout_freq"] == 6.2e9
     record = sess.load_run(result["run_id"])["record"]
     assert record["suggestions"][0]["status"] == "pending"
@@ -526,10 +541,10 @@ def test_review_confirms_rollback_without_reapply_flag(tmp_path, monkeypatch):
     from scqo.cli import _review
 
     sess = _session(tmp_path)
-    run_a = sess.run("resonator_spectroscopy", {"qubits": ["q0"]})
+    run_a = sess.run("resonator_spectroscopy", {"targets": ["q0"]})
     sess.accept(run_a["run_id"])
     value_a = sess.device_state()["q0"]["readout_freq"]
-    run_b = sess.run("resonator_spectroscopy", {"qubits": ["q0"]})
+    run_b = sess.run("resonator_spectroscopy", {"targets": ["q0"]})
     sess.accept(run_b["run_id"])
     assert sess.device_state()["q0"]["readout_freq"] != value_a
 
@@ -547,7 +562,7 @@ def test_review_era_mismatch_asks_once_and_no_aborts(tmp_path, monkeypatch):
     from scqo.cli import _review
 
     sess = _session(tmp_path)
-    result = sess.run("resonator_spectroscopy", {"qubits": ["q0"]})
+    result = sess.run("resonator_spectroscopy", {"targets": ["q0"]})
     ddir = tmp_path / "data" / "devA"
     ddir.mkdir(parents=True, exist_ok=True)
     (ddir / "cooldowns.toml").write_text(
@@ -563,7 +578,7 @@ def test_review_era_mismatch_asks_once_and_no_aborts(tmp_path, monkeypatch):
 
     _interactive(monkeypatch, ["a", "y", ""])  # confirm it this time
     summary = _review.review_interactively(sess, result["run_id"], result["suggestions"])
-    assert [a["field"] for a in summary["applied"]] == ["readout_freq", "f_r_hz", "kappa_hz"]
+    assert [a["field"] for a in summary["applied"]] == RESONATOR_FIELDS
 
 
 def test_review_interactively_applies_selection(tmp_path, monkeypatch):
@@ -596,6 +611,7 @@ def test_review_interactively_applies_selection(tmp_path, monkeypatch):
     assert by_field["t2_star_s"]["status"] == "accepted"
     assert by_field["t2_star_s"]["comment"] == "from the prompt"
     assert by_field["drive_freq"]["status"] == "pending"
+    assert by_field["f_01_hz"]["status"] == "pending"
 
 
 # ------------------------------------------------ operator-authored (scqo suggest)
@@ -607,17 +623,17 @@ def test_suggest_on_run_without_suggestions(tmp_path, monkeypatch):
     pending filter — surviving a reindex (record.json is the truth)."""
     monkeypatch.setattr("scqo.config._current_operator", lambda: "alice")
     sess = _session(tmp_path)
-    result = sess.run("resonator_spectroscopy", {"qubits": ["q0"]}, update="none")
+    result = sess.run("resonator_spectroscopy", {"targets": ["q0"]}, update="none")
     run_id = result["run_id"]
     assert result["suggestions"] == []
 
-    summary = sess.suggest(run_id, {"q0.readout_freq": 5.912e9, "q0.f_r_hz": 5.912e9},
+    summary = sess.suggest(run_id, {"q0.readout_freq": 5.912e9, "q0_res.f_r_hz": 5.912e9},
                            comment="read off the dip")
     assert summary["run_id"] == run_id and summary["pending_total"] == 2
     assert summary["added"] == [
-        {"qubit": "q0", "field": "readout_freq", "store": "instrument",
+        {"component": "q0", "field": "readout_freq", "store": "instrument",
          "before": 5.95e9, "after": 5.912e9},
-        {"qubit": "q0", "field": "f_r_hz", "store": "physical",
+        {"component": "q0_res", "field": "f_r_hz", "store": "physical",
          "before": None, "after": 5.912e9},
     ]
 
@@ -637,14 +653,14 @@ def test_suggest_appends_without_disturbing_decided(tmp_path):
     """Suggest APPENDS: existing (even decided) rows keep their status, comment and
     position — displayed row numbers stay stable for the review grammar."""
     sess = _session(tmp_path)
-    result = sess.run("resonator_spectroscopy", {"qubits": ["q0"]})
+    result = sess.run("resonator_spectroscopy", {"targets": ["q0"]})
     run_id = result["run_id"]
     sess.accept(run_id, comment="first decision")
 
     sess.suggest(run_id, {"q0.pi_amp": 0.21}, comment="tweak")
     record = sess.load_run(run_id)["record"]
     assert [s["field"] for s in record["suggestions"]] == [
-        "readout_freq", "f_r_hz", "kappa_hz", "pi_amp",  # appended at the END
+        "readout_freq", "f_r_hz", "kappa_tot_hz", "pi_amp",  # appended at the END
     ]
     decided, added = record["suggestions"][:3], record["suggestions"][3]
     assert all(s["status"] == "accepted" and s["comment"] == "first decision"
@@ -656,7 +672,7 @@ def test_accept_applies_operator_suggestion_with_provenance(tmp_path):
     """An accepted operator suggestion goes through the exact same apply path:
     vendor pushed / physical recorded, ChangeRecords credit the suggested-on run."""
     sess = _session(tmp_path)
-    result = sess.run("resonator_spectroscopy", {"qubits": ["q0"]}, update="none")
+    result = sess.run("resonator_spectroscopy", {"targets": ["q0"]}, update="none")
     run_id = result["run_id"]
     sess.suggest(run_id, {"q0.readout_freq": 5.912e9, "q0.t1_s": 2.5e-5})
 
@@ -680,11 +696,11 @@ def test_suggest_staleness_and_era_guards_still_apply(tmp_path):
     """Operator items get no special treatment at accept time: a recalibrated field
     is stale, a cooldown-era mismatch refuses without force."""
     sess = _session(tmp_path)
-    result = sess.run("resonator_spectroscopy", {"qubits": ["q0"]}, update="none")
+    result = sess.run("resonator_spectroscopy", {"targets": ["q0"]}, update="none")
     run_id = result["run_id"]
     sess.suggest(run_id, {"q0.readout_freq": 5.912e9})
 
-    sess.device.qubit("q0").readout_freq = 6.2e9  # someone recalibrated in between
+    sess.device.component("q0").readout_freq = 6.2e9  # someone recalibrated in between
     summary = sess.accept(run_id)
     assert summary["applied"] == []
     assert len(summary["stale"]) == 1 and summary["stale"][0]["field"] == "readout_freq"
@@ -702,12 +718,16 @@ def test_suggest_staleness_and_era_guards_still_apply(tmp_path):
 
 def test_suggest_validation(tmp_path):
     sess = _session(tmp_path)
-    result = sess.run("resonator_spectroscopy", {"qubits": ["q0"]}, update="none")
+    result = sess.run("resonator_spectroscopy", {"targets": ["q0"]}, update="none")
     run_id = result["run_id"]
 
-    with pytest.raises(ValueError, match="unknown field 't1_sec'"):
+    with pytest.raises(ValueError, match="has no field 't1_sec'"):
         sess.suggest(run_id, {"q0.t1_sec": 1e-6})
-    with pytest.raises(ValueError, match="unknown qubit 'q9'"):
+    # category-aware: a field that exists on ANOTHER component names the carrier
+    with pytest.raises(ValueError) as err:
+        sess.suggest(run_id, {"q0.f_r_hz": 5.9e9})
+    assert "Resonator field" in str(err.value) and "q0_res.f_r_hz" in str(err.value)
+    with pytest.raises(ValueError, match="unknown component 'q9'"):
         sess.suggest(run_id, {"q9.readout_freq": 5.9e9})
     with pytest.raises(ValueError, match="non-finite"):
         sess.suggest(run_id, {"q0.readout_freq": float("nan")})
@@ -715,18 +735,20 @@ def test_suggest_validation(tmp_path):
         sess.suggest(run_id, {"q0.readout_freq": True})  # bool is not a value
     with pytest.raises(ValueError, match="must be a number"):
         sess.suggest(run_id, {"q0.readout_freq": "5.9e9"})
-    with pytest.raises(ValueError, match="'qubit.field'"):
-        sess.suggest(run_id, {"readout_freq": 5.9e9})  # no qubit part
+    with pytest.raises(ValueError, match="'component.field'"):
+        sess.suggest(run_id, {"readout_freq": 5.9e9})  # no component part
     with pytest.raises(ValueError, match="no assignments"):
         sess.suggest(run_id, {})
     # nothing was stored by any failed attempt
     assert sess.load_run(run_id)["record"]["suggestions"] == []
 
-    sess_b = Session(SimulatedBackend(_device()), data_root=tmp_path / "data", device_name="devB")
+    sess_b = Session(SimulatedBackend(_device()), demo_roster(),
+                     data_root=tmp_path / "data", device_name="devB")
     with pytest.raises(RuntimeError, match="devA"):
         sess_b.suggest(run_id, {"q0.readout_freq": 5.9e9})
     with pytest.raises(RuntimeError, match="no data_root"):
-        Session(SimulatedBackend(_device())).suggest(run_id, {"q0.readout_freq": 5.9e9})
+        Session(SimulatedBackend(_device()), demo_roster()).suggest(
+            run_id, {"q0.readout_freq": 5.9e9})
 
 
 def test_suggest_during_accept_window_survives(tmp_path):
@@ -734,7 +756,7 @@ def test_suggest_during_accept_window_survives(tmp_path):
     concurrent accept's load->write window must survive — accept persists its
     decisions via the index-targeted editor, never a stale whole-list snapshot."""
     sess_a = _session(tmp_path)
-    result = sess_a.run("resonator_spectroscopy", {"qubits": ["q0"]})
+    result = sess_a.run("resonator_spectroscopy", {"targets": ["q0"]})
     run_id = result["run_id"]
     sess_b = _session(tmp_path)  # a second terminal on the same lab
 
@@ -746,7 +768,7 @@ def test_suggest_during_accept_window_survives(tmp_path):
 
     sess_a._apply = apply_with_concurrent_suggest
     summary = sess_a.accept(run_id)
-    assert [a["field"] for a in summary["applied"]] == ["readout_freq", "f_r_hz", "kappa_hz"]
+    assert [a["field"] for a in summary["applied"]] == RESONATOR_FIELDS
     assert summary["pending_left"] == 1  # counted from the FRESH stored list
 
     record = sess_a.load_run(run_id)["record"]
@@ -754,7 +776,7 @@ def test_suggest_during_accept_window_survives(tmp_path):
     by_field = {s["field"]: s for s in record["suggestions"]}
     assert by_field["pi_amp"]["origin"] == "operator"
     assert by_field["pi_amp"]["status"] == "pending"
-    for field in ("readout_freq", "f_r_hz", "kappa_hz"):
+    for field in RESONATOR_FIELDS:
         assert by_field[field]["status"] == "accepted" and by_field[field]["decided_by"]
     assert [r["run_id"] for r in sess_a.find_runs(pending=True)] == [run_id]
 
@@ -764,7 +786,7 @@ def test_accept_during_suggest_window_survives(tmp_path):
     suggest's load->write window must keep its decisions — suggest appends to the
     FRESH stored list under the record lock, so statuses never revert to pending."""
     sess_a = _session(tmp_path)
-    result = sess_a.run("resonator_spectroscopy", {"qubits": ["q0"]})
+    result = sess_a.run("resonator_spectroscopy", {"targets": ["q0"]})
     run_id = result["run_id"]
     sess_b = _session(tmp_path)
 
@@ -782,16 +804,16 @@ def test_accept_during_suggest_window_survives(tmp_path):
     record = sess_b.load_run(run_id)["record"]
     assert len(record["suggestions"]) == 4
     by_field = {s["field"]: s for s in record["suggestions"]}
-    for field in ("readout_freq", "f_r_hz", "kappa_hz"):  # NOT reverted to pending
+    for field in RESONATOR_FIELDS:  # NOT reverted to pending
         assert by_field[field]["status"] == "accepted" and by_field[field]["decided_by"]
     assert by_field["pi_amp"]["status"] == "pending"
 
 
-def test_old_suggestion_dicts_default_to_estimator():
+def test_suggestion_dicts_without_origin_default_to_estimator():
     """Records written before the origin field existed stay parseable and truthful."""
     from scqo.suggestions import Suggestion
 
-    s = Suggestion(**{"qubit": "q0", "field": "readout_freq", "store": "instrument",
+    s = Suggestion(**{"component": "q0", "field": "readout_freq", "store": "instrument",
                       "before": 1.0, "after": 2.0, "status": "accepted",
                       "decided_at": "2026-07-01T10:00:00+08:00", "decided_by": "bob",
                       "comment": ""})
@@ -800,9 +822,9 @@ def test_old_suggestion_dicts_default_to_estimator():
 
 def test_format_table_marks_operator_rows():
     rows = [
-        {"qubit": "q0", "field": "readout_freq", "store": "instrument", "before": 1.0,
+        {"component": "q0", "field": "readout_freq", "store": "instrument", "before": 1.0,
          "after": 2.0, "status": "pending", "origin": "operator", "proposed_by": "alice"},
-        {"qubit": "q0", "field": "t1_s", "store": "physical", "before": None,
+        {"component": "q0", "field": "t1_s", "store": "physical", "before": None,
          "after": 3.0, "status": "pending"},  # estimator row: no marker
     ]
     table = format_table(rows)
@@ -811,11 +833,11 @@ def test_format_table_marks_operator_rows():
     assert "operator" not in second
 
 
-def test_accept_vendor_rejection_skips_rest_of_qubit(tmp_path):
-    """Ramsey proposes drive_freq THEN t2_star_s: if the vendor rejects the knob,
-    the qubit's remaining items stay pending too — no half-applied qubit."""
+def test_accept_vendor_rejection_skips_rest_of_component(tmp_path):
+    """Ramsey proposes drive_freq THEN f_01_hz/t2_star_s: if the vendor rejects the
+    knob, the component's remaining items stay pending too — no half-applied qubit."""
     sess = Session(
-        SimulatedBackend(_VendorRejectsDriveFreq(_device())),
+        SimulatedBackend(_VendorRejectsDriveFreq(_device())), demo_roster(),
         data_root=tmp_path / "data", device_name="devA",
     )
     result = sess.run("qubit_ramsey", RAMSEY_PARAMS)
@@ -823,10 +845,11 @@ def test_accept_vendor_rejection_skips_rest_of_qubit(tmp_path):
 
     assert summary["applied"] == []
     assert len(summary["errors"]) == 1 and "vendor rejected" in summary["errors"][0]
-    assert summary["pending_left"] == 2  # both items remain decidable
+    assert summary["pending_left"] == 3  # every item remains decidable
     assert sess.history() == [] and sess.physical_state() == {}
     record = sess.load_run(result["run_id"])["record"]
     by_field = {s["field"]: s for s in record["suggestions"]}
     assert by_field["drive_freq"]["status"] == "pending"
     assert "apply failed" in by_field["drive_freq"]["comment"]
+    assert by_field["f_01_hz"]["status"] == "pending"
     assert by_field["t2_star_s"]["status"] == "pending"

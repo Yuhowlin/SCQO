@@ -23,13 +23,22 @@ from scqo import LabConfig, Session, load_lab_config, make_session
 from scqo.backend import Backend
 
 #: Demo device for the built-in simulated backend (unified across the lab — the QM
-#: repo's old q1/q2 demo names were retired with the CLI consolidation).
+#: repo's old q1/q2 demo names were retired with the CLI consolidation). The demo
+#: ROSTER (scqo.testing.demo_roster) adds the satellite components (q*_res, q*_ro,
+#: q*_xy) so every code path exercises the component model.
 DEMO_QUBITS = {
     "q0": {"readout_freq": 5.95e9, "drive_freq": 3.87e9, "pi_amp": 0.20, "readout_amp": 0.25,
-           "readout_power_dbm": -25.0},
+           "readout_power_dbm": -25.0, "readout_duration_s": 2.0e-6,
+           "readout_integration_s": 2.0e-6},
     "q1": {"readout_freq": 6.05e9, "drive_freq": 4.01e9, "pi_amp": 0.18, "readout_amp": 0.22,
-           "readout_power_dbm": -27.0},
+           "readout_power_dbm": -27.0, "readout_duration_s": 2.0e-6,
+           "readout_integration_s": 2.0e-6},
+    # the demo QCQ pair (roster: demo_roster's q0_q1 Coupling/TransmonPair)
+    "q0_q1": {"coupler_decouple_v": 0.08, "coupler_interaction_v": -0.12},
 }
+
+#: non-ReadableTransmon demo entries (InMemoryDevice's derived-witness labels)
+DEMO_CATEGORIES = {"q0_q1": "TransmonPair"}
 
 #: backend family -> (what provides it, which venv on the lab machines)
 SERVED_BY = {
@@ -39,15 +48,21 @@ SERVED_BY = {
 }
 
 
-def default_qubits(sess: Session) -> list[str]:
-    """Measurable qubits for 'run on everything' defaults.
+def default_targets(sess: Session, experiment: str | None = None) -> list[str]:
+    """Measurable components for 'run on everything' defaults: every roster name
+    whose INSTRUMENT category matches the experiment's ``target_category``
+    (ReadableTransmon for single-qubit experiments, TransmonPair for pair ones;
+    ReadableTransmon when no experiment is named). Pass --targets to override."""
+    category = "ReadableTransmon"
+    if experiment is not None:
+        from scqo.registry import get as _get_experiment
 
-    The device tree may also contain couplers (lab convention: ``c*``, e.g. ``c12``)
-    modeled as transmon elements without a usable readout port — measuring one fails
-    on hardware. Only ``q*`` elements are measurement targets by default; pass
-    --qubits to override explicitly.
-    """
-    return [q for q in sess.device_state() if q.startswith("q")]
+        try:
+            category = getattr(_get_experiment(experiment), "target_category",
+                               "ReadableTransmon")
+        except KeyError:
+            pass  # unknown name fails later with the catalog's own message
+    return sess.roster.names(category)
 
 
 def ensure_demo_experiments() -> None:
@@ -72,13 +87,34 @@ def ensure_demo_experiments() -> None:
                                                              "__doc__": cls.__doc__}))
 
 
+def _load_roster(cfg: LabConfig):
+    """The selected device's roster (components.toml, REQUIRED post-cutover).
+
+    A missing file fails loudly with the minimal template — writing it is the
+    one-time step that brings a device into the component model."""
+    from scqo.roster import load_components
+
+    try:
+        return load_components(Path(cfg.data_root) / cfg.device)
+    except FileNotFoundError as err:
+        raise SystemExit(str(err)) from None
+    except ValueError as err:  # RosterError: a wrong roster must never half-load
+        raise SystemExit(str(err)) from None
+
+
 def _demo_session(cfg: LabConfig, setup_name: str = "",
                   cooldown_id: str = "") -> tuple[Session, LabConfig]:
-    from scqo.testing import InMemoryDevice, SimulatedBackend
+    from scqo.testing import InMemoryDevice, SimulatedBackend, demo_roster
 
     ensure_demo_experiments()
-    backend: Backend = SimulatedBackend(InMemoryDevice(DEMO_QUBITS))
-    return make_session(backend, cfg, backend_label="simulated",
+    backend: Backend = SimulatedBackend(InMemoryDevice(DEMO_QUBITS, DEMO_CATEGORIES))
+    # Device-less demo: the built-in roster. A CONFIGURED device on a simulated
+    # setup still uses its own components.toml (the chipT prototyping path).
+    if cfg.device is not None and cfg.data_root is not None:
+        roster = _load_roster(cfg)
+    else:
+        roster = demo_roster()
+    return make_session(backend, cfg, roster, backend_label="simulated",
                         setup_name=setup_name, cooldown_id=cooldown_id), cfg
 
 
@@ -179,10 +215,11 @@ def build_session(config_path: str | None = None) -> tuple[Session, LabConfig]:
     family = setup["backend"]
     if family == "simulated":
         return _demo_session(cfg, setup_name=name, cooldown_id=cid)
+    roster = _load_roster(cfg)
     for ep in entry_points(group="scqo.backends"):
         if ep.name == family:
             backend = ep.load()(cfg, setup)  # a factory ImportError propagates with its traceback
-            return make_session(backend, cfg, backend_label=family,
+            return make_session(backend, cfg, roster, backend_label=family,
                                 setup_name=name, cooldown_id=cid), cfg
     provider, venv = SERVED_BY[family]
     raise SystemExit(

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from scqo import Outcome, Session, register, reindex
 from scqo.experiments import QubitRamsey, ResonatorSpectroscopy
-from scqo.testing import InMemoryDevice, SimulatedBackend
+from scqo.testing import InMemoryDevice, SimulatedBackend, demo_roster
 
 
 # Concrete demo experiments (probe is a no-op under SimulatedBackend); registering under
@@ -55,15 +55,16 @@ def _device() -> InMemoryDevice:
 
 
 def _session(tmp_path, **kwargs) -> Session:
-    return Session(SimulatedBackend(_device()), data_root=tmp_path / "data", device_name="devA", **kwargs)
+    return Session(SimulatedBackend(_device()), demo_roster(), data_root=tmp_path / "data",
+               device_name="devA", **kwargs)
 
 
-RAMSEY_PARAMS = {"qubits": ["q1"], "frequency_detuning_hz": 1.0e6, "max_idle_time_ns": 4000, "num_points": 201}
+RAMSEY_PARAMS = {"targets": ["q1"], "frequency_detuning_hz": 1.0e6, "max_idle_time_ns": 4000, "num_points": 201}
 
 
 def test_run_persists_full_layout(tmp_path):
     sess = _session(tmp_path)
-    result = sess.run("resonator_spectroscopy", {"qubits": ["q0", "q1"]}, update="apply")
+    result = sess.run("resonator_spectroscopy", {"targets": ["q0", "q1"]}, update="apply")
     assert result["outcomes"]["q0"] == Outcome.SUCCESSFUL.value
     assert "datastore_error" not in result
 
@@ -86,7 +87,7 @@ def test_run_persists_full_layout(tmp_path):
     assert record["run_id"] == result["run_id"]
     assert record["outcome"] == "successful"
     assert record["updated_device"] is True
-    assert record["qubits"] == ["q0", "q1"]
+    assert record["targets"] == ["q0", "q1"]
     # the applied updates carry their audit trail on the record (the truth)
     assert {s["status"] for s in record["suggestions"]} == {"accepted"}
 
@@ -100,12 +101,12 @@ def test_default_run_stores_pending_suggestions(tmp_path):
     """The v0.6 default: nothing applied, the proposal is stored on the record and
     findable via the pending filter — and the decision store survives a reindex."""
     sess = _session(tmp_path)
-    result = sess.run("resonator_spectroscopy", {"qubits": ["q0"]})
+    result = sess.run("resonator_spectroscopy", {"targets": ["q0"]})
     run_dir = Path(result["data_path"])
 
     record = json.loads((run_dir / "record.json").read_text(encoding="utf-8"))
     assert record["updated_device"] is False
-    assert [s["field"] for s in record["suggestions"]] == ["readout_freq", "f_r_hz", "kappa_hz"]
+    assert [s["field"] for s in record["suggestions"]] == ["readout_freq", "f_r_hz", "kappa_tot_hz"]
     assert {s["status"] for s in record["suggestions"]} == {"pending"}
 
     before = json.loads((run_dir / "device_before.json").read_text(encoding="utf-8"))
@@ -122,14 +123,14 @@ def test_update_suggestions_append_recomputes_pending(tmp_path):
     """The contract Session.suggest relies on: update_suggestions accepts a LONGER
     list (append) and recomputes the index's pending counter from it."""
     sess = _session(tmp_path)
-    result = sess.run("resonator_spectroscopy", {"qubits": ["q0"]})
+    result = sess.run("resonator_spectroscopy", {"targets": ["q0"]})
     run_id = result["run_id"]
     sess.accept(run_id)  # everything decided
     assert sess.find_runs(pending=True) == []
 
     record = sess.load_run(run_id)["record"]
     appended = record["suggestions"] + [{
-        "qubit": "q0", "field": "pi_amp", "store": "instrument",
+        "component": "q0", "field": "pi_amp", "store": "instrument",
         "before": 0.2, "after": 0.21, "status": "pending",
         "origin": "operator", "proposed_by": "alice",
     }]
@@ -144,7 +145,7 @@ def test_update_suggestions_append_recomputes_pending(tmp_path):
 
 def test_find_runs_filters(tmp_path):
     sess = _session(tmp_path)
-    r1 = sess.run("resonator_spectroscopy", {"qubits": ["q0"]})
+    r1 = sess.run("resonator_spectroscopy", {"targets": ["q0"]})
     r2 = sess.run("qubit_ramsey", RAMSEY_PARAMS, tags=["special"])
     assert r1.get("error") is None, r1["error"]
     assert r2.get("error") is None, r2["error"]
@@ -153,7 +154,7 @@ def test_find_runs_filters(tmp_path):
     assert [r["run_id"] for r in runs] == [r2["run_id"], r1["run_id"]]  # newest first
 
     assert [r["run_id"] for r in sess.find_runs(experiment="qubit_ramsey")] == [r2["run_id"]]
-    assert [r["run_id"] for r in sess.find_runs(qubit="q0")] == [r1["run_id"]]
+    assert [r["run_id"] for r in sess.find_runs(target="q0")] == [r1["run_id"]]
     assert [r["run_id"] for r in sess.find_runs(tag="special")] == [r2["run_id"]]
     assert sess.find_runs(outcome="successful", experiment="resonator_spectroscopy")
     assert sess.find_runs(since="2000-01-01") and not sess.find_runs(until="2000-01-01")
@@ -165,7 +166,7 @@ def test_find_runs_filters(tmp_path):
 
 def test_tags_default_and_retroactive(tmp_path):
     sess = _session(tmp_path, default_tags=["cooldown7"])
-    r = sess.run("resonator_spectroscopy", {"qubits": ["q0"]}, tags=["extra"], note="after wiring fix")
+    r = sess.run("resonator_spectroscopy", {"targets": ["q0"]}, tags=["extra"], note="after wiring fix")
 
     row = sess.find_runs(tag="cooldown7")[0]
     assert row["run_id"] == r["run_id"]
@@ -190,7 +191,7 @@ def test_suggest_during_tag_window_survives(tmp_path, monkeypatch):
     from scqo import datastore as datastore_mod
 
     sess_a = _session(tmp_path)
-    run_id = sess_a.run("resonator_spectroscopy", {"qubits": ["q0"]})["run_id"]
+    run_id = sess_a.run("resonator_spectroscopy", {"targets": ["q0"]})["run_id"]
     sess_b = _session(tmp_path)  # a second terminal on the same lab
 
     errors: list[Exception] = []
@@ -234,7 +235,7 @@ def test_suggest_during_tag_window_survives(tmp_path, monkeypatch):
     record = sess_a.load_run(run_id)["record"]
     assert record["tags"] == ["thesis-fig3"] and record["note"] == "tagged mid-suggest"
     assert [s["field"] for s in record["suggestions"]] == [  # nothing clobbered
-        "readout_freq", "f_r_hz", "kappa_hz", "pi_amp"]
+        "readout_freq", "f_r_hz", "kappa_tot_hz", "pi_amp"]
     assert record["suggestions"][-1]["origin"] == "operator"
 
     # record.json is the truth: both writers' edits survive a full rebuild
@@ -249,7 +250,7 @@ def test_tag_during_suggest_window_survives(tmp_path):
     list under the record lock, and tag_run holds that lock only across its own
     read-write (a lock held across the nested writer would deadlock, not clobber)."""
     sess_a = _session(tmp_path)
-    run_id = sess_a.run("resonator_spectroscopy", {"qubits": ["q0"]})["run_id"]
+    run_id = sess_a.run("resonator_spectroscopy", {"targets": ["q0"]})["run_id"]
     sess_b = _session(tmp_path)
 
     real_load = sess_b._load_run_record
@@ -267,13 +268,13 @@ def test_tag_during_suggest_window_survives(tmp_path):
     assert record["tags"] == ["thesis-fig3"]  # NOT reverted by the suggestion write
     assert record["note"] == "tagged mid-suggest"
     assert [s["field"] for s in record["suggestions"]] == [
-        "readout_freq", "f_r_hz", "kappa_hz", "pi_amp"]
+        "readout_freq", "f_r_hz", "kappa_tot_hz", "pi_amp"]
     assert [r["run_id"] for r in sess_b.find_runs(tag="thesis-fig3")] == [run_id]
 
 
 def test_reindex_rebuilds_deleted_index(tmp_path):
     sess = _session(tmp_path)
-    r1 = sess.run("resonator_spectroscopy", {"qubits": ["q0"]})
+    r1 = sess.run("resonator_spectroscopy", {"targets": ["q0"]})
     r2 = sess.run("qubit_ramsey", RAMSEY_PARAMS)
     before = [(r["run_id"], r["outcome"], r["tags"]) for r in sess.find_runs()]
 
@@ -290,7 +291,7 @@ def test_reindex_rebuilds_deleted_index(tmp_path):
 
 def test_failed_run_is_persisted_and_findable(tmp_path):
     sess = _session(tmp_path)
-    result = sess.run("broken_resonator_spectroscopy", {"qubits": ["q0"]})
+    result = sess.run("broken_resonator_spectroscopy", {"targets": ["q0"]})
     assert result["error"]
     assert result["outcomes"]["q0"] == Outcome.NO_DATA.value
     assert "run_id" in result  # failed runs are saved too — that's the debugging story
@@ -305,7 +306,7 @@ def test_failed_run_is_persisted_and_findable(tmp_path):
 
 def test_load_run_and_open_dataset(tmp_path):
     sess = _session(tmp_path)
-    r = sess.run("resonator_spectroscopy", {"qubits": ["q0", "q1"], "num_points": 51})
+    r = sess.run("resonator_spectroscopy", {"targets": ["q0", "q1"], "num_points": 51})
 
     loaded = sess.load_run(r["run_id"])
     assert loaded["record"]["experiment"] == "resonator_spectroscopy"
@@ -315,13 +316,13 @@ def test_load_run_and_open_dataset(tmp_path):
 
     ds = sess.datastore.open_dataset(r["run_id"])
     assert set(ds.data_vars) >= {"I", "Q"}
-    assert list(ds["qubit"].values) == ["q0", "q1"]
+    assert list(ds["target"].values) == ["q0", "q1"]
     assert ds.sizes["detuning_hz"] == 51
 
 
 def test_history_links_to_run_id(tmp_path):
     sess = _session(tmp_path)
-    r = sess.run("resonator_spectroscopy", {"qubits": ["q0"]}, update="apply")
+    r = sess.run("resonator_spectroscopy", {"targets": ["q0"]}, update="apply")
     hist = sess.history()
     assert hist
     assert all(h["run_id"] == r["run_id"] for h in hist)
@@ -345,7 +346,7 @@ def test_update_failure_is_structured_and_run_still_persisted(tmp_path):
     """A raising update() must not raise across the boundary, and must not lose the
     measurement — the capture phase reports it as a structured error."""
     sess = _session(tmp_path)
-    result = sess.run("update_explodes", {"qubits": ["q0"]})
+    result = sess.run("update_explodes", {"targets": ["q0"]})
     assert result["outcomes"]["q0"] == Outcome.SUCCESSFUL.value  # the measurement itself
     assert "suggestion capture failed" in result["error"]
     assert result["suggestions"] == []  # nothing proposable came out of it
@@ -360,7 +361,7 @@ def test_dates_are_local_and_until_is_day_inclusive(tmp_path):
     from datetime import date
 
     sess = _session(tmp_path)
-    r = sess.run("resonator_spectroscopy", {"qubits": ["q0"]})
+    r = sess.run("resonator_spectroscopy", {"targets": ["q0"]})
     today = date.today().isoformat()
     assert Path(r["data_path"]).parent.name == today  # folder date == local date
     assert sess.find_runs(since=today)  # a run made "today" is found with since=today
@@ -373,7 +374,7 @@ def test_old_index_schema_triggers_rebuild(tmp_path):
     import sqlite3
 
     sess = _session(tmp_path)
-    r = sess.run("resonator_spectroscopy", {"qubits": ["q0"]})
+    r = sess.run("resonator_spectroscopy", {"targets": ["q0"]})
     con = sqlite3.connect(sess.datastore._db_path)
     con.execute("UPDATE meta SET value = '1' WHERE key = 'schema_version'")
     con.commit()
@@ -384,8 +385,8 @@ def test_old_index_schema_triggers_rebuild(tmp_path):
 
 
 def test_without_data_root_behaves_as_before(tmp_path):
-    sess = Session(SimulatedBackend(_device()))
-    result = sess.run("resonator_spectroscopy", {"qubits": ["q0"]}, update="apply")
+    sess = Session(SimulatedBackend(_device()), demo_roster())
+    result = sess.run("resonator_spectroscopy", {"targets": ["q0"]}, update="apply")
     assert result["outcomes"]["q0"] == Outcome.SUCCESSFUL.value
     assert "run_id" not in result and "data_path" not in result
     assert result["suggestions"]  # returned even without a datastore (the AI loop)
@@ -398,9 +399,10 @@ def test_multi_device_one_index(tmp_path):
     Qubit names repeat across chips, so fit_trend must be scopeable by device."""
     from scqo import DataStore
 
-    ra = _session(tmp_path).run("resonator_spectroscopy", {"qubits": ["q0"]})  # devA
-    sess_b = Session(SimulatedBackend(_device()), data_root=tmp_path / "data", device_name="devB")
-    rb = sess_b.run("resonator_spectroscopy", {"qubits": ["q0"]})
+    ra = _session(tmp_path).run("resonator_spectroscopy", {"targets": ["q0"]})  # devA
+    sess_b = Session(SimulatedBackend(_device()), demo_roster(),
+                     data_root=tmp_path / "data", device_name="devB")
+    rb = sess_b.run("resonator_spectroscopy", {"targets": ["q0"]})
 
     store = DataStore(tmp_path / "data")
     assert store.distinct_devices() == ["devA", "devB"]
@@ -419,7 +421,7 @@ def test_operator_is_stamped_and_survives_reindex(tmp_path):
     from scqo import DataStore
 
     sess = _session(tmp_path)
-    r = sess.run("resonator_spectroscopy", {"qubits": ["q0"]})
+    r = sess.run("resonator_spectroscopy", {"targets": ["q0"]})
     me = getpass.getuser()
 
     store = DataStore(tmp_path / "data")
@@ -602,7 +604,7 @@ def test_runs_stamp_cooldown_and_setup_name(tmp_path):
     )
     # (a) single-setup cycle: a Session with NO setup_name auto-resolves the only one
     sess = _session(tmp_path)
-    r1 = sess.run("resonator_spectroscopy", {"qubits": ["q0"]})
+    r1 = sess.run("resonator_spectroscopy", {"targets": ["q0"]})
     rec1 = json.loads((Path(r1["data_path"]) / "record.json").read_text(encoding="utf-8"))
     assert rec1["cooldown"] == "cd7"
     assert rec1["setup"] == "simA"
@@ -616,7 +618,7 @@ def test_runs_stamp_cooldown_and_setup_name(tmp_path):
     )
     # ...an UNBOUND session can no longer auto-pick: it stamps "" (tolerant; the
     # CLI chain is the loud enforcer)
-    r2 = sess.run("resonator_spectroscopy", {"qubits": ["q0"]})
+    r2 = sess.run("resonator_spectroscopy", {"targets": ["q0"]})
     rec2 = json.loads((Path(r2["data_path"]) / "record.json").read_text(encoding="utf-8"))
     assert rec2["cooldown"] == "cd7"
     assert rec2["setup"] == ""
@@ -624,7 +626,7 @@ def test_runs_stamp_cooldown_and_setup_name(tmp_path):
     # ...a BOUND store/session stamps its name (bound once, not re-validated)
     assert DataStore(data_root, device_name="devA", setup="simB").run_stamps() == ("cd7", "simB")
     sess_b = _session(tmp_path, setup_name="simB")
-    r3 = sess_b.run("resonator_spectroscopy", {"qubits": ["q0"]})
+    r3 = sess_b.run("resonator_spectroscopy", {"targets": ["q0"]})
     rec3 = json.loads((Path(r3["data_path"]) / "record.json").read_text(encoding="utf-8"))
     assert rec3["cooldown"] == "cd7"
     assert rec3["setup"] == "simB"
@@ -645,7 +647,7 @@ def test_runs_stamp_cooldown_and_setup_name(tmp_path):
 def test_run_without_registry_stamps_empty(tmp_path):
     """Library Sessions stay tolerant (the CLI chain is the loud enforcer)."""
     sess = _session(tmp_path)
-    r = sess.run("resonator_spectroscopy", {"qubits": ["q0"]})
+    r = sess.run("resonator_spectroscopy", {"targets": ["q0"]})
     rec = json.loads((Path(r["data_path"]) / "record.json").read_text(encoding="utf-8"))
     assert rec["cooldown"] == "" and rec["setup"] == ""
 
@@ -659,24 +661,25 @@ def test_broken_registry_fails_at_run_start(tmp_path):
     _write_cooldowns(data_root, "devA", "not [valid toml")
     sess = _session(tmp_path)
     with pytest.raises(ValueError, match="cooldowns.toml"):
-        sess.run("resonator_spectroscopy", {"qubits": ["q0"]})
+        sess.run("resonator_spectroscopy", {"targets": ["q0"]})
 
 
-def test_v6_index_auto_reindexes_to_v7(tmp_path):
-    """v0.6 records carry 'setup_since' (a retired date field) and no 'setup';
-    opening a v7 DataStore over a v6 index rebuilds from the folders: the old
-    field is dropped, the renamed column reads '' and meta says version 7."""
+def test_old_index_auto_reindexes_to_v8(tmp_path):
+    """Pre-cutover records carry 'qubits' (and v0.6 ones 'setup_since'/no 'setup');
+    opening a v8 DataStore over an old index rebuilds from the folders: the old
+    fields are dropped, 'qubits' maps to the 'targets' column and meta says 8."""
     import sqlite3
 
     from scqo import DataStore
 
     sess = _session(tmp_path)
-    r = sess.run("resonator_spectroscopy", {"qubits": ["q0"]})
+    r = sess.run("resonator_spectroscopy", {"targets": ["q0"]})
 
-    # rewrite the record as a v6 one: setup_since present, setup absent
+    # rewrite the record as an old one: qubits + setup_since present, setup absent
     rec_path = Path(r["data_path"]) / "record.json"
     record = json.loads(rec_path.read_text(encoding="utf-8"))
     del record["setup"]
+    record["qubits"] = record.pop("targets")
     record["setup_since"] = "2026-01-05"
     record["schema_version"] = 6
     rec_path.write_text(json.dumps(record), encoding="utf-8")
@@ -690,12 +693,13 @@ def test_v6_index_auto_reindexes_to_v7(tmp_path):
     store = DataStore(tmp_path / "data")  # version mismatch -> automatic rebuild
     (row,) = store.find_runs()
     assert row["run_id"] == r["run_id"]
+    assert row["targets"] == ["q0"]  # the OLD 'qubits' key stays findable
     assert row["setup"] == ""  # renamed column; the old date value is not carried over
     assert "setup_since" not in row
     con = sqlite3.connect(db_path)
     (version,) = con.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
     con.close()
-    assert version == "7"
+    assert version == "8"
 
 
 def test_setup_validation_rejects_any_typed_instrument_config(tmp_path):
@@ -763,8 +767,9 @@ def test_power_context_persists_and_reindexes(tmp_path):
 
     from scqo import Session
 
-    sess = Session(_PowerBackend(device), data_root=tmp_path / "data", device_name="devA")
-    result = sess.run("resonator_spectroscopy", {"qubits": ["q0"]}, update="none")
+    sess = Session(_PowerBackend(device), demo_roster(), data_root=tmp_path / "data",
+                   device_name="devA")
+    result = sess.run("resonator_spectroscopy", {"targets": ["q0"]}, update="none")
     run_id = result["run_id"]
 
     loaded = sess.load_run(run_id)
@@ -782,3 +787,17 @@ def test_power_context_persists_and_reindexes(tmp_path):
     rec_path = _Path(loaded["path"]) / "record.json"
     rec_path.write_text(_json.dumps(record), encoding="utf-8")
     assert sess.datastore.reindex() >= 1
+
+
+def test_cooldown_registry_tolerates_powershell_bom(tmp_path):
+    """PowerShell 5.1's `Set-Content -Encoding utf8` writes a UTF-8 BOM; the
+    cooldown registry is exactly the file operators write that way — it must
+    parse identically (the BOM used to fail as 'Invalid statement at line 1')."""
+    from scqo.datastore import load_cooldowns
+
+    dev = tmp_path / "bomdev"
+    dev.mkdir()
+    body = '[cd1]\nstart = 2026-07-20\n\n[cd1.setup.practice]\nbackend = "simulated"\n'
+    (dev / "cooldowns.toml").write_bytes(b"\xef\xbb\xbf" + body.encode("utf-8"))
+    cycles = load_cooldowns(tmp_path, "bomdev")
+    assert cycles["cd1"]["setup"]["practice"]["backend"] == "simulated"

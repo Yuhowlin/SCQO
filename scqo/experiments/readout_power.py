@@ -23,11 +23,11 @@ from .._scqat import per_qubit_results
 from ._sim import stable_seed
 from ..contract import DatasetContract
 from ..experiment import Experiment
-from ..parameters import Parameters, QubitSelection
+from ..parameters import Parameters, TargetSelection
 from ..result import Outcome, Result
 
 
-class ReadoutPowerParameters(QubitSelection, Parameters):
+class ReadoutPowerParameters(TargetSelection, Parameters):
     """Inputs for fidelity-vs-readout-amplitude optimization."""
 
     min_amp_factor: float = Field(0.4, gt=0, description="Lowest amplitude prefactor (x current readout_amp).")
@@ -56,6 +56,7 @@ class ReadoutPower(Experiment):
         sweep_units=("x", "state", "shot"),
         variables=("I", "Q"),
     )
+    required_operations: ClassVar[tuple[str, ...]] = ("readout",)
 
     params: ReadoutPowerParameters
 
@@ -69,11 +70,11 @@ class ReadoutPower(Experiment):
     def simulate(self, coords: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         amps = coords["amp_prefactor"]
         n_shots = coords["shot_idx"].size
-        qubits = self.params.qubits
-        rng = np.random.default_rng(stable_seed("readout_power", *qubits))
-        i_data = np.empty((len(qubits), amps.size, 2, n_shots))
+        targets = self.params.targets
+        rng = np.random.default_rng(stable_seed("readout_power", *targets))
+        i_data = np.empty((len(targets), amps.size, 2, n_shots))
         q_data = np.empty_like(i_data)
-        for k in range(len(qubits)):
+        for k in range(len(targets)):
             sep_unit = rng.uniform(2.2, 3.0)  # blob separation per unit prefactor (sigma units)
             knee = rng.uniform(1.0, 1.5)  # measurement-induced transitions set in above this
             for j, a in enumerate(amps):
@@ -91,15 +92,15 @@ class ReadoutPower(Experiment):
         from scqat.estimators.readout_fidelity import ReadoutPowerFidelityEstimator
 
         # scqat's contract: I/Q over (amp_prefactor, prepared_state, shot_idx) — names match.
-        prepared = self.dataset.transpose("qubit", "amp_prefactor", "prepared_state", "shot_idx")
-        old_amps = {q: float(self.device.qubit(q).readout_amp) for q in self.params.qubits}
+        prepared = self.dataset.transpose("target", "amp_prefactor", "prepared_state", "shot_idx")
+        old_amps = {q: float(self.device.component(q).readout_amp) for q in self.params.targets}
 
         results = per_qubit_results(
             prepared, ReadoutPowerFidelityEstimator(), artifact_dir=self.artifact_dir
         )
 
         result = ReadoutPowerResult()
-        for qubit in self.params.qubits:
+        for qubit in self.params.targets:
             r = results[qubit]
             best = r.get("best_sweep_value")
             fidelity = r.get("best_fidelity")
@@ -119,4 +120,4 @@ class ReadoutPower(Experiment):
             return
         for qubit, fit in self.result.fit.items():
             if self.result.outcomes[qubit] is Outcome.SUCCESSFUL:
-                self.device.qubit(qubit).readout_amp = fit["readout_amp"]
+                self.device.component(qubit).readout_amp = fit["readout_amp"]

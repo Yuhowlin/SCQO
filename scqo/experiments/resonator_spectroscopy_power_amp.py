@@ -48,11 +48,11 @@ from .._scqat import per_qubit_results
 from ._sim import stable_seed
 from ..contract import DatasetContract
 from ..experiment import Experiment
-from ..parameters import AveragingParameters, QubitSelection
+from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
 
 
-class ResonatorSpectroscopyPowerAmpParameters(QubitSelection, AveragingParameters):
+class ResonatorSpectroscopyPowerAmpParameters(TargetSelection, AveragingParameters):
     """Inputs for the fast amplitude-sweep absolute-power punchout scan."""
 
     frequency_span_hz: float = Field(20e6, gt=0, description="Total detuning span around the current readout_freq.")
@@ -110,6 +110,7 @@ class ResonatorSpectroscopyPowerAmp(Experiment):
     Contract: ClassVar[DatasetContract] = DatasetContract(
         sweeps=("power_dbm", "detuning_hz"), sweep_units=("dBm", "Hz"), variables=("I", "Q")
     )
+    required_operations: ClassVar[tuple[str, ...]] = ("readout",)
 
     params: ResonatorSpectroscopyPowerAmpParameters
 
@@ -135,8 +136,8 @@ class ResonatorSpectroscopyPowerAmp(Experiment):
         """
         self.sweep_axes = self.define_sweep()
         top = float(self.params.max_power_dbm)
-        qubits = list(self.params.qubits)
-        views = {q: self.device.qubit(q) for q in qubits}
+        targets = list(self.params.targets)
+        views = {q: self.device.component(q) for q in targets}
 
         previous: dict[str, float] = {}
         for q, view in views.items():
@@ -157,13 +158,13 @@ class ResonatorSpectroscopyPowerAmp(Experiment):
         # Figure provenance, captured once at the top (the chain stays put during
         # the sweep). Never fail a measurement over it.
         try:
-            self._top_context = self.backend.power_context(qubits) or {}
+            self._top_context = self.backend.power_context(targets) or {}
         except Exception:  # noqa: BLE001 - provenance only
             self._top_context = {}
         self._top_amps: dict[str, float] = {}
-        for q in qubits:
+        for q in targets:
             try:
-                self._top_amps[q] = float(self.backend.device.qubit(q).readout_amp)
+                self._top_amps[q] = float(self.backend.device.component(q).readout_amp)
             except Exception:  # noqa: BLE001 - provenance only
                 self._top_amps[q] = float("nan")
 
@@ -187,14 +188,14 @@ class ResonatorSpectroscopyPowerAmp(Experiment):
     def simulate(self, coords: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         detuning = coords["detuning_hz"]
         power = coords["power_dbm"]
-        qubits = self.params.qubits
+        targets = self.params.targets
         top = float(self.params.max_power_dbm)
-        rng = np.random.default_rng(stable_seed("resonator_spectroscopy_power_amp", *qubits))
+        rng = np.random.default_rng(stable_seed("resonator_spectroscopy_power_amp", *targets))
         span = float(detuning[-1] - detuning[0])
         kappa = span / 15
-        i_data = np.empty((len(qubits), power.size, detuning.size))
+        i_data = np.empty((len(targets), power.size, detuning.size))
         q_data = np.empty_like(i_data)
-        for k in range(len(qubits)):
+        for k in range(len(targets)):
             dressed = rng.uniform(-0.1, 0.1) * span  # dispersive dip position (low power)
             knee_dbm = top - rng.uniform(8.0, 12.0)  # punchout onset
             for j, p in enumerate(power):
@@ -219,23 +220,23 @@ class ResonatorSpectroscopyPowerAmp(Experiment):
         # scqat's contract: coords `power` + `detuning`, vars I/Q; the estimator's
         # optimal-power logic is derivative-based and its `optimal_power` output is
         # already an absolute dBm value on this axis.
-        qubits = list(self.dataset["qubit"].values)
-        old_freqs = {q: float(self.device.qubit(q).readout_freq) for q in qubits}
+        targets = list(self.dataset["target"].values)
+        old_freqs = {q: float(self.device.component(q).readout_freq) for q in targets}
         # estimate() runs after the revert, so this reads the standing (pre-run) chain.
-        old_power = {q: float(self.device.qubit(q).readout_power_dbm) for q in qubits}
+        old_power = {q: float(self.device.component(q).readout_power_dbm) for q in targets}
         prepared = self.dataset.rename({"detuning_hz": "detuning", "power_dbm": "power"})
-        prepared = prepared.transpose("qubit", "power", "detuning")
+        prepared = prepared.transpose("target", "power", "detuning")
         detuning = prepared["detuning"].values
-        full_freq = np.array([detuning + old_freqs[q] for q in qubits])
-        prepared = prepared.assign_coords(full_freq=(("qubit", "detuning"), full_freq))
-        prepared = self._attach_sweep_provenance(prepared, qubits)
+        full_freq = np.array([detuning + old_freqs[q] for q in targets])
+        prepared = prepared.assign_coords(full_freq=(("target", "detuning"), full_freq))
+        prepared = self._attach_sweep_provenance(prepared, targets)
 
         results = per_qubit_results(
             prepared, ResonatorSpectroscopyPowerEstimator(), artifact_dir=self.artifact_dir
         )
 
         result = ResonatorSpectroscopyPowerAmpResult()
-        for qubit in self.params.qubits:
+        for qubit in self.params.targets:
             r = results[qubit]
             optimal_dbm = float(r["optimal_power"])
             shift = float(r["frequency_shift"])
@@ -251,18 +252,18 @@ class ResonatorSpectroscopyPowerAmp(Experiment):
             result.outcomes[qubit] = Outcome.SUCCESSFUL if ok else Outcome.FAILED
         return result
 
-    def _attach_sweep_provenance(self, prepared, qubits: list) -> "xr.Dataset":  # noqa: F821
+    def _attach_sweep_provenance(self, prepared, targets: list) -> "xr.Dataset":  # noqa: F821
         """Amp/chain provenance in the SAME (qubit, power) form as the _chain
         punchout — the two figures share one format. Labels are always attached;
         the amp/chain subplot data only when the backend reported the chain
         (real backends; simulated -> plain map, like _chain)."""
-        n_q = len(qubits)
+        n_q = len(targets)
         prepared = prepared.assign_coords(
-            power_axis_kind=("qubit", ["absolute dBm"] * n_q),
-            mode_label=("qubit", ["amplitude sweep (fast)"] * n_q),
+            power_axis_kind=("target", ["absolute dBm"] * n_q),
+            mode_label=("target", ["amplitude sweep (fast)"] * n_q),
         )
         ctx = getattr(self, "_top_context", {}) or {}
-        if not any(ctx.get(q) for q in qubits):
+        if not any(ctx.get(q) for q in targets):
             return prepared
         top = float(self.params.max_power_dbm)
         power = prepared.coords["power"].values.astype(float)
@@ -271,7 +272,7 @@ class ResonatorSpectroscopyPowerAmp(Experiment):
         amp = np.full((n_q, n_power), np.nan)
         setting = np.full((n_q, n_power), np.nan)
         names = []
-        for k, q in enumerate(qubits):
+        for k, q in enumerate(targets):
             qctx = ctx.get(q) or {}
             a_top = float(top_amps.get(q, float("nan")))
             if not math.isfinite(a_top):  # fall back to the context's own capture
@@ -286,9 +287,9 @@ class ResonatorSpectroscopyPowerAmp(Experiment):
                 name = "full_scale_power_dbm (dBm)"
             names.append(name)
         return prepared.assign_coords(
-            digital_amp=(("qubit", "power"), amp),
-            chain_setting=(("qubit", "power"), setting),
-            chain_name=("qubit", names),
+            digital_amp=(("target", "power"), amp),
+            chain_setting=(("target", "power"), setting),
+            chain_name=("target", names),
         )
 
     def update(self) -> None:
@@ -296,6 +297,6 @@ class ResonatorSpectroscopyPowerAmp(Experiment):
             return
         for qubit, fit in self.result.fit.items():
             if self.result.outcomes[qubit] is Outcome.SUCCESSFUL:
-                view = self.device.qubit(qubit)
+                view = self.device.component(qubit)
                 view.readout_power_dbm = fit["readout_power_dbm"]
                 view.readout_freq = fit["readout_freq"]

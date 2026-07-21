@@ -11,6 +11,8 @@ same calls drive a manual notebook *and* an LLM tool-use loop:
     sess.reject(run_id, comment="...") # decline them (metadata only)
     sess.suggest(run_id, {"q0.readout_freq": 5.91e9})  # attach YOUR figure-read value
                                        #   to a run (estimator failed); accept as usual
+    sess.set_values({"q0.pi_amp": 0.2})    # runless manual write (experience value):
+                                       #   validated, applied NOW, recorded as (manual)
     sess.find_runs(experiment="qubit_ramsey", qubit="q0")   # find my data (pending=True too)
     sess.load_run(run_id)              # reload a saved run (record/params/result/figures)
     sess.device_state()                # current calibration (this setup's SCQO config)
@@ -36,11 +38,11 @@ from pydantic import ValidationError
 from . import config as _config
 from . import registry
 from .backend import Backend
-from .config import FIELDS, RecordingDevice, _now
+from .config import RecordingDevice, _now
 from .contract import ContractError
 from .datastore import DataStore
 from .experiment import Experiment
-from .physical import PHYSICAL_FIELDS, PHYSICAL_FILE, PhysicalStore
+from .physical import PHYSICAL_FILE, PhysicalStore
 from .result import Outcome, Result
 from .suggestions import (
     Suggestion,
@@ -58,6 +60,7 @@ class Session:
     def __init__(
         self,
         backend: Backend,
+        roster,
         *,
         state_path: str | None = None,
         data_root: str | Path | None = None,
@@ -71,6 +74,9 @@ class Session:
         cooldown_id: str | None = None,
     ) -> None:
         self.backend = backend
+        #: the device's component roster (scqo.roster) — the AUTHORITY on which
+        #: names exist, their categories, topology, and design values.
+        self.roster = roster
         #: provenance label recorded on every run — the resolved setup's backend
         #: ("qblox" / "qm" / "simulated"); the class name alone would be ambiguous.
         self.backend_label = backend_label or type(backend).__name__
@@ -88,7 +94,7 @@ class Session:
         #: (only for devices SCQO fully owns — see scqo.config). The state file lives in
         #: the setup's per-(cooldown, setup) ``scqo/`` folder; each ChangeRecord is
         #: stamped with this session's setup.
-        self.device = RecordingDevice(backend.device, state_path=state_path,
+        self.device = RecordingDevice(backend.device, roster, state_path=state_path,
                                       on_load=state_sync, setup=self.setup_name or None)
         #: measured physics of the SAMPLE (T1, arch/dispersive parameters, ...) — one
         #: file per (cooldown, setup) context. When a state_path is set it sits beside
@@ -102,7 +108,8 @@ class Session:
             physical_path = Path(data_root).expanduser() / device_name / PHYSICAL_FILE
         else:
             physical_path = None
-        self.physical = PhysicalStore(physical_path, setup=self.setup_name or None)
+        self.physical = PhysicalStore(physical_path, roster=roster,
+                                      setup=self.setup_name or None)
         #: run datastore (folders + rebuildable SQLite index); None disables persistence.
         self.datastore = (
             DataStore(data_root, device_name=device_name,
@@ -204,6 +211,17 @@ class Session:
         exp = cls(self.backend, validated)
         exp.device = self.device  # route reads/writes through the recording config
 
+        # Pre-probe target validation against the roster: existence, instrument
+        # category, declared operations. A violation returns the structured
+        # all-failed shape BEFORE any hardware is touched — the machine-readable
+        # gate the AI loop plans against (a flux experiment on a fixed-frequency
+        # chip is refused here, not mid-probe).
+        gate_error = self._validate_targets(cls, exp)
+        if gate_error is not None:
+            # Same payload shape as every other run outcome: callers iterate
+            # result["suggestions"] unconditionally.
+            return {**gate_error.model_dump(mode="json"), "suggestions": []}
+
         started_at = _now()
         run_id: str | None = None
         run_dir: Path | None = None
@@ -224,7 +242,7 @@ class Session:
                 if mode != "none" and result.any_success:
                     # Capture what update() WOULD write. Failures must not raise and
                     # must not destroy the measurement: the fit stays in the result.
-                    capture = SuggestionCapture(self.device, self.physical)
+                    capture = SuggestionCapture(self.device, self.physical, self.roster)
                     exp.device = capture
                     try:
                         exp.update()
@@ -266,7 +284,7 @@ class Session:
             # sweep top is recoverable from parameters.json). Must never fail a run.
             try:
                 power_context = self.backend.power_context(
-                    list(getattr(exp.params, "qubits", []))) or {}
+                    list(getattr(exp.params, "targets", []))) or {}
             except Exception:
                 power_context = {}
             try:
@@ -285,7 +303,10 @@ class Session:
                     updated_device=updated,
                     suggestions=suggestion_dicts,
                     power_context=power_context,
-                    tags=list(dict.fromkeys([*self.default_tags, *(tags or [])])),
+                    # seed_tags: bring-up anchors that fell back to DESIGN values
+                    # mark their runs searchably ("seeded:q1_res.f_r_hz").
+                    tags=list(dict.fromkeys([*self.default_tags, *(tags or []),
+                                             *getattr(exp, "seed_tags", [])])),
                     note=note,
                 )
             except Exception as err:  # never lose a measurement over a save problem
@@ -321,23 +342,23 @@ class Session:
         """
         applied: list[Suggestion] = []
         errors: list[str] = []
-        failed_qubits: set[str] = set()
+        failed_components: set[str] = set()
         self.device.set_context(experiment, run_id)
         try:
             for s in suggestions:
-                if (s.status != "pending" and not reapply) or s.qubit in failed_qubits:
+                if (s.status != "pending" and not reapply) or s.component in failed_components:
                     continue
                 try:
                     if s.store == "physical":
                         self.physical.record(
-                            s.qubit, s.field, s.after, experiment=experiment, run_id=run_id
+                            s.component, s.field, s.after, experiment=experiment, run_id=run_id
                         )
                     else:
-                        setattr(self.device.qubit(s.qubit), s.field, s.after)
+                        setattr(self.device.component(s.component), s.field, s.after)
                 except Exception as err:
-                    failed_qubits.add(s.qubit)  # no half-applied qubit
+                    failed_components.add(s.component)  # no half-applied component
                     s.comment = f"apply failed: {type(err).__name__}: {err}"
-                    errors.append(f"{s.qubit}.{s.field}: {type(err).__name__}: {err}")
+                    errors.append(f"{s.component}.{s.field}: {type(err).__name__}: {err}")
                     continue
                 s.status = "accepted"
                 s.decided_at = _now()
@@ -349,11 +370,70 @@ class Session:
             self.device.set_context(None, None)
         return applied, errors
 
+    def _validate_targets(self, cls: type[Experiment], exp: Experiment) -> Result | None:
+        """Roster gate before any hardware: targets exist, their instrument
+        category matches the experiment's ``target_category``, and the
+        experiment's ``required_operations`` are declared. Returns the
+        structured all-failed Result on violation, None when clear.
+
+        A ``flux_component`` Parameter (the assignable flux source of the flux
+        experiments) is validated HERE instead of the targets' ``flux_bias``:
+        the named component must exist and be flux-actuatable (a qubit
+        declaring ``flux_bias`` or a pair declaring ``coupler_bias``), and the
+        targets then only need their remaining operations — measuring q1's
+        resonator against the coupler flux does not require q1's own z-line."""
+        targets = list(getattr(exp.params, "targets", []))
+        problems: list[str] = []
+        want_cat = getattr(cls, "target_category", "ReadableTransmon")
+        want_ops = set(getattr(cls, "required_operations", ()))
+        flux_component = getattr(exp.params, "flux_component", None)
+        if flux_component is not None:
+            want_ops -= {"flux_bias"}  # the assigned source actuates instead
+            allowed = getattr(cls, "flux_component_categories",
+                              ("ReadableTransmon", "TransmonPair"))
+            if flux_component not in self.roster:
+                problems.append(f"flux_component {flux_component!r}: not in this "
+                                f"device's roster")
+            else:
+                _p, fc_instr = self.roster.category(flux_component)
+                fc_ops = set(self.roster.operations(flux_component))
+                need = "flux_bias" if fc_instr == "ReadableTransmon" else "coupler_bias"
+                if fc_instr not in allowed:
+                    problems.append(
+                        f"flux_component {flux_component!r}: is "
+                        f"{fc_instr or 'physical-only'}; {cls.name} can sweep "
+                        f"{' or '.join(allowed)} flux only")
+                elif need not in fc_ops:
+                    problems.append(
+                        f"flux_component {flux_component!r}: lacks operation "
+                        f"{need!r} (declared: {sorted(fc_ops) or 'none'})")
+        for t in targets:
+            if t not in self.roster:
+                problems.append(f"{t}: not in this device's roster "
+                                f"({', '.join(sorted(self.roster.components))})")
+                continue
+            _phys, instr = self.roster.category(t)
+            if instr != want_cat:
+                problems.append(f"{t}: is {instr or 'physical-only'}, "
+                                f"{cls.name} targets {want_cat}")
+                continue
+            missing = want_ops - set(self.roster.operations(t))
+            if missing:
+                problems.append(f"{t}: lacks operation(s) {sorted(missing)} "
+                                f"(declared: {list(self.roster.operations(t)) or 'none'})")
+        if not problems:
+            return None
+        return cls.Result(
+            outcomes={t: Outcome.FAILED for t in targets},
+            error="target validation refused the run before any hardware: "
+                  + "; ".join(problems),
+        )
+
     def accept(
         self,
         run_id: str,
         *,
-        qubits: list[str] | None = None,
+        components: list[str] | None = None,
         fields: list[str] | None = None,
         indices: list[int] | None = None,
         comment: str = "",
@@ -394,7 +474,7 @@ class Session:
         """
         store, record = self._load_run_record(run_id)
         suggestions = [Suggestion(**s) for s in record.get("suggestions", [])]
-        selected = select_suggestions(suggestions, qubits=qubits, fields=fields,
+        selected = select_suggestions(suggestions, components=components, fields=fields,
                                       indices=indices, include_decided=reapply or dry_run)
 
         run_era = (record.get("cooldown", ""), record.get("setup", ""))
@@ -410,12 +490,12 @@ class Session:
         for i in selected:
             s = suggestions[i]
             current = (
-                self.physical.get(s.qubit, s.field)
+                self.physical.get(s.component, s.field)
                 if s.store == "physical"
-                else device_snapshot.get(s.qubit, {}).get(s.field)
+                else device_snapshot.get(s.component, {}).get(s.field)
             )
             items.append({
-                "index": i, "qubit": s.qubit, "field": s.field, "store": s.store,
+                "index": i, "component": s.component, "field": s.field, "store": s.store,
                 "status": s.status, "before": s.before, "current": current,
                 "after": s.after, "stale": current != s.before,
                 "decided_at": s.decided_at, "decided_by": s.decided_by,
@@ -445,7 +525,7 @@ class Session:
             # be an error there — the summary's `current` shows what it overwrote.
             if not force and not reapply and item["stale"]:
                 summary["stale"].append(
-                    {"qubit": s.qubit, "field": s.field, "before": s.before,
+                    {"component": s.component, "field": s.field, "before": s.before,
                      "current": item["current"], "after": s.after}
                 )
                 continue
@@ -457,7 +537,7 @@ class Session:
         )
         summary["errors"] = errors
         summary["applied"] = [
-            {"qubit": s.qubit, "field": s.field, "store": s.store,
+            {"component": s.component, "field": s.field, "store": s.store,
              "before": s.before, "current": current_of.get(id(s)), "after": s.after}
             for s in applied
         ]
@@ -500,7 +580,7 @@ class Session:
         self,
         run_id: str,
         *,
-        qubits: list[str] | None = None,
+        components: list[str] | None = None,
         fields: list[str] | None = None,
         indices: list[int] | None = None,
         comment: str = "",
@@ -513,7 +593,7 @@ class Session:
         """
         return reject_suggestions(
             self._require_datastore(), run_id,
-            qubits=qubits, fields=fields, indices=indices, comment=comment,
+            components=components, fields=fields, indices=indices, comment=comment,
         )
 
     def suggest(self, run_id: str, assignments: dict[str, Any], comment: str = "") -> dict:
@@ -539,37 +619,18 @@ class Session:
         after}], pending_total}``.
         """
         if not assignments:
-            raise ValueError("no assignments given — expected {'qubit.field': value, ...}")
+            raise ValueError("no assignments given — expected {'component.field': value, ...}")
         store, record = self._load_run_record(run_id)
-        snapshot = self.device.snapshot()
         proposed_at = _now()
         new: list[Suggestion] = []
-        for key, value in assignments.items():
-            qubit, _, field = key.partition(".")
-            if not qubit or not field:
-                raise ValueError(
-                    f"assignment key {key!r} must be 'qubit.field' (e.g. q0.readout_freq)"
-                )
-            if field not in FIELDS and field not in PHYSICAL_FIELDS:
-                known = ", ".join(sorted([*FIELDS, *PHYSICAL_FIELDS]))
-                raise ValueError(f"unknown field {field!r} — known fields: {known}")
-            if qubit not in snapshot:
-                raise ValueError(
-                    f"unknown qubit {qubit!r} — this device has: {', '.join(snapshot)}"
-                )
-            # bool first: bool subclasses int, and True is not a proposable value.
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                raise ValueError(f"{key}: value must be a number, got {value!r}")
-            value = float(value)
-            if not math.isfinite(value):
-                raise ValueError(f"{key}: refusing to suggest non-finite value {value!r}")
-            physical = field in PHYSICAL_FIELDS
+        for name, field, side, spec, value in self._parse_assignments(assignments):
+            phys, instr = self.roster.category(name)
             new.append(
                 Suggestion(
-                    qubit=qubit, field=field,
-                    store="physical" if physical else "instrument",
-                    before=(self.physical.get(qubit, field) if physical
-                            else snapshot.get(qubit, {}).get(field)),
+                    component=name, field=field, store=side,
+                    category=phys if side == "physical" else instr,
+                    unit=spec.unit,
+                    before=self._current_value(name, field, side),
                     after=value, comment=comment,
                     origin="operator",
                     proposed_by=_config._current_operator() or None,
@@ -584,12 +645,164 @@ class Session:
         return {
             "run_id": run_id,
             "added": [
-                {"qubit": s.qubit, "field": s.field, "store": s.store,
+                {"component": s.component, "field": s.field, "store": s.store,
                  "before": s.before, "after": s.after}
                 for s in new
             ],
             "pending_total": pending_count(stored["suggestions"]),
         }
+
+    def _current_value(self, name: str, field: str, side: str) -> float | None:
+        """The store's CURRENT value for one component field (either side)."""
+        if side == "physical":
+            return self.physical.get(name, field)
+        return self.device.snapshot().get(name, {}).get(field)
+
+    def _parse_assignments(self, assignments: dict[str, Any]):
+        """Shared suggest/set_values validation: every key is ``component.field``
+        with the component in the ROSTER and the field resolved by its category
+        pair; values finite numbers. ALL assignments validate before anything is
+        written. Yields ``(name, field, side, spec, float_value)``."""
+        out = []
+        for key, value in assignments.items():
+            name, _, field = key.partition(".")
+            if not name or not field:
+                raise ValueError(
+                    f"assignment key {key!r} must be 'component.field' "
+                    f"(e.g. q1.readout_freq, q1_res.f_r_hz)"
+                )
+            if name not in self.roster:
+                raise ValueError(
+                    f"unknown component {name!r} — this device's roster has: "
+                    f"{', '.join(sorted(self.roster.components))}"
+                )
+            try:
+                side, spec = self.roster.resolve(name, field)
+            except KeyError:
+                raise ValueError(self._unknown_field_error(name, field)) from None
+            # bool first: bool subclasses int, and True is not a proposable value.
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"{key}: value must be a number, got {value!r}")
+            value = float(value)
+            if not math.isfinite(value):
+                raise ValueError(f"{key}: refusing a non-finite value {value!r}")
+            out.append((name, field, side, spec, value))
+        return out
+
+    def set_values(self, assignments: dict[str, Any], *, dry_run: bool = False) -> dict:
+        """Write operator-known values directly — the RUNLESS counterpart of suggest.
+
+        For values that come from experience, not from a measurement: there is no
+        run to credit, so nothing to suggest against. Each ``assignments`` key is
+        ``"qubit.field"`` (either store — the exact :meth:`suggest` validation:
+        known field, known qubit, finite number), and ALL assignments are
+        validated before ANYTHING is written — a bad one applies nothing
+        (``ValueError``). Writes then go through the normal stores immediately:
+        calibration knobs vendor-push-FIRST via the RecordingDevice (ChangeRecord
+        with ``experiment=None``/``run_id=None``, operator stamped — shown as
+        ``(manual)`` by ``scqo state --sources``; a coupled vendor echo such as
+        readout_power_dbm moving readout_amp is recorded as usual), physical
+        fields to the PhysicalStore. Per-qubit atomicity like :meth:`accept`: one
+        failed item (e.g. the vendor rejects the value) skips that qubit's
+        REMAINING items, other qubits proceed, failures land in ``errors``.
+
+        ``dry_run=True`` validates and REPORTS instead of writing — the CLI's
+        confirmation table is built from it: ``{"items": [{qubit, field, store,
+        unit, current, after}]}``, nothing mutated.
+
+        Otherwise both states are saved (a save problem is reported in
+        ``errors``, never raised — the vendor already carries the values) and the
+        summary is ``{"applied": [{qubit, field, store, before, after}],
+        "errors": [...]}`` where ``before`` is what the write's own ChangeRecord
+        recorded as ``old``.
+        """
+        if not assignments:
+            raise ValueError("no assignments given — expected {'component.field': value, ...}")
+        validated = self._parse_assignments(assignments)
+
+        if dry_run:
+            return {"items": [
+                {"component": n, "field": f, "store": side,
+                 "unit": spec.unit,
+                 "current": self._current_value(n, f, side),
+                 "after": v}
+                for n, f, side, spec, v in validated
+            ]}
+
+        applied: list[dict[str, Any]] = []
+        errors: list[str] = []
+        failed_components: set[str] = set()
+        for name, field, side, _spec, value in validated:
+            if name in failed_components:
+                continue
+            # `before` is read live right before the write (not from the initial
+            # snapshot): an earlier item of this call — or its coupled echo — may
+            # already have moved it, and the summary must match the ChangeRecord.
+            before = self._current_value(name, field, side)
+            try:
+                if side == "physical":
+                    self.physical.record(name, field, value)
+                else:
+                    setattr(self.device.component(name), field, value)
+            except Exception as err:
+                failed_components.add(name)  # no half-applied component
+                errors.append(f"{name}.{field}: {type(err).__name__}: {err}")
+                continue
+            applied.append({"component": name, "field": field, "store": side,
+                            "before": before, "after": value})
+        summary: dict[str, Any] = {"applied": applied, "errors": errors}
+        if applied:
+            try:
+                if self._persist:
+                    self.device.save()
+                self.physical.save()
+            except Exception as err:
+                summary["errors"].append(
+                    f"values were applied to the device but saving state failed "
+                    f"(state files may lag the instrument): {type(err).__name__}: {err}"
+                )
+        return summary
+
+    def _unknown_field_error(self, component: str, field: str) -> str:
+        """Error text for a field the component does not carry — category- AND
+        vendor-aware: the placement rule surfacing at the moment of failure.
+
+        Three answers, best first: (1) the field exists on ANOTHER category —
+        name the component that carries it ("did you mean q1_res.f_r_hz?");
+        (2) the name is a vendor-only knob — print THAT catalog entry (a
+        realizer's doc names its `scqo set` route); (3) the component's actual
+        field list. ASCII only: reaches consoles in whatever codepage the lab runs.
+        """
+        from .categories import field_categories
+
+        owners = field_categories().get(field, ())
+        if owners:
+            phys, instr = self.roster.category(component)
+            cats = " + ".join(x for x in (phys, instr) if x)
+            hints = []
+            for cat in owners:
+                carriers = [n for n in self.roster
+                            if cat in self.roster.category(n)
+                            and field in self.roster.fields_of(n)]
+                hints += [f"{n}.{field}" for n in carriers]
+            hint = f" - did you mean {' or '.join(hints)}?" if hints else ""
+            return (f"{field!r} is a {'/'.join(owners)} field; {component!r} is "
+                    f"{cats or 'not that'}{hint} "
+                    f"(catalog: scqo state --fields)")
+        entry = self.backend.vendor_only().get(field)
+        if entry is not None:
+            unit = f" [{entry.unit}]" if entry.unit else ""
+            return (
+                f"{field!r} is a {self.backend_label}-only vendor parameter "
+                f"(kind: {entry.kind}), not a settable SCQO field - SCQO never "
+                f"writes it directly.\n"
+                f"  where: {entry.path}{unit}\n"
+                f"  {entry.doc}\n"
+                f"(full catalog: scqo state --fields; placement rule: scqo state --rule)"
+            )
+        fields = ", ".join(sorted(self.roster.fields_of(component))) or "(none)"
+        return (f"{component!r} has no field {field!r} — its fields: {fields} "
+                f"(vendor knobs: scqo state --fields; rule: scqo state --rule)")
 
     def _load_run_record(self, run_id: str) -> tuple[DataStore, dict]:
         """Load a saved run's record, refusing one that belongs to another device."""
@@ -606,9 +819,9 @@ class Session:
     def _failure(cls: type[Experiment], exp: Experiment, err: Exception) -> Result:
         """Build an all-failed structured result for a run that could not complete."""
         outcome = Outcome.NO_DATA if isinstance(err, ContractError) else Outcome.FAILED
-        qubits = getattr(exp.params, "qubits", [])
+        targets = getattr(exp.params, "targets", [])
         return cls.Result(
-            outcomes={q: outcome for q in qubits},
+            outcomes={t: outcome for t in targets},
             error=f"{type(err).__name__}: {err}",
         )
 
@@ -626,7 +839,7 @@ class Session:
             if key and key in defaults and key not in caller:
                 source = self.parameter_defaults_source or "the session's parameter_defaults"
                 hints.append(f"'{key}' came from {source} [{cls.name}] — fix it there")
-        qubits = merged.get("qubits")
+        qubits = merged.get("targets")
         qubits = [q for q in qubits if isinstance(q, str)] if isinstance(qubits, list) else []
         message = f"invalid parameters for {cls.name!r}: {err}"
         if hints:

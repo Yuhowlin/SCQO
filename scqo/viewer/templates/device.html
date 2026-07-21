@@ -72,7 +72,7 @@ Values link to the run that set them{% if sec.latest_run %} · latest run: <a hr
 {% endif %}
 {% if sec.state %}
 <table>
-  <tr><th>qubit</th>{% for f in sec.state_fields %}<th>{{ f }}</th>{% endfor %}</tr>
+  <tr><th>component</th>{% for f in sec.state_fields %}<th>{{ f }}</th>{% endfor %}</tr>
   {% for q, fields in sec.state.items() %}
   <tr><td>{{ q }}</td>
     {% for f in sec.state_fields %}{% set v = fields.get(f) %}{% set src = sec.sources.get(q, {}).get(f) %}{% set fmt = "%.8g" | format(v) if v is number else (v if v is not none else "-") %}<td>
@@ -87,10 +87,10 @@ Values link to the run that set them{% if sec.latest_run %} · latest run: <a hr
 {% if sec.history %}
 <h4>Change history{% if sec.name %} — {{ sec.name }}{% endif %}</h4>
 <table>
-  <tr><th>when</th><th>qubit</th><th>field</th><th>old</th><th>new</th><th>experiment</th><th>operator</th><th>run</th></tr>
+  <tr><th>when</th><th>component</th><th>field</th><th>old</th><th>new</th><th>experiment</th><th>operator</th><th>run</th></tr>
   {% for h in sec.history %}
   <tr>
-    <td>{{ h.timestamp[:19] }}</td><td>{{ h.qubit }}</td><td>{{ h.field }}</td>
+    <td>{{ h.timestamp[:19] }}</td><td>{{ h.component }}</td><td>{{ h.field }}</td>
     <td>{{ "%.8g" | format(h.old) if h.old is number else h.old }}</td>
     <td>{{ "%.8g" | format(h.new) if h.new is number else h.new }}</td>
     <td>{{ h.experiment }}</td>
@@ -107,9 +107,9 @@ Values link to the run that set them{% if sec.latest_run %} · latest run: <a hr
 <p class="muted">Measured physics for this (cooldown, setup) — each value is a measurement
 THROUGH this setup; compare across setups/cooldowns via the trends page, never average.</p>
 <table>
-  <tr><th>qubit</th><th>field</th><th>value</th></tr>
+  <tr><th>component</th><th>field</th><th>value</th></tr>
   {% for r in sec.physical_rows %}
-  <tr><td>{{ r.qubit }}</td><td>{{ r.field }}</td>
+  <tr><td>{{ r.component }}</td><td>{{ r.field }}</td>
     {% set src = r.source %}{% set fmt = "%.8g" | format(r.value) if r.value is number else r.value %}<td>
       {%- if src and src.status == "run" %}<a href="/run/{{ src.run_id }}" title="{{ (src.timestamp or '')[:19] }} · {{ src.operator or '-' }}">{{ fmt }}</a>
       {%- elif src and src.status == "external" %}{{ fmt }} <span class="ext">(externally changed)</span>
@@ -120,10 +120,10 @@ THROUGH this setup; compare across setups/cooldowns via the trends page, never a
 </table>
 {% if sec.physical_history %}
 <table>
-  <tr><th>when</th><th>qubit</th><th>field</th><th>old</th><th>new</th><th>experiment</th><th>operator</th><th>run</th></tr>
+  <tr><th>when</th><th>component</th><th>field</th><th>old</th><th>new</th><th>experiment</th><th>operator</th><th>run</th></tr>
   {% for h in sec.physical_history %}
   <tr>
-    <td>{{ h.timestamp[:19] }}</td><td>{{ h.qubit }}</td><td>{{ h.field }}</td>
+    <td>{{ h.timestamp[:19] }}</td><td>{{ h.component }}</td><td>{{ h.field }}</td>
     <td>{{ "%.8g" | format(h.old) if h.old is number else (h.old if h.old is not none else "-") }}</td>
     <td>{{ "%.8g" | format(h.new) if h.new is number else h.new }}</td>
     <td>{{ h.experiment }}</td>

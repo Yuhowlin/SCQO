@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from scqo import Session, register  # noqa: E402
 from scqo.experiments import QubitRamsey, QubitRelaxation, ResonatorSpectroscopy  # noqa: E402
-from scqo.testing import InMemoryDevice, SimulatedBackend  # noqa: E402
+from scqo.testing import InMemoryDevice, SimulatedBackend, demo_roster  # noqa: E402
 from scqo.viewer.app import create_app  # noqa: E402
 
 
@@ -68,36 +68,36 @@ def lab(tmp_path_factory):
         encoding="utf-8",
     )
     sess = Session(
-        SimulatedBackend(_device()), data_root=root, device_name="devV",
+        SimulatedBackend(_device()), demo_roster(), data_root=root, device_name="devV",
         state_path=_scqo_state(root, "devV", "cdV", "sim_main"), state_sync="push",
         setup_name="sim_main", cooldown_id="cdV",
     )
-    r_res = sess.run("resonator_spectroscopy", {"qubits": ["q0"]}, update="apply", tags=["cool1"])
+    r_res = sess.run("resonator_spectroscopy", {"targets": ["q0"]}, update="apply", tags=["cool1"])
     # a second applied run SUPERSEDES r_res's readout_freq (live-source tests)
-    r_res2 = sess.run("resonator_spectroscopy", {"qubits": ["q0"]}, update="apply", tags=["cool1"])
-    r_ram = sess.run("qubit_ramsey", {"qubits": ["q1"], "num_points": 201}, update="apply",
+    r_res2 = sess.run("resonator_spectroscopy", {"targets": ["q0"]}, update="apply", tags=["cool1"])
+    r_ram = sess.run("qubit_ramsey", {"targets": ["q1"], "num_points": 201}, update="apply",
                      tags=["cool1", "special"])
-    r_t1 = sess.run("qubit_relaxation", {"qubits": ["q1"]}, update="apply", tags=["cool1"])
+    r_t1 = sess.run("qubit_relaxation", {"targets": ["q1"]}, update="apply", tags=["cool1"])
     # a HUMAN-attached proposal on the T1 run (scqo suggest; left pending)
     sess.suggest(r_t1["run_id"], {"q1.t1_s": 2.4e-5}, comment="read off the decay")
-    r_pend = sess.run("resonator_spectroscopy", {"qubits": ["q0"]}, tags=["cool1"])  # left pending
-    # a q0-only physical value -> a "(manual)" source in this context's ledger
-    sess.physical.record("q0", "g_hz", 80e6)
+    r_pend = sess.run("resonator_spectroscopy", {"targets": ["q0"]}, tags=["cool1"])  # left pending
+    # a q0_ro-only physical value -> a "(manual)" source in this context's ledger
+    sess.physical.record("q0_ro", "g_hz", 80e6)
     sess.physical.save()
     # the SECOND setup of the same device: its own scqo/ folder, its own history
     sess_alt = Session(
-        SimulatedBackend(_device()), data_root=root, device_name="devV",
+        SimulatedBackend(_device()), demo_roster(), data_root=root, device_name="devV",
         state_path=_scqo_state(root, "devV", "cdV", "sim_alt"), state_sync="push",
         setup_name="sim_alt", cooldown_id="cdV",
     )
-    r_alt = sess_alt.run("resonator_spectroscopy", {"qubits": ["q1"]}, update="apply", tags=["cool1"])
+    r_alt = sess_alt.run("resonator_spectroscopy", {"targets": ["q1"]}, update="apply", tags=["cool1"])
     # a run bound to a setup name NOT in the active cycle (bound eras are stamped
     # verbatim, never re-validated): must get NO live credit anywhere
     sess_ghost = Session(
-        SimulatedBackend(_device()), data_root=root, device_name="devV",
+        SimulatedBackend(_device()), demo_roster(), data_root=root, device_name="devV",
         setup_name="ghost", cooldown_id="cdV",
     )
-    r_ghost = sess_ghost.run("resonator_spectroscopy", {"qubits": ["q0"]}, update="apply")
+    r_ghost = sess_ghost.run("resonator_spectroscopy", {"targets": ["q0"]}, update="apply")
 
     # second physical sample with its own registry + one persisted setup
     (root / "chipZ").mkdir()
@@ -107,19 +107,20 @@ def lab(tmp_path_factory):
         encoding="utf-8",
     )
     sess_z = Session(
-        SimulatedBackend(_device()), data_root=root, device_name="chipZ",
+        SimulatedBackend(_device()), demo_roster(), data_root=root, device_name="chipZ",
         state_path=_scqo_state(root, "chipZ", "cdZ", "z_main"), state_sync="push",
         setup_name="z_main", cooldown_id="cdZ",
     )
-    r_z = sess_z.run("resonator_spectroscopy", {"qubits": ["q0"]}, update="apply", tags=["zcool"])
+    r_z = sess_z.run("resonator_spectroscopy", {"targets": ["q0"]}, update="apply", tags=["zcool"])
     (root / "devices.toml").write_text(
         '[chipZ]\ndescription = "second sample on the other fridge"\n',
         encoding="utf-8",
     )
 
     # a registry-less sample: runs exist, no setups -> snapshot-only device page
-    sess_b = Session(SimulatedBackend(_device()), data_root=root, device_name="bare")
-    r_bare = sess_b.run("resonator_spectroscopy", {"qubits": ["q0"]}, update="apply")
+    sess_b = Session(SimulatedBackend(_device()), demo_roster(), data_root=root,
+                     device_name="bare")
+    r_bare = sess_b.run("resonator_spectroscopy", {"targets": ["q0"]}, update="apply")
 
     client = TestClient(create_app(root, device_name="devV"))
     return {"client": client, "root": root, "res": r_res, "res2": r_res2, "ram": r_ram,
@@ -177,7 +178,7 @@ def test_tag_editing_is_the_only_write(lab):
 
 def test_trends_page_charts_t1(lab):
     c = lab["client"]
-    page = c.get("/trends", params={"qubit": "q1", "quantity": "t1_s"}).text
+    page = c.get("/trends", params={"target": "q1", "quantity": "t1_s"}).text
     assert "<svg" in page and "<circle" in page
     assert lab["t1"]["run_id"] in page
 
@@ -232,11 +233,11 @@ def test_device_page_history_survives_values_only_reset(tmp_path):
         '[cdR]\nstart = 2026-07-01\n[cdR.setup.main]\nbackend = "simulated"\n',
         encoding="utf-8")
     sess = Session(
-        SimulatedBackend(_device()), data_root=tmp_path, device_name="devR",
+        SimulatedBackend(_device()), demo_roster(), data_root=tmp_path, device_name="devR",
         state_path=_scqo_state(tmp_path, "devR", "cdR", "main"), state_sync="push",
         setup_name="main", cooldown_id="cdR",
     )
-    r = sess.run("resonator_spectroscopy", {"qubits": ["q0"]}, update="apply")
+    r = sess.run("resonator_spectroscopy", {"targets": ["q0"]}, update="apply")
     Path(_scqo_state(tmp_path, "devR", "cdR", "main")).unlink()  # sidecar survives
 
     page = TestClient(create_app(tmp_path, device_name="devR")).get("/device").text
@@ -444,8 +445,8 @@ def test_trends_never_mix_samples(lab):
     c = lab["client"]
     # q0 readout_freq exists on BOTH samples ("q1 exists on every chip" problem):
     # the default trend is scoped to the configured device, not the union.
-    dev = c.get("/trends", params={"qubit": "q0", "quantity": "readout_freq"}).text
+    dev = c.get("/trends", params={"target": "q0", "quantity": "readout_freq"}).text
     assert lab["res"]["run_id"] in dev
     assert lab["chipz"]["run_id"] not in dev
-    z = c.get("/trends", params={"qubit": "q0", "quantity": "readout_freq", "device": "chipZ"}).text
+    z = c.get("/trends", params={"target": "q0", "quantity": "readout_freq", "device": "chipZ"}).text
     assert lab["chipz"]["run_id"] in z and lab["res"]["run_id"] not in z

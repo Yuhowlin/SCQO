@@ -18,11 +18,11 @@ from .._scqat import per_qubit_results
 from ._sim import stable_seed
 from ..contract import DatasetContract
 from ..experiment import Experiment
-from ..parameters import AveragingParameters, QubitSelection
+from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
 
 
-class QubitSpectroscopyParameters(QubitSelection, AveragingParameters):
+class QubitSpectroscopyParameters(TargetSelection, AveragingParameters):
     """Inputs for a qubit-spectroscopy (two-tone) measurement."""
 
     frequency_span_hz: float = Field(
@@ -38,8 +38,9 @@ class QubitSpectroscopyParameters(QubitSelection, AveragingParameters):
 
 
 class QubitSpectroscopyResult(Result):
-    """``fit[qubit]`` carries ``drive_freq`` (new absolute Hz), ``peak_detuning_hz``,
-    ``fwhm_hz``, ``n_peaks`` and ``old_drive_freq``."""
+    """``fit[qubit]`` carries ``drive_freq`` (new absolute Hz), its measured twin
+    ``f_01_hz`` (same value; ``update()`` writes the knob and the fact together),
+    ``peak_detuning_hz``, ``fwhm_hz``, ``n_peaks`` and ``old_drive_freq``."""
 
 
 class QubitSpectroscopy(Experiment):
@@ -56,6 +57,7 @@ class QubitSpectroscopy(Experiment):
     Contract: ClassVar[DatasetContract] = DatasetContract(
         sweeps=("detuning_hz",), sweep_units=("Hz",), variables=("I", "Q")
     )
+    required_operations: ClassVar[tuple[str, ...]] = ("rx", "readout")
 
     params: QubitSpectroscopyParameters
 
@@ -65,11 +67,11 @@ class QubitSpectroscopy(Experiment):
 
     def simulate(self, coords: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         detuning = coords["detuning_hz"]
-        qubits = self.params.qubits
-        rng = np.random.default_rng(stable_seed("qubit_spectroscopy", *qubits))
-        i_data = np.empty((len(qubits), detuning.size))
+        targets = self.params.targets
+        rng = np.random.default_rng(stable_seed("qubit_spectroscopy", *targets))
+        i_data = np.empty((len(targets), detuning.size))
         q_data = np.empty_like(i_data)
-        for k in range(len(qubits)):
+        for k in range(len(targets)):
             err = rng.uniform(-0.3, 0.3) * self.params.frequency_span_hz  # hidden truth
             fwhm = rng.uniform(2e6, 5e6)
             peak = 0.5 * (fwhm / 2) ** 2 / ((detuning - err) ** 2 + (fwhm / 2) ** 2)
@@ -84,17 +86,17 @@ class QubitSpectroscopy(Experiment):
 
         # scqat's contract: coord `detuning` + vars I/Q (it derives IQdata = I + iQ);
         # optional per-qubit `full_freq` lets it report absolute peak positions.
-        qubits = list(self.dataset["qubit"].values)
-        old_freqs = {q: float(self.device.qubit(q).drive_freq) for q in qubits}
+        targets = list(self.dataset["target"].values)
+        old_freqs = {q: self.anchor(q, "drive_freq") for q in targets}
         prepared = self.dataset.rename({"detuning_hz": "detuning"})
         detuning = prepared["detuning"].values
-        full_freq = np.array([detuning + old_freqs[q] for q in qubits])
-        prepared = prepared.assign_coords(full_freq=(("qubit", "detuning"), full_freq))
+        full_freq = np.array([detuning + old_freqs[q] for q in targets])
+        prepared = prepared.assign_coords(full_freq=(("target", "detuning"), full_freq))
 
         results = per_qubit_results(prepared, QubitSpectroscopyEstimator(), artifact_dir=self.artifact_dir)
 
         result = QubitSpectroscopyResult()
-        for qubit in self.params.qubits:
+        for qubit in self.params.targets:
             peaks = results[qubit].get("peaks") or []
             old = old_freqs[qubit]
             if peaks:
@@ -103,6 +105,8 @@ class QubitSpectroscopy(Experiment):
                 det = float(best["detuning"])
                 result.fit[qubit] = {
                     "drive_freq": old + det,
+                    # the measured FACT twin of the drive_freq knob (same fit)
+                    "f_01_hz": old + det,
                     "peak_detuning_hz": det,
                     "fwhm_hz": float(best["fwhm"]),
                     "n_peaks": float(len(peaks)),
@@ -120,4 +124,6 @@ class QubitSpectroscopy(Experiment):
             return
         for qubit, fit in self.result.fit.items():
             if self.result.outcomes[qubit] is Outcome.SUCCESSFUL:
-                self.device.qubit(qubit).drive_freq = fit["drive_freq"]
+                view = self.device.component(qubit)
+                view.drive_freq = fit["drive_freq"]  # the instrument knob
+                view.f_01_hz = fit["f_01_hz"]  # the measured physical fact (same fit)

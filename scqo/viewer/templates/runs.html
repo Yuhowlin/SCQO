@@ -15,7 +15,7 @@
     <option value="{{ e }}" {% if filters.experiment == e %}selected{% endif %}>{{ e }}</option>
     {% endfor %}
   </select>
-  <input name="qubit" placeholder="qubit (q1)" value="{{ filters.qubit }}" size="8">
+  <input name="target" placeholder="target (q1)" value="{{ filters.target }}" size="8">
   <input name="tag" placeholder="tag (cooldown1)" value="{{ filters.tag }}" size="12">
   <select name="outcome">
     <option value="">any outcome</option>
@@ -33,7 +33,7 @@
   <button>Filter</button>
 </form>
 <table>
-  <tr><th>run</th><th>started</th><th>device</th><th>cooldown</th><th>setup</th><th>experiment</th><th>qubits</th><th>outcome</th><th>updates</th><th>operator</th><th>tags</th><th>note</th></tr>
+  <tr><th>run</th><th>started</th><th>device</th><th>cooldown</th><th>setup</th><th>experiment</th><th>targets</th><th>outcome</th><th>updates</th><th>operator</th><th>tags</th><th>note</th></tr>
   {% for r in rows %}
   <tr>
     <td><a href="/run/{{ r.run_id }}">{{ r.run_id }}</a></td>
@@ -42,7 +42,7 @@
     <td>{{ r.cooldown or "-" }}</td>
     <td>{{ r.setup or "-" }}</td>
     <td>{{ r.experiment }}</td>
-    <td>{{ r.qubits | join(", ") }}</td>
+    <td>{{ r.targets | join(", ") }}</td>
     <td><span class="badge {{ r.outcome }}">{{ r.outcome }}</span></td>
     <td>{% set live = live_by_run.get(r.run_id) %}
         {%- if r.suggestions_pending %}<b>{{ r.suggestions_pending }} pending</b>

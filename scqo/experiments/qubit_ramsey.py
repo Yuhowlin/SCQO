@@ -23,12 +23,12 @@ from pydantic import Field
 from .._scqat import per_qubit_results
 from ._sim import stable_seed
 from ..contract import DatasetContract
-from ..parameters import AveragingParameters, QubitSelection
+from ..parameters import AveragingParameters, TargetSelection
 from ..experiment import Experiment
 from ..result import Outcome, Result
 
 
-class QubitRamseyParameters(QubitSelection, AveragingParameters):
+class QubitRamseyParameters(TargetSelection, AveragingParameters):
     """Inputs for a Ramsey experiment."""
 
     frequency_detuning_hz: float = Field(
@@ -42,8 +42,9 @@ class QubitRamseyParameters(QubitSelection, AveragingParameters):
 class QubitRamseyResult(Result):
     """Output of QubitRamsey.
 
-    ``fit[qubit]`` carries ``drive_freq`` (new absolute Hz), ``detuning_error_hz``,
-    ``t2_star_s`` and ``old_drive_freq``.
+    ``fit[qubit]`` carries ``drive_freq`` (new absolute Hz), its measured twin
+    ``f_01_hz`` (same value; ``update()`` writes the knob and the fact together),
+    ``detuning_error_hz``, ``t2_star_s`` and ``old_drive_freq``.
     """
 
 
@@ -60,6 +61,7 @@ class QubitRamsey(Experiment):
     Contract: ClassVar[DatasetContract] = DatasetContract(
         sweeps=("idle_time_ns",), sweep_units=("ns",), variables=("I", "Q")
     )
+    required_operations: ClassVar[tuple[str, ...]] = ("rx", "readout")
 
     params: QubitRamseyParameters
 
@@ -72,12 +74,12 @@ class QubitRamsey(Experiment):
 
     def simulate(self, coords: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         t = coords["idle_time_ns"] * 1e-9
-        qubits = self.params.qubits
-        rng = np.random.default_rng(stable_seed("qubit_ramsey", *qubits))
+        targets = self.params.targets
+        rng = np.random.default_rng(stable_seed("qubit_ramsey", *targets))
         applied = self.params.frequency_detuning_hz
-        i_data = np.empty((len(qubits), t.size))
+        i_data = np.empty((len(targets), t.size))
         q_data = np.empty_like(i_data)
-        for k in range(len(qubits)):
+        for k in range(len(targets)):
             err = rng.uniform(-0.2, 0.2) * applied  # residual detuning to recover
             t2_star = rng.uniform(5e-6, 15e-6)
             fringe = 0.5 - 0.5 * np.exp(-t / t2_star) * np.cos(2 * np.pi * (applied + err) * t)
@@ -100,7 +102,7 @@ class QubitRamsey(Experiment):
 
         applied = self.params.frequency_detuning_hz
         result = QubitRamseyResult()
-        for qubit in self.params.qubits:
+        for qubit in self.params.targets:
             r = results[qubit]
             model_type = r.get("model_type")
             if model_type == "beat":
@@ -109,9 +111,11 @@ class QubitRamsey(Experiment):
                 osc_freq = float(r["f_1"])
             detuning_error = osc_freq - applied
             t2_star = float(r.get("tau_1", float("nan")))
-            old = float(self.device.qubit(qubit).drive_freq)
+            old = float(self.device.component(qubit).drive_freq)
             result.fit[qubit] = {
                 "drive_freq": old + detuning_error,
+                # the measured FACT twin of the drive_freq knob (same fit)
+                "f_01_hz": old + detuning_error,
                 "detuning_error_hz": detuning_error,
                 "t2_star_s": t2_star,
                 "old_drive_freq": old,
@@ -129,6 +133,9 @@ class QubitRamsey(Experiment):
             if self.result.outcomes[qubit] is Outcome.SUCCESSFUL:
                 # Calibration knob first: applies are per-qubit atomic in capture
                 # order, so if the vendor rejects the corrected drive frequency the
-                # T2* (a physical field) is skipped too — no half-applied qubit.
-                self.device.qubit(qubit).drive_freq = fit["drive_freq"]
-                self.device.qubit(qubit).t2_star_s = fit["t2_star_s"]
+                # physical fields (f_01_hz, T2*) are skipped too — no half-applied
+                # qubit.
+                view = self.device.component(qubit)
+                view.drive_freq = fit["drive_freq"]  # the instrument knob
+                view.f_01_hz = fit["f_01_hz"]  # the measured physical fact (same fit)
+                view.t2_star_s = fit["t2_star_s"]

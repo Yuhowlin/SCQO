@@ -19,7 +19,7 @@ import numpy as np
 import scqo.registry as registry
 from scqo import Outcome, Session, register
 from scqo.experiments import ResonatorSpectroscopy
-from scqo.testing import InMemoryDevice, SimulatedBackend
+from scqo.testing import InMemoryDevice, SimulatedBackend, demo_roster
 
 
 def _device() -> InMemoryDevice:
@@ -29,6 +29,14 @@ def _device() -> InMemoryDevice:
             "q1": {"readout_freq": 6.05e9, "drive_freq": 4.01e9, "pi_amp": 0.18, "readout_amp": 0.22},
         }
     )
+
+
+# Canonical-name demo registration so this module passes standalone (same idiom as
+# test_parameter_defaults); re-registering the same shape elsewhere is harmless.
+@register
+class _QwResonatorSpectroscopy(ResonatorSpectroscopy):
+    def probe(self):
+        return None
 
 
 # --------------------------------------------------------------------------- A1
@@ -48,7 +56,7 @@ def test_simulator_seed_is_process_independent():
                 return None
 
         dev = InMemoryDevice({"q0": {"readout_freq": 6e9, "drive_freq": 4e9, "pi_amp": 0.2, "readout_amp": 0.25}})
-        exp = Demo(SimulatedBackend(dev), Demo.Parameters(qubits=["q0", "q1"]))
+        exp = Demo(SimulatedBackend(dev), Demo.Parameters(targets=["q0", "q1"]))
         out = exp.simulate(exp.define_sweep())
         print(repr(float(out["I"].sum())))
         """
@@ -75,14 +83,14 @@ class _BrokenExperiment(ResonatorSpectroscopy):
     def simulate(self, coords):
         detuning = coords["detuning_hz"]
         # Missing "Q": the contract requires variables=("I", "Q").
-        return {"I": np.zeros((len(self.params.qubits), detuning.size))}
+        return {"I": np.zeros((len(self.params.targets), detuning.size))}
 
 
 def test_session_returns_structured_failure_on_contract_violation():
-    sess = Session(SimulatedBackend(_device()))
+    sess = Session(SimulatedBackend(_device()), demo_roster())
     before = sess.device_state()["q0"]["readout_freq"]
 
-    result = sess.run("broken_contract", {"qubits": ["q0"]})  # must NOT raise
+    result = sess.run("broken_contract", {"targets": ["q0"]})  # must NOT raise
 
     assert result["error"], "failed run should carry a non-empty error message"
     assert result["outcomes"]["q0"] == Outcome.NO_DATA.value
@@ -105,7 +113,7 @@ class _PartialExperiment(ResonatorSpectroscopy):
         result.fit["q0"] = {
             "readout_freq": 7.0e9,
             "dip_detuning_hz": 0.0,
-            "old_readout_freq": float(self.device.qubit("q0").readout_freq),
+            "old_readout_freq": float(self.device.component("q0").readout_freq),
         }
         result.outcomes["q0"] = Outcome.SUCCESSFUL
         result.outcomes["q1"] = Outcome.FAILED
@@ -113,10 +121,10 @@ class _PartialExperiment(ResonatorSpectroscopy):
 
 
 def test_partial_success_writes_only_good_qubits():
-    sess = Session(SimulatedBackend(_device()))
+    sess = Session(SimulatedBackend(_device()), demo_roster())
     before_q1 = sess.device_state()["q1"]["readout_freq"]
 
-    result = sess.run("partial_success", {"qubits": ["q0", "q1"]}, update="apply")
+    result = sess.run("partial_success", {"targets": ["q0", "q1"]}, update="apply")
 
     assert result["outcomes"]["q0"] == Outcome.SUCCESSFUL.value
     assert result["outcomes"]["q1"] == Outcome.FAILED.value

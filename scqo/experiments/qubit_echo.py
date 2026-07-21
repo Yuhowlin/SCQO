@@ -20,11 +20,11 @@ from .._scqat import per_qubit_results
 from ._sim import stable_seed
 from ..contract import DatasetContract
 from ..experiment import Experiment
-from ..parameters import AveragingParameters, QubitSelection
+from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
 
 
-class QubitEchoParameters(QubitSelection, AveragingParameters):
+class QubitEchoParameters(TargetSelection, AveragingParameters):
     """Inputs for a Hahn-echo measurement."""
 
     min_wait_ns: float = Field(32, ge=0, description="Shortest total echo idle time.")
@@ -51,6 +51,7 @@ class QubitEcho(Experiment):
     Contract: ClassVar[DatasetContract] = DatasetContract(
         sweeps=("wait_time_ns",), sweep_units=("ns",), variables=("I", "Q")
     )
+    required_operations: ClassVar[tuple[str, ...]] = ("rx", "readout")
 
     params: QubitEchoParameters
 
@@ -61,11 +62,11 @@ class QubitEcho(Experiment):
 
     def simulate(self, coords: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         t = coords["wait_time_ns"] * 1e-9
-        qubits = self.params.qubits
-        rng = np.random.default_rng(stable_seed("qubit_echo", *qubits))
-        i_data = np.empty((len(qubits), t.size))
+        targets = self.params.targets
+        rng = np.random.default_rng(stable_seed("qubit_echo", *targets))
+        i_data = np.empty((len(targets), t.size))
         q_data = np.empty_like(i_data)
-        for k in range(len(qubits)):
+        for k in range(len(targets)):
             t2e = rng.uniform(30e-6, 80e-6)  # hidden truth the fit must recover
             noise = 0.02
             i_data[k] = np.exp(-t / t2e) + rng.normal(0, noise, t.size)
@@ -83,7 +84,7 @@ class QubitEcho(Experiment):
         results = per_qubit_results(prepared, QubitEchoEstimator(), artifact_dir=self.artifact_dir)
 
         result = QubitEchoResult()
-        for qubit in self.params.qubits:
+        for qubit in self.params.targets:
             r = results[qubit]
             result.fit[qubit] = {
                 "t2_echo_s": float(r["t2_echo"]),
@@ -100,4 +101,4 @@ class QubitEcho(Experiment):
             return
         for qubit, fit in self.result.fit.items():
             if self.result.outcomes[qubit] is Outcome.SUCCESSFUL:
-                self.device.qubit(qubit).t2_echo_s = fit["t2_echo_s"]
+                self.device.component(qubit).t2_echo_s = fit["t2_echo_s"]
