@@ -37,7 +37,7 @@ the nominal +5 dBm full scale (±a few dB). A per-setup photon-number anchor
 from __future__ import annotations
 
 import math
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 import numpy as np
 import xarray as xr
@@ -67,6 +67,15 @@ class ResonatorSpectroscopyPowerChainParameters(TargetSelection, AveragingParame
         21, gt=1, description="Number of power points — each is a SEPARATE compile+run cycle "
         "(the chain is re-solved per point); the optimal-power derivative uses a ~10-point "
         "smoothing window, so keep this comfortably above 10."
+    )
+    dip_method: Literal["lorentzian", "circle"] = Field(
+        "lorentzian",
+        description=(
+            "Per-slice dip fit used to track the resonator centre vs power: "
+            "'lorentzian' = joint Lorentzian + background fit of |IQ|^2 (fast, the "
+            "robust default for punchout). 'circle' = Probst notch-model fit of the "
+            "complex S21 (handles Fano-asymmetric dips; needs meaningful phase data)."
+        ),
     )
 
     @model_validator(mode="after")
@@ -242,7 +251,8 @@ class ResonatorSpectroscopyPowerChain(Experiment):
         prepared = self._attach_chain_steps(prepared, targets)
 
         results = per_qubit_results(
-            prepared, ResonatorSpectroscopyPowerEstimator(), artifact_dir=self.artifact_dir
+            prepared, ResonatorSpectroscopyPowerEstimator(), artifact_dir=self.artifact_dir,
+            dip_method=self.params.dip_method,
         )
 
         result = ResonatorSpectroscopyPowerChainResult()

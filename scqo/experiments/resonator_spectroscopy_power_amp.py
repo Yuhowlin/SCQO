@@ -39,7 +39,7 @@ is the Phase-3 refinement.
 from __future__ import annotations
 
 import math
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 import numpy as np
 from pydantic import Field, model_validator
@@ -75,6 +75,15 @@ class ResonatorSpectroscopyPowerAmpParameters(TargetSelection, AveragingParamete
         description="Resonator relaxation (depletion) wait between readouts, ns. None = the "
         "backend's configured value (QM: each resonator's depletion_time; Qblox: the probe's "
         "built-in idle).",
+    )
+    dip_method: Literal["lorentzian", "circle"] = Field(
+        "lorentzian",
+        description=(
+            "Per-slice dip fit used to track the resonator centre vs power: "
+            "'lorentzian' = joint Lorentzian + background fit of |IQ|^2 (fast, the "
+            "robust default for punchout). 'circle' = Probst notch-model fit of the "
+            "complex S21 (handles Fano-asymmetric dips; needs meaningful phase data)."
+        ),
     )
 
     @model_validator(mode="after")
@@ -232,7 +241,8 @@ class ResonatorSpectroscopyPowerAmp(Experiment):
         prepared = self._attach_sweep_provenance(prepared, targets)
 
         results = per_qubit_results(
-            prepared, ResonatorSpectroscopyPowerEstimator(), artifact_dir=self.artifact_dir
+            prepared, ResonatorSpectroscopyPowerEstimator(), artifact_dir=self.artifact_dir,
+            dip_method=self.params.dip_method,
         )
 
         result = ResonatorSpectroscopyPowerAmpResult()
