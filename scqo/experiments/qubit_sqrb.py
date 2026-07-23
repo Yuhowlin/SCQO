@@ -10,10 +10,9 @@ from typing import ClassVar, Dict, Any, Optional
 
 import numpy as np
 from pydantic import Field
-import xarray as xr
 
 from .._scqat import per_qubit_results
-from ..contract import ContractError, DatasetContract
+from ..contract import DatasetContract
 from ..parameters import AveragingParameters, TargetSelection
 from ..experiment import Experiment
 from ..result import Outcome, Result
@@ -69,30 +68,6 @@ class QubitSQRBParameters(TargetSelection, AveragingParameters):
             return depths
 
 
-class SQRBContract(DatasetContract):
-    """Custom contract for SQRB supporting either raw (I, Q) or state classification (state)."""
-
-    def validate(self, ds: xr.Dataset) -> None:
-        problems: list[str] = []
-        for dim in self.dims:
-            if dim not in ds.dims:
-                problems.append(f"missing dimension {dim!r}")
-            if dim not in ds.coords:
-                problems.append(f"missing coordinate {dim!r}")
-        
-        has_iq = "I" in ds.data_vars and "Q" in ds.data_vars
-        has_state = "state" in ds.data_vars
-        has_i = "I" in ds.data_vars
-        
-        if not (has_iq or has_state or has_i):
-            problems.append("dataset must contain data variables ('I', 'Q') or ('state',)")
-        
-        if problems:
-            raise ContractError(
-                f"dataset does not conform to SQRB contract: " + "; ".join(problems)
-            )
-
-
 class QubitSQRBResult(Result):
     """Result of QubitSQRB."""
     pass
@@ -107,10 +82,13 @@ class QubitSQRB(Experiment):
     )
     Parameters: ClassVar[type[QubitSQRBParameters]] = QubitSQRBParameters
     Result: ClassVar[type[QubitSQRBResult]] = QubitSQRBResult
-    Contract: ClassVar[DatasetContract] = SQRBContract(
+    # raw (I, Q), or the FPGA-discriminated state, or a bare I quadrature — the
+    # alt sets are checked with the same dims rigor as the primary set.
+    Contract: ClassVar[DatasetContract] = DatasetContract(
         sweeps=("sequence_idx", "depth"),
         sweep_units=("", ""),
-        variables=("I", "Q")
+        variables=("I", "Q"),
+        alt_variables=(("state",), ("I",)),
     )
 
     required_operations: ClassVar[tuple[str, ...]] = ("rx", "readout")

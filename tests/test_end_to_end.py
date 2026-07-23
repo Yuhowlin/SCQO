@@ -7,6 +7,7 @@ drives ``simulate`` instead of ``probe``.
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from scqo import Component, Outcome, Roster, Session, register
 from scqo.experiments import (
@@ -573,6 +574,43 @@ def test_power_rabi_generalizes_pattern():
     # calibration can leave the value numerically unchanged while still being written.
     assert any(h["component"] == "q0" and h["field"] == "pi_amp" for h in sess.history())
     assert np.isclose(after, result["fit"]["q0"]["pi_amp"])
+
+
+@pytest.mark.parametrize("name,params,check", [
+    ("qubit_power_rabi", {"num_points": 201},
+     lambda fit: 0.8 < fit["pi_amp_factor"] < 1.2),
+    ("qubit_ramsey", {"max_idle_time_ns": 4000, "num_points": 201},
+     lambda fit: abs(fit["detuning_error_hz"]) < 0.3e6),
+    ("qubit_relaxation", {},
+     lambda fit: 20e-6 * 0.8 < fit["t1_s"] < 60e-6 * 1.2),
+    ("qubit_echo", {},
+     lambda fit: 30e-6 * 0.8 < fit["t2_echo_s"] < 80e-6 * 1.2),
+])
+def test_state_mode_runs_coherent_drive(tmp_path, name, params, check):
+    """Stage-3 acquisition: use_state_discrimination=True makes simulate() emit the
+    averaged `state` (no I/Q), the widened contract accepts it, and the estimator
+    consumes it as the pre-reduced `signal` — same physics, provenance stamped
+    reduction_method='signal', and no IQ-plane panel (no cloud exists)."""
+    import json
+
+    sess = Session(SimulatedBackend(_device()), demo_roster(),
+                   data_root=tmp_path / "data", device_name="devS")
+    result = sess.run(name, {"targets": ["q0"], "use_state_discrimination": True, **params})
+    assert result["outcomes"]["q0"] == Outcome.SUCCESSFUL.value
+    assert check(result["fit"]["q0"])
+
+    run_dir = tmp_path / "data" / sess.load_run(result["run_id"])["record"]["path"]
+    # the raw dataset carries `state`, not I/Q
+    import xarray as xr
+    ds = xr.load_dataset(run_dir / "dataset.nc")
+    assert "state" in ds.data_vars and "I" not in ds.data_vars
+    # provenance: the estimator took the pre-reduced signal path, and there is
+    # no IQ cloud to draw
+    meta_files = list(run_dir.glob("analysis/q0/*_metadata.json"))
+    assert meta_files, "estimator metadata artifact missing"
+    meta = json.loads(meta_files[0].read_text())
+    assert meta.get("reduction_method") == "signal"
+    assert not list(run_dir.glob("analysis/q0/*iq_plane*"))
 
 
 def test_chain_punchout_suggests_and_reverts():

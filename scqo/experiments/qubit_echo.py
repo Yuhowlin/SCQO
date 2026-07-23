@@ -30,6 +30,12 @@ class QubitEchoParameters(TargetSelection, AveragingParameters):
     min_wait_ns: float = Field(32, ge=0, description="Shortest total echo idle time.")
     max_wait_ns: float = Field(400_000, gt=0, description="Longest total idle time (should exceed a few T2_echo).")
     num_points: int = Field(51, gt=1, description="Number of idle-time points.")
+    use_state_discrimination: bool = Field(
+        False,
+        description="Discriminate each shot on the FPGA and return the averaged state "
+        "(population) instead of I/Q. Requires a calibrated discriminator "
+        "(QM: the qualibrate 07_iq_blobs node's integration_weights_angle + threshold).",
+    )
 
 
 class QubitEchoResult(Result):
@@ -44,12 +50,15 @@ class QubitEcho(Experiment):
     description: ClassVar[str] = (
         "Hahn echo (X90 - tau/2 - X - tau/2 - X90) over a swept total idle time; fits "
         "the exponential envelope and proposes t2_echo_s as a physical parameter "
-        "(sample physics, no instrument knob)."
+        "(sample physics, no instrument knob). use_state_discrimination returns the "
+        "FPGA-discriminated averaged state instead of I/Q (needs a calibrated "
+        "discriminator; QM: run the qualibrate 07_iq_blobs node first)."
     )
     Parameters: ClassVar[type] = QubitEchoParameters
     Result: ClassVar[type] = QubitEchoResult
     Contract: ClassVar[DatasetContract] = DatasetContract(
-        sweeps=("wait_time_ns",), sweep_units=("ns",), variables=("I", "Q")
+        sweeps=("wait_time_ns",), sweep_units=("ns",), variables=("I", "Q"),
+        alt_variables=(("state",),),
     )
     required_operations: ClassVar[tuple[str, ...]] = ("rx", "readout")
 
@@ -64,12 +73,19 @@ class QubitEcho(Experiment):
         t = coords["wait_time_ns"] * 1e-9
         targets = self.params.targets
         rng = np.random.default_rng(stable_seed("qubit_echo", *targets))
+        use_state = self.params.use_state_discrimination
         i_data = np.empty((len(targets), t.size))
         q_data = np.empty_like(i_data)
+        state = np.empty_like(i_data)
         for k in range(len(targets)):
             t2e = rng.uniform(30e-6, 80e-6)  # hidden truth the fit must recover
-            i_data[k], q_data[k] = iq_from_population(np.exp(-t / t2e), rng)
-        return {"I": i_data, "Q": q_data}
+            population = np.exp(-t / t2e)
+            if use_state:
+                # FPGA-discriminated averaged state: a population in [0, 1]
+                state[k] = np.clip(population + rng.normal(0, 0.02, t.size), 0.0, 1.0)
+            else:
+                i_data[k], q_data[k] = iq_from_population(population, rng)
+        return {"state": state} if use_state else {"I": i_data, "Q": q_data}
 
     def estimate(self) -> QubitEchoResult:
         assert self.dataset is not None, "run() populates self.dataset before estimate()"
@@ -77,7 +93,12 @@ class QubitEcho(Experiment):
 
         # scqat's contract: complex IQ (`I`/`Q`) + coord `idle_time` in seconds; the
         # estimator reduces IQ to the signed axial projection before the decay fit.
-        prepared = self.dataset.rename({"wait_time_ns": "idle_time"})
+        # A discriminated probe returns the averaged `state` instead — the estimator's
+        # pre-reduced `signal` input.
+        rename = {"wait_time_ns": "idle_time"}
+        if "state" in self.dataset.data_vars:
+            rename["state"] = "signal"
+        prepared = self.dataset.rename(rename)
         prepared = prepared.assign_coords(idle_time=prepared["idle_time"] * 1e-9)
 
         results = per_qubit_results(prepared, QubitEchoEstimator(), artifact_dir=self.artifact_dir)

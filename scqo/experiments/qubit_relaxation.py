@@ -31,6 +31,12 @@ class QubitRelaxationParameters(TargetSelection, AveragingParameters):
     min_wait_ns: float = Field(16, ge=0, description="Shortest delay after the pi pulse.")
     max_wait_ns: float = Field(200_000, gt=0, description="Longest delay (should exceed a few T1).")
     num_points: int = Field(51, gt=1, description="Number of delay points.")
+    use_state_discrimination: bool = Field(
+        False,
+        description="Discriminate each shot on the FPGA and return the averaged state "
+        "(population) instead of I/Q. Requires a calibrated discriminator "
+        "(QM: the qualibrate 07_iq_blobs node's integration_weights_angle + threshold).",
+    )
 
 
 class QubitRelaxationResult(Result):
@@ -44,12 +50,16 @@ class QubitRelaxation(Experiment):
     name: ClassVar[str] = "qubit_relaxation"
     description: ClassVar[str] = (
         "Excite with a pi pulse, wait a swept delay and measure; fits the exponential "
-        "decay and proposes t1_s as a physical parameter (sample physics, no instrument knob)."
+        "decay and proposes t1_s as a physical parameter (sample physics, no instrument "
+        "knob). use_state_discrimination returns the FPGA-discriminated averaged state "
+        "instead of I/Q (needs a calibrated discriminator; QM: run the qualibrate "
+        "07_iq_blobs node first)."
     )
     Parameters: ClassVar[type] = QubitRelaxationParameters
     Result: ClassVar[type] = QubitRelaxationResult
     Contract: ClassVar[DatasetContract] = DatasetContract(
-        sweeps=("wait_time_ns",), sweep_units=("ns",), variables=("I", "Q")
+        sweeps=("wait_time_ns",), sweep_units=("ns",), variables=("I", "Q"),
+        alt_variables=(("state",),),
     )
     required_operations: ClassVar[tuple[str, ...]] = ("rx", "readout")
 
@@ -64,12 +74,19 @@ class QubitRelaxation(Experiment):
         t = coords["wait_time_ns"] * 1e-9
         targets = self.params.targets
         rng = np.random.default_rng(stable_seed("qubit_relaxation", *targets))
+        use_state = self.params.use_state_discrimination
         i_data = np.empty((len(targets), t.size))
         q_data = np.empty_like(i_data)
+        state = np.empty_like(i_data)
         for k in range(len(targets)):
             t1 = rng.uniform(20e-6, 60e-6)  # hidden truth the fit must recover
-            i_data[k], q_data[k] = iq_from_population(np.exp(-t / t1), rng)
-        return {"I": i_data, "Q": q_data}
+            population = np.exp(-t / t1)
+            if use_state:
+                # FPGA-discriminated averaged state: a population in [0, 1]
+                state[k] = np.clip(population + rng.normal(0, 0.02, t.size), 0.0, 1.0)
+            else:
+                i_data[k], q_data[k] = iq_from_population(population, rng)
+        return {"state": state} if use_state else {"I": i_data, "Q": q_data}
 
     def estimate(self) -> QubitRelaxationResult:
         assert self.dataset is not None, "run() populates self.dataset before estimate()"
@@ -77,7 +94,12 @@ class QubitRelaxation(Experiment):
 
         # scqat's contract: complex IQ (`I`/`Q`) + coord `wait_time` in seconds; the
         # estimator reduces IQ to the signed axial projection before the decay fit.
-        prepared = self.dataset.rename({"wait_time_ns": "wait_time"})
+        # A discriminated probe returns the averaged `state` instead — the estimator's
+        # pre-reduced `signal` input.
+        rename = {"wait_time_ns": "wait_time"}
+        if "state" in self.dataset.data_vars:
+            rename["state"] = "signal"
+        prepared = self.dataset.rename(rename)
         prepared = prepared.assign_coords(wait_time=prepared["wait_time"] * 1e-9)
 
         results = per_qubit_results(prepared, QubitRelaxationEstimator(), artifact_dir=self.artifact_dir)

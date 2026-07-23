@@ -30,6 +30,12 @@ class QubitPowerRabiParameters(TargetSelection, AveragingParameters):
     min_amp_factor: float = Field(0.0, ge=0, description="Lowest drive amplitude, as a factor of current pi_amp.")
     max_amp_factor: float = Field(2.0, gt=0, description="Highest drive amplitude, as a factor of current pi_amp.")
     num_points: int = Field(101, gt=1, description="Number of amplitude points.")
+    use_state_discrimination: bool = Field(
+        False,
+        description="Discriminate each shot on the FPGA and return the averaged state "
+        "(population) instead of I/Q. Requires a calibrated discriminator "
+        "(QM: the qualibrate 07_iq_blobs node's integration_weights_angle + threshold).",
+    )
 
 
 class QubitPowerRabiResult(Result):
@@ -46,12 +52,15 @@ class QubitPowerRabi(Experiment):
     name: ClassVar[str] = "qubit_power_rabi"
     description: ClassVar[str] = (
         "Sweep drive amplitude (as a factor of the current pi pulse) and fit the Rabi "
-        "oscillation to recalibrate pi_amp."
+        "oscillation to recalibrate pi_amp. use_state_discrimination returns the "
+        "FPGA-discriminated averaged state instead of I/Q (needs a calibrated "
+        "discriminator; QM: run the qualibrate 07_iq_blobs node first)."
     )
     Parameters: ClassVar[type] = QubitPowerRabiParameters
     Result: ClassVar[type] = QubitPowerRabiResult
     Contract: ClassVar[DatasetContract] = DatasetContract(
-        sweeps=("amp_factor",), sweep_units=("dimensionless",), variables=("I", "Q")
+        sweeps=("amp_factor",), sweep_units=("dimensionless",), variables=("I", "Q"),
+        alt_variables=(("state",),),
     )
     required_operations: ClassVar[tuple[str, ...]] = ("rx", "readout")
 
@@ -68,13 +77,19 @@ class QubitPowerRabi(Experiment):
         factor = coords["amp_factor"]
         targets = self.params.targets
         rng = np.random.default_rng(stable_seed("qubit_power_rabi", *targets))
+        use_state = self.params.use_state_discrimination
         i_data = np.empty((len(targets), factor.size))
         q_data = np.empty_like(i_data)
+        state = np.empty_like(i_data)
         for k in range(len(targets)):
             factor_pi = rng.uniform(0.85, 1.15)  # miscalibration to recover (1.0 == perfect)
             population = 0.5 - 0.5 * np.cos(np.pi * factor / factor_pi)
-            i_data[k], q_data[k] = iq_from_population(population, rng)
-        return {"I": i_data, "Q": q_data}
+            if use_state:
+                # FPGA-discriminated averaged state: a population in [0, 1]
+                state[k] = np.clip(population + rng.normal(0, 0.02, factor.size), 0.0, 1.0)
+            else:
+                i_data[k], q_data[k] = iq_from_population(population, rng)
+        return {"state": state} if use_state else {"I": i_data, "Q": q_data}
 
     def estimate(self) -> QubitPowerRabiResult:
         assert self.dataset is not None, "run() populates self.dataset before estimate()"
@@ -83,7 +98,12 @@ class QubitPowerRabi(Experiment):
         # scqat's contract: complex IQ (`I`/`Q`) + coord `amp_prefactor` (the dimensionless
         # amplitude multiplier). The estimator reduces IQ to the signed axial projection
         # onto the |0>-|1> axis and returns `opt_amp_prefactor` == the pi-pulse factor.
-        prepared = self.dataset.rename({"amp_factor": "amp_prefactor"})
+        # A discriminated probe returns the averaged `state` instead — the estimator's
+        # pre-reduced `signal` input.
+        rename = {"amp_factor": "amp_prefactor"}
+        if "state" in self.dataset.data_vars:
+            rename["state"] = "signal"
+        prepared = self.dataset.rename(rename)
 
         results = per_qubit_results(prepared, PowerRabiEstimator(), artifact_dir=self.artifact_dir)
 

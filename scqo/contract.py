@@ -37,6 +37,11 @@ class DatasetContract:
         sweep_units: documentary units per sweep axis (e.g. ``("dBm", "Hz")``);
             not enforced (xarray coords carry no units here).
         variables: data variables every conforming dataset must contain.
+        alt_variables: alternative acceptable variable sets — the dataset conforms
+            when it carries ``variables`` OR any one of these sets in full (e.g.
+            ``(("state",),)`` for a probe that returns the FPGA-discriminated
+            averaged state instead of I/Q). Every set is held to the same rigor:
+            each named variable must exist and span exactly ``dims``.
         target_dim: the per-target dimension/coordinate name (default ``"target"``;
             renamed from ``qubit`` at the pair cutover — the axis carries TARGET
             names, which may be qubits or pairs).
@@ -45,6 +50,7 @@ class DatasetContract:
     sweeps: tuple[str, ...]
     sweep_units: tuple[str, ...]
     variables: tuple[str, ...]
+    alt_variables: tuple[tuple[str, ...], ...] = ()
     target_dim: str = "target"
 
     @property
@@ -52,11 +58,27 @@ class DatasetContract:
         """The dimensions every required variable must span: ``(target_dim, *sweeps)``."""
         return (self.target_dim, *self.sweeps)
 
+    def _variable_set_problems(self, ds: xr.Dataset, variables: tuple[str, ...]) -> list[str]:
+        """Problems of one candidate variable set: each named variable must exist
+        and span exactly ``dims`` — the same rigor for every alternative."""
+        want = set(self.dims)
+        problems: list[str] = []
+        for var in variables:
+            if var not in ds.data_vars:
+                problems.append(f"missing variable {var!r}")
+                continue
+            if set(ds[var].dims) != want:
+                problems.append(
+                    f"variable {var!r} has dims {tuple(ds[var].dims)}, expected {self.dims}"
+                )
+        return problems
+
     def validate(self, ds: xr.Dataset) -> None:
         """Raise :class:`ContractError` if ``ds`` does not conform.
 
         Checks that ``target_dim`` and every sweep axis are present as both a dimension
-        and a coordinate, and that each required variable exists and spans exactly that
+        and a coordinate, and that the dataset fully carries ``variables`` OR any one
+        ``alt_variables`` set — each candidate variable must exist and span exactly that
         dimension set. Extra variables/coordinates are allowed (e.g. a probe may also
         emit ``Q`` for a method whose estimator only reads ``I``).
         """
@@ -66,14 +88,21 @@ class DatasetContract:
                 problems.append(f"missing dimension {dim!r}")
             if dim not in ds.coords:
                 problems.append(f"missing coordinate {dim!r}")
-        want = set(self.dims)
-        for var in self.variables:
-            if var not in ds.data_vars:
-                problems.append(f"missing variable {var!r}")
-                continue
-            if set(ds[var].dims) != want:
+
+        candidate_sets = (self.variables, *self.alt_variables)
+        set_problems = [self._variable_set_problems(ds, vs) for vs in candidate_sets]
+        if all(set_problems):  # no candidate set fully conforms
+            if len(candidate_sets) == 1:
+                problems.extend(set_problems[0])
+            else:
+                accepted = " OR ".join(repr(vs) for vs in candidate_sets)
                 problems.append(
-                    f"variable {var!r} has dims {tuple(ds[var].dims)}, expected {self.dims}"
+                    f"no accepted variable set conforms (accepted: {accepted}; "
+                    f"found data_vars {tuple(ds.data_vars)!r}): "
+                    + " | ".join(
+                        f"{vs!r}: " + "; ".join(ps)
+                        for vs, ps in zip(candidate_sets, set_problems)
+                    )
                 )
         if problems:
             raise ContractError(

@@ -89,6 +89,40 @@ def test_validate_rejects_nonconforming():
         contract.validate(ds.rename({"idle_time_ns": "t"}))  # missing sweep dim/coord
 
 
+def test_alt_variables_accepts_state_only():
+    """A contract with alt_variables=(("state",),) accepts a discriminated probe's
+    state-only dataset — and still accepts the primary (I, Q) form."""
+    _, ds = _acquire(_Ram)
+    contract = _Ram.Contract
+    assert contract.alt_variables == (("state",),)
+
+    contract.validate(ds)  # primary (I, Q) form conforms
+    state_ds = ds.drop_vars("Q").rename({"I": "state"})
+    contract.validate(state_ds)  # alt (state,) form conforms
+    assert contract.conforms(state_ds)
+
+
+def test_alt_variables_enforce_dims_rigor():
+    """Alternative sets are held to the SAME rigor as the primary set: a 'state'
+    variable that does not span exactly (target, *sweeps) is rejected."""
+    _, ds = _acquire(_Ram)
+    state_ds = ds.drop_vars("Q").rename({"I": "state"})
+    squashed = state_ds.isel(idle_time_ns=0, drop=True)  # state loses the sweep dim
+    with pytest.raises(ContractError):
+        _Ram.Contract.validate(squashed)
+
+
+def test_alt_variables_failure_lists_all_accepted_sets():
+    """When nothing conforms, the error names every accepted variable set so a
+    probe author sees the full menu."""
+    _, ds = _acquire(_Ram)
+    bogus = ds.drop_vars(["I", "Q"])
+    with pytest.raises(ContractError) as err:
+        _Ram.Contract.validate(bogus)
+    msg = str(err.value)
+    assert "('I', 'Q')" in msg and "('state',)" in msg
+
+
 def test_two_axis_contract():
     """A 2D-sweep contract validates (qubit, axis1, axis2) datasets and rejects 1D."""
     import numpy as np

@@ -9,10 +9,9 @@ from __future__ import annotations
 from typing import ClassVar, Dict, Any, List
 
 import numpy as np
-import xarray as xr
 from pydantic import Field
 
-from ..contract import ContractError, DatasetContract
+from ..contract import DatasetContract
 from ..experiment import Experiment
 from ..result import Outcome, Result
 from ..parameters import AveragingParameters, TargetSelection
@@ -35,30 +34,6 @@ class QubitPiPulseErrorParameters(TargetSelection, AveragingParameters):
     )
 
 
-class PiPulseErrorContract(DatasetContract):
-    """Custom contract for pi pulse error amplification supporting either raw (I, Q) or state classification (state)."""
-
-    def validate(self, ds: xr.Dataset) -> None:
-        problems: list[str] = []
-        for dim in self.dims:
-            if dim not in ds.dims:
-                problems.append(f"missing dimension {dim!r}")
-            if dim not in ds.coords:
-                problems.append(f"missing coordinate {dim!r}")
-        
-        has_iq = "I" in ds.data_vars and "Q" in ds.data_vars
-        has_state = "state" in ds.data_vars
-        has_i = "I" in ds.data_vars
-        
-        if not (has_iq or has_state or has_i):
-            problems.append("dataset must contain data variables ('I', 'Q') or ('state',)")
-        
-        if problems:
-            raise ContractError(
-                f"dataset does not conform to Contract: " + "; ".join(problems)
-            )
-
-
 class QubitPiPulseErrorResult(Result):
     """Fitted optimal pi-pulse amplitude factor."""
 
@@ -73,10 +48,13 @@ class QubitPiPulseError(Experiment):
     )
     Parameters: ClassVar[type] = QubitPiPulseErrorParameters
     Result: ClassVar[type] = QubitPiPulseErrorResult
-    Contract: ClassVar[DatasetContract] = PiPulseErrorContract(
+    # raw (I, Q), or the FPGA-discriminated state, or a bare I quadrature — the
+    # alt sets are checked with the same dims rigor as the primary set.
+    Contract: ClassVar[DatasetContract] = DatasetContract(
         sweeps=("gate_count", "amp_factor"),
         sweep_units=("", "dimensionless"),
         variables=("I", "Q"),
+        alt_variables=(("state",), ("I",)),
     )
 
     params: QubitPiPulseErrorParameters
