@@ -52,8 +52,8 @@ class QubitRelaxation(Experiment):
         "Excite with a pi pulse, wait a swept delay and measure; fits the exponential "
         "decay and proposes t1_s as a physical parameter (sample physics, no instrument "
         "knob). use_state_discrimination returns the FPGA-discriminated averaged state "
-        "instead of I/Q (needs a calibrated discriminator; QM: run the qualibrate "
-        "07_iq_blobs node first)."
+        "instead of I/Q (needs a calibrated discriminator: run single_shot_readout with "
+        "calibrate_discriminator=true first)."
     )
     Parameters: ClassVar[type] = QubitRelaxationParameters
     Result: ClassVar[type] = QubitRelaxationResult

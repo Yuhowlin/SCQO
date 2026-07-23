@@ -31,11 +31,22 @@ class SingleShotReadoutParameters(TargetSelection, Parameters):
     """Inputs for a single-shot readout-fidelity measurement."""
 
     num_shots: int = Field(2000, gt=99, description="Shots per prepared state (each recorded individually).")
+    calibrate_discriminator: bool = Field(
+        False,
+        description="Backends that support it (QM) recalibrate the vendor readout "
+        "discriminator (integration_weights_angle / threshold / rus_exit_threshold) "
+        "IMMEDIATELY on a successful run and save the vendor config — an out-of-band "
+        "vendor calibration like a qualibrate node, NOT a governed suggestion "
+        "(update='none' skips it; no-op on the simulated backend).",
+    )
 
 
 class SingleShotReadoutResult(Result):
     """``fit[qubit]``: ``readout_fidelity``, ``p_e_given_g`` (thermal + error proxy),
-    ``p_g_given_e`` (relaxation during readout + error), ``outlier_probability``."""
+    ``p_g_given_e`` (relaxation during readout + error), ``outlier_probability``,
+    and the measured blob centers ``mean_g_i``/``mean_g_q``/``mean_e_i``/``mean_e_q``
+    (acquisition-frame units; instrument-dependent run-record facts — the input a
+    driver's discriminator calibration consumes)."""
 
 
 class SingleShotReadout(Experiment):
@@ -45,7 +56,9 @@ class SingleShotReadout(Experiment):
     description: ClassVar[str] = (
         "Prepare |g> and |e> and record every readout shot's I/Q point; two-Gaussian "
         "mixture gives the assignment fidelity (recorded into the device state, "
-        "record-only) and confusion probabilities (run-record only)."
+        "record-only), confusion probabilities and blob centers (run-record only). "
+        "calibrate_discriminator recalibrates the backend's vendor discriminator "
+        "(QM: integration_weights_angle / threshold) out-of-band on a successful run."
     )
     Parameters: ClassVar[type] = SingleShotReadoutParameters
     Result: ClassVar[type] = SingleShotReadoutResult
@@ -94,26 +107,38 @@ class SingleShotReadout(Experiment):
         )
 
         result = SingleShotReadoutResult()
+        nan = float("nan")
         for qubit in self.params.targets:
             r = results[qubit]
             counts = np.asarray(r["direct_counts"], dtype=float)  # (prepared_state, label), rows sum to 1
+            mean = np.asarray(r.get("trained_paras", {}).get("mean", []), dtype=float)  # (n_center, 2) IQ
             # The GMM's center order is not guaranteed to match the prepared-state
-            # order; pick the label mapping that makes the diagonal the majority.
+            # order; pick the label mapping that makes the diagonal the majority, and
+            # map the same labels onto the g/e blob centers.
+            (g_i, g_q), (e_i, e_q) = (nan, nan), (nan, nan)
             if counts.shape == (2, 2):
                 direct = 0.5 * (counts[0, 0] + counts[1, 1])
                 swapped = 0.5 * (counts[0, 1] + counts[1, 0])
                 if direct >= swapped:
                     fidelity, p_e_g, p_g_e = direct, counts[0, 1], counts[1, 0]
+                    g_label, e_label = 0, 1
                 else:
                     fidelity, p_e_g, p_g_e = swapped, counts[0, 0], counts[1, 1]
+                    g_label, e_label = 1, 0
+                if mean.shape == (2, 2):
+                    g_i, g_q = float(mean[g_label, 0]), float(mean[g_label, 1])
+                    e_i, e_q = float(mean[e_label, 0]), float(mean[e_label, 1])
             else:  # degenerate fit (blobs merged into one component)
-                fidelity, p_e_g, p_g_e = float("nan"), float("nan"), float("nan")
+                fidelity, p_e_g, p_g_e = nan, nan, nan
             outlier_p = float(np.mean(np.asarray(r["outlier_probability"], dtype=float)))
             result.fit[qubit] = {
                 "readout_fidelity": float(fidelity),
                 "p_e_given_g": float(p_e_g),
                 "p_g_given_e": float(p_g_e),
                 "outlier_probability": outlier_p,
+                # measured blob centers (acquisition-frame units) — the input a
+                # driver's discriminator calibration consumes
+                "mean_g_i": g_i, "mean_g_q": g_q, "mean_e_i": e_i, "mean_e_q": e_q,
             }
             ok = np.isfinite(fidelity) and 0.5 < fidelity <= 1.0
             result.outcomes[qubit] = Outcome.SUCCESSFUL if ok else Outcome.FAILED

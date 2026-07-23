@@ -471,6 +471,22 @@ def test_single_shot_readout_fidelity():
     assert sess.device_state()["q0"]["readout_fidelity"] == fit["readout_fidelity"]
     assert "p_e_given_g" not in sess.device_state()["q0"]  # stays run-record-only
     assert [h["field"] for h in sess.history()] == ["readout_fidelity"]
+    # the measured g/e blob centers are exposed as run-record facts (the input a
+    # driver's discriminator calibration consumes); sim blobs at (0,0)/(sep,0)
+    for key in ("mean_g_i", "mean_g_q", "mean_e_i", "mean_e_q"):
+        assert np.isfinite(fit[key])
+    assert abs(fit["mean_e_i"] - fit["mean_g_i"]) > 2.0  # separated blobs along I
+
+
+def test_single_shot_calibrate_discriminator_inert_on_sim():
+    """calibrate_discriminator is a no-op on the simulated backend (no driver update()
+    override) -- the run still succeeds and nothing extra is written to device state."""
+    sess = Session(SimulatedBackend(_device()), demo_roster())
+    result = sess.run("single_shot_readout",
+                      {"targets": ["q0"], "num_shots": 800, "calibrate_discriminator": True},
+                      update="apply")
+    assert result["outcomes"]["q0"] == Outcome.SUCCESSFUL.value
+    assert [h["field"] for h in sess.history()] == ["readout_fidelity"]
 
 
 def test_resonator_flux_map_recovers_dispersive_model():

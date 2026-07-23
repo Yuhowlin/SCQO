@@ -62,8 +62,8 @@ class QubitRamsey(Experiment):
         "Two pi/2 pulses separated by a swept idle time with an artificial drive detuning; "
         "fits the decaying fringe to correct drive_freq and report T2*. "
         "use_state_discrimination returns the FPGA-discriminated averaged state instead "
-        "of I/Q (needs a calibrated discriminator; QM: run the qualibrate 07_iq_blobs "
-        "node first)."
+        "of I/Q (needs a calibrated discriminator: run single_shot_readout with "
+        "calibrate_discriminator=true first)."
     )
     Parameters: ClassVar[type] = QubitRamseyParameters
     Result: ClassVar[type] = QubitRamseyResult

@@ -54,7 +54,7 @@ class QubitPowerRabi(Experiment):
         "Sweep drive amplitude (as a factor of the current pi pulse) and fit the Rabi "
         "oscillation to recalibrate pi_amp. use_state_discrimination returns the "
         "FPGA-discriminated averaged state instead of I/Q (needs a calibrated "
-        "discriminator; QM: run the qualibrate 07_iq_blobs node first)."
+        "discriminator: run single_shot_readout with calibrate_discriminator=true first)."
     )
     Parameters: ClassVar[type] = QubitPowerRabiParameters
     Result: ClassVar[type] = QubitPowerRabiResult

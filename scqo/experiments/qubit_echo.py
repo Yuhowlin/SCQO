@@ -52,7 +52,7 @@ class QubitEcho(Experiment):
         "the exponential envelope and proposes t2_echo_s as a physical parameter "
         "(sample physics, no instrument knob). use_state_discrimination returns the "
         "FPGA-discriminated averaged state instead of I/Q (needs a calibrated "
-        "discriminator; QM: run the qualibrate 07_iq_blobs node first)."
+        "discriminator: run single_shot_readout with calibrate_discriminator=true first)."
     )
     Parameters: ClassVar[type] = QubitEchoParameters
     Result: ClassVar[type] = QubitEchoResult
