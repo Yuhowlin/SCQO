@@ -21,6 +21,22 @@ class QubitDragAlternatingParameters(TargetSelection, AveragingParameters):
     num_beta_points: int = Field(41, gt=1, description="Number of beta sweep points.")
     max_pulses: int = Field(20, gt=0, description="Maximum number of alternating pulses.")
     num_pulse_points: int = Field(10, gt=1, description="Number of pulse sweep points.")
+    readout_mode: str = Field(
+        "raw_iq",
+        description="Readout mode: 'raw_iq' (default) or 'hardware_state'.",
+    )
+
+
+from ..contract import DatasetContract, ContractError
+
+
+class DragAlternatingContract(DatasetContract):
+    """Dataset contract for DRAG alternating experiment: accepts (I, Q), (state,), or (I,)."""
+
+    def validate(self, dataset: xr.Dataset) -> None:
+        super().validate(dataset)
+        if "I" not in dataset.data_vars and "state" not in dataset.data_vars:
+            raise ContractError("dataset missing 'I' or 'state' data variable")
 
 
 class QubitDragAlternatingResult(Result):
@@ -38,7 +54,7 @@ class QubitDragAlternating(Experiment):
     )
     Parameters: ClassVar[type] = QubitDragAlternatingParameters
     Result: ClassVar[type] = QubitDragAlternatingResult
-    Contract: ClassVar[DatasetContract] = DatasetContract(
+    Contract: ClassVar[DatasetContract] = DragAlternatingContract(
         sweeps=("nb_of_pulses", "beta"),
         sweep_units=("", ""),
         variables=("I", "Q"),
@@ -96,11 +112,26 @@ class QubitDragAlternating(Experiment):
         from scqat.estimators.qubit_drag_alternating import QubitDragAlternatingEstimator
         from .._scqat import per_qubit_results
 
-        # Map variable I as signal to scqat
-        prepared = self.dataset.rename({"I": "signal"})
+        # Map variable I, state, or signal to scqat
+        if "signal" in self.dataset:
+            prepared = self.dataset
+        elif "state" in self.dataset:
+            prepared = self.dataset.rename({"state": "signal"})
+        elif "I" in self.dataset:
+            prepared = self.dataset.rename({"I": "signal"})
+        else:
+            prepared = self.dataset
+
+        gef_centers = None
+        if self.backend is not None:
+            gef_centers = getattr(self.backend, "gef_centers", None)
+
+        kwargs: dict[str, Any] = {"readout_mode": self.params.readout_mode}
+        if gef_centers is not None:
+            kwargs["gef_centers"] = gef_centers
 
         results = per_qubit_results(
-            prepared, QubitDragAlternatingEstimator(), artifact_dir=self.artifact_dir
+            prepared, QubitDragAlternatingEstimator(), artifact_dir=self.artifact_dir, **kwargs
         )
 
         result = QubitDragAlternatingResult()

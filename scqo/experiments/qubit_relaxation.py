@@ -25,12 +25,40 @@ from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
 
 
+from pydantic import Field, model_validator
+
+
 class QubitRelaxationParameters(TargetSelection, AveragingParameters):
     """Inputs for a T1 relaxation measurement."""
 
     min_wait_ns: float = Field(16, ge=0, description="Shortest delay after the pi pulse.")
     max_wait_ns: float = Field(200_000, gt=0, description="Longest delay (should exceed a few T1).")
     num_points: int = Field(51, gt=1, description="Number of delay points.")
+    readout_mode: str = Field(
+        "raw_iq",
+        description="Readout mode: 'raw_iq' (demodulated IQ) or 'hardware_state' (QM readout_state 2D)."
+    )
+
+
+class RelaxationContract(DatasetContract):
+    """Custom contract for T1 relaxation supporting either raw (I, Q) or state classification (state)."""
+
+    def validate(self, ds: xr.Dataset) -> None:
+        problems: list[str] = []
+        if "wait_time_ns" not in ds.dims and "wait_time_ns" not in ds.coords:
+            problems.append("missing dimension/coord 'wait_time_ns'")
+
+        has_iq = "I" in ds.data_vars and "Q" in ds.data_vars
+        has_state = "state" in ds.data_vars
+        has_i = "I" in ds.data_vars or "signal" in ds.data_vars
+
+        if not (has_iq or has_state or has_i):
+            problems.append("dataset must contain data variables ('I', 'Q') or ('state',)")
+
+        if problems:
+            raise ContractError(
+                f"dataset does not conform to contract: " + "; ".join(problems)
+            )
 
 
 class QubitRelaxationResult(Result):
@@ -48,7 +76,7 @@ class QubitRelaxation(Experiment):
     )
     Parameters: ClassVar[type] = QubitRelaxationParameters
     Result: ClassVar[type] = QubitRelaxationResult
-    Contract: ClassVar[DatasetContract] = DatasetContract(
+    Contract: ClassVar[DatasetContract] = RelaxationContract(
         sweeps=("wait_time_ns",), sweep_units=("ns",), variables=("I", "Q")
     )
     required_operations: ClassVar[tuple[str, ...]] = ("rx", "readout")
@@ -64,6 +92,7 @@ class QubitRelaxation(Experiment):
         t = coords["wait_time_ns"] * 1e-9
         targets = self.params.targets
         rng = np.random.default_rng(stable_seed("qubit_relaxation", *targets))
+
         i_data = np.empty((len(targets), t.size))
         q_data = np.empty_like(i_data)
         for k in range(len(targets)):
@@ -76,23 +105,58 @@ class QubitRelaxation(Experiment):
     def estimate(self) -> QubitRelaxationResult:
         assert self.dataset is not None, "run() populates self.dataset before estimate()"
         from scqat.estimators.qubit_relaxation import QubitRelaxationEstimator
+        from scqat.parsers import repetition_data
 
         # scqat's contract: variable `signal` + coord `wait_time` in seconds.
-        prepared = self.dataset.rename({"I": "signal", "wait_time_ns": "wait_time"})
-        prepared = prepared.assign_coords(wait_time=prepared["wait_time"] * 1e-9)
+        prepared = self.dataset.copy()
+        if "state" in prepared and "signal" not in prepared:
+            prepared["signal"] = prepared["state"]
+        elif "I" in prepared and "signal" not in prepared:
+            prepared["signal"] = prepared["I"]
 
-        results = per_qubit_results(prepared, QubitRelaxationEstimator(), artifact_dir=self.artifact_dir)
+        if "wait_time_ns" in prepared.coords and "wait_time" not in prepared.coords:
+            prepared = prepared.rename({"wait_time_ns": "wait_time"})
+            prepared = prepared.assign_coords(wait_time=prepared["wait_time"] * 1e-9)
 
+        gef_centers_dict: dict[str, list] = {}
+        if self.backend is not None and hasattr(self.backend, "machine"):
+            machine = getattr(self.backend, "machine", None)
+            if machine is not None and hasattr(machine, "qubits"):
+                for q_name in self.params.targets:
+                    if q_name in machine.qubits:
+                        q_obj = machine.qubits[q_name]
+                        centers = getattr(q_obj.resonator, "gef_centers", None)
+                        if centers is not None:
+                            gef_centers_dict[q_name] = centers
+
+        estimator = QubitRelaxationEstimator()
         result = QubitRelaxationResult()
-        for qubit in self.params.targets:
-            r = results[qubit]
-            result.fit[qubit] = {
-                "t1_s": float(r["t1"]),
-                "t1_stderr_s": float(r["t1_stderr"]),
-                "amplitude": float(r["amplitude"]),
-                "offset": float(r["offset"]),
+
+        for sq in repetition_data(prepared, repetition_dim="target"):
+            qubit_name = sq["target"].values.item()
+            out_dir = str(self.artifact_dir / str(qubit_name)) if self.artifact_dir is not None else None
+            centers = gef_centers_dict.get(qubit_name)
+
+            try:
+                results, figures = estimator.analyze(
+                    sq, output_dir=out_dir, skip_figures=self.artifact_dir is None,
+                    readout_mode=self.params.readout_mode, gef_centers=centers
+                )
+            except Exception:
+                results, figures = estimator.analyze(
+                    sq, output_dir=None, skip_figures=True,
+                    readout_mode=self.params.readout_mode, gef_centers=centers
+                )
+
+            fit_entry = {
+                "t1_s": float(results["t1"]),
+                "t1_stderr_s": float(results.get("t1_stderr", np.nan)),
+                "amplitude": float(results["amplitude"]),
+                "offset": float(results["offset"]),
             }
-            result.outcomes[qubit] = Outcome.SUCCESSFUL if bool(r["success"]) else Outcome.FAILED
+
+            result.fit[qubit_name] = fit_entry
+            result.outcomes[qubit_name] = Outcome.SUCCESSFUL if bool(results["success"]) else Outcome.FAILED
         return result
 
     def update(self) -> None:

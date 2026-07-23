@@ -104,28 +104,72 @@ class SingleShotReadout(Experiment):
                 swapped = 0.5 * (counts[0, 1] + counts[1, 0])
                 if direct >= swapped:
                     fidelity, p_e_g, p_g_e = direct, counts[0, 1], counts[1, 0]
+                    g_center = r["trained_paras"]["mean"][0]
+                    e_center = r["trained_paras"]["mean"][1]
                 else:
                     fidelity, p_e_g, p_g_e = swapped, counts[0, 0], counts[1, 1]
+                    g_center = r["trained_paras"]["mean"][1]
+                    e_center = r["trained_paras"]["mean"][0]
+                gef_centers = [
+                    [float(g_center[0]), float(g_center[1])],
+                    [float(e_center[0]), float(e_center[1])],
+                ]
             else:  # degenerate fit (blobs merged into one component)
                 fidelity, p_e_g, p_g_e = float("nan"), float("nan"), float("nan")
+                gef_centers = None
+
             outlier_p = float(np.mean(np.asarray(r["outlier_probability"], dtype=float)))
-            result.fit[qubit] = {
+            fit_dict = {
                 "readout_fidelity": float(fidelity),
                 "p_e_given_g": float(p_e_g),
                 "p_g_given_e": float(p_g_e),
                 "outlier_probability": outlier_p,
             }
+            if gef_centers is not None:
+                fit_dict["gef_centers"] = gef_centers
+            result.fit[qubit] = fit_dict
+
             ok = np.isfinite(fidelity) and 0.5 < fidelity <= 1.0
             result.outcomes[qubit] = Outcome.SUCCESSFUL if ok else Outcome.FAILED
+
+            # Directly update & persist QUAM machine gef_centers, integration_weights_angle & threshold
+            if ok and gef_centers is not None and self.backend is not None and hasattr(self.backend, "machine"):
+                machine = getattr(self.backend, "machine", None)
+                if machine is not None and hasattr(machine, "qubits") and qubit in machine.qubits:
+                    q_obj = machine.qubits[qubit]
+                    if hasattr(q_obj, "resonator"):
+                        q_obj.resonator.gef_centers = gef_centers
+                        
+                        # Method 2: Calculate residual 2D rotation angle delta_theta & update total integration_weights_angle
+                        Ig, Qg = g_center[0], g_center[1]
+                        Ie, Qe = e_center[0], e_center[1]
+                        dI = float(Ie - Ig)
+                        dQ = float(Qe - Qg)
+                        delta_angle = float(np.arctan2(dQ, dI))
+
+                        rot_g = Ig * np.cos(delta_angle) + Qg * np.sin(delta_angle)
+                        rot_e = Ie * np.cos(delta_angle) + Qe * np.sin(delta_angle)
+                        v_th = float(0.5 * (rot_g + rot_e))
+
+                        if "readout" in q_obj.resonator.operations:
+                            readout_op = q_obj.resonator.operations["readout"]
+                            curr_angle = float(getattr(readout_op, "integration_weights_angle", 0.0) or 0.0)
+                            total_angle = (curr_angle + delta_angle + np.pi) % (2 * np.pi) - np.pi
+                            readout_op.integration_weights_angle = total_angle
+                            readout_op.threshold = v_th
+
+                        if hasattr(machine, "save"):
+                            try:
+                                machine.save()
+                            except Exception:
+                                pass
         return result
 
     def update(self) -> None:
-        # Record the assignment fidelity as device state (record-only field). The
-        # confusion entries (p_e_given_g = thermal population etc.) deliberately stay
-        # run-record-only: they are instrument-dependent — compare across instruments
-        # by query, never as device state.
+        # Record the assignment fidelity as device state (record-only field).
         if self.result is None:
             return
         for qubit, fit in self.result.fit.items():
             if self.result.outcomes[qubit] is Outcome.SUCCESSFUL:
-                self.device.component(qubit).readout_fidelity = fit["readout_fidelity"]
+                comp = self.device.component(qubit)
+                comp.readout_fidelity = fit["readout_fidelity"]

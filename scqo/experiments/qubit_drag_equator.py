@@ -20,6 +20,10 @@ class QubitDragEquatorParameters(TargetSelection, AveragingParameters):
     max_beta: float = Field(0.5, description="Maximum DRAG beta coefficient.")
     num_beta_points: int = Field(41, gt=1, description="Number of beta sweep points.")
     pulse_repetitions: int = Field(3, gt=0, description="Number of alternating pi pulses. Must be odd.")
+    readout_mode: str = Field(
+        "raw_iq",
+        description="Readout mode: 'raw_iq' (default) or 'hardware_state'.",
+    )
 
     @field_validator("pulse_repetitions")
     @classmethod
@@ -96,11 +100,24 @@ class QubitDragEquator(Experiment):
         from scqat.estimators.qubit_drag_equator import QubitDragEquatorEstimator
         from .._scqat import per_qubit_results
 
-        # Map variable I as signal to scqat
-        prepared = self.dataset.rename({"I": "signal"})
+        # Map variable I as signal to scqat if signal is missing
+        if "signal" in self.dataset:
+            prepared = self.dataset
+        elif "I" in self.dataset:
+            prepared = self.dataset.rename({"I": "signal"})
+        else:
+            prepared = self.dataset
+
+        gef_centers = None
+        if self.backend is not None:
+            gef_centers = getattr(self.backend, "gef_centers", None)
+
+        kwargs: dict[str, Any] = {"readout_mode": self.params.readout_mode}
+        if gef_centers is not None:
+            kwargs["gef_centers"] = gef_centers
 
         results = per_qubit_results(
-            prepared, QubitDragEquatorEstimator(), artifact_dir=self.artifact_dir
+            prepared, QubitDragEquatorEstimator(), artifact_dir=self.artifact_dir, **kwargs
         )
 
         result = QubitDragEquatorResult()

@@ -91,7 +91,7 @@ class QubitTomographyParameters(TargetSelection, AveragingParameters):
                     pass
         return val
     symmetrized_readout: bool = Field(
-        True,
+        False,
         description="Whether to perform symmetrized (inverted) readout for error mitigation."
     )
     num_training_shots: int = Field(

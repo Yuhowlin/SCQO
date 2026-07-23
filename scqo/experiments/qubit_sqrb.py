@@ -42,6 +42,10 @@ class QubitSQRBParameters(TargetSelection, AveragingParameters):
         True,
         description="Use logarithmic depth scaling (1, 2, 4, 8, 16...)."
     )
+    readout_mode: str = Field(
+        "raw_iq",
+        description="Readout mode: 'raw_iq' (demodulated IQ) or 'hardware_state' (QM readout_state 2D)."
+    )
     use_state_discrimination: bool = Field(
         False,
         description="Use state discrimination to classify |0> vs |1> population."
@@ -156,20 +160,50 @@ class QubitSQRB(Experiment):
     def estimate(self) -> QubitSQRBResult:
         assert self.dataset is not None, "run() populates self.dataset before estimate()"
         from scqat.estimators.qubit_sqrb import QubitSQRBEstimator
+        from scqat.parsers import repetition_data
 
-        results = per_qubit_results(
-            self.dataset, QubitSQRBEstimator(), artifact_dir=self.artifact_dir
-        )
+        prepared = self.dataset.copy()
+        if "state" in prepared and "signal" not in prepared:
+            prepared["signal"] = prepared["state"]
+        elif "I" in prepared and "signal" not in prepared:
+            prepared["signal"] = prepared["I"]
 
+        gef_centers_dict: dict[str, list] = {}
+        if self.backend is not None and hasattr(self.backend, "machine"):
+            machine = getattr(self.backend, "machine", None)
+            if machine is not None and hasattr(machine, "qubits"):
+                for q_name in self.params.targets:
+                    if q_name in machine.qubits:
+                        q_obj = machine.qubits[q_name]
+                        centers = getattr(q_obj.resonator, "gef_centers", None)
+                        if centers is not None:
+                            gef_centers_dict[q_name] = centers
+
+        estimator = QubitSQRBEstimator()
         result = QubitSQRBResult()
-        for qubit in self.params.targets:
-            r = results[qubit]
-            result.fit[qubit] = {
-                "alpha": float(r["alpha"]),
-                "alpha_stderr": float(r["alpha_stderr"]),
-                "error_per_clifford": float(r["error_per_clifford"]),
-                "error_per_gate": float(r["error_per_gate"]),
-                "gate_fidelity": float(r["gate_fidelity"]),
+
+        for sq in repetition_data(prepared, repetition_dim="target"):
+            qubit_name = sq["target"].values.item()
+            out_dir = str(self.artifact_dir / str(qubit_name)) if self.artifact_dir is not None else None
+            centers = gef_centers_dict.get(qubit_name)
+
+            try:
+                results, figures = estimator.analyze(
+                    sq, output_dir=out_dir, skip_figures=self.artifact_dir is None,
+                    readout_mode=self.params.readout_mode, gef_centers=centers
+                )
+            except Exception:
+                results, figures = estimator.analyze(
+                    sq, output_dir=None, skip_figures=True,
+                    readout_mode=self.params.readout_mode, gef_centers=centers
+                )
+
+            result.fit[qubit_name] = {
+                "alpha": float(results["alpha"]),
+                "alpha_stderr": float(results["alpha_stderr"]),
+                "error_per_clifford": float(results["error_per_clifford"]),
+                "error_per_gate": float(results["error_per_gate"]),
+                "gate_fidelity": float(results["gate_fidelity"]),
             }
-            result.outcomes[qubit] = Outcome.SUCCESSFUL if r.get("success", False) else Outcome.FAILED
+            result.outcomes[qubit_name] = Outcome.SUCCESSFUL if results.get("success", False) else Outcome.FAILED
         return result
