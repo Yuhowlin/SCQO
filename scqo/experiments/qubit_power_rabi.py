@@ -17,7 +17,7 @@ import numpy as np
 from pydantic import Field
 
 from .._scqat import per_qubit_results
-from ._sim import stable_seed
+from ._sim import iq_from_population, stable_seed
 from ..contract import DatasetContract
 from ..parameters import AveragingParameters, TargetSelection
 from ..experiment import Experiment
@@ -73,18 +73,17 @@ class QubitPowerRabi(Experiment):
         for k in range(len(targets)):
             factor_pi = rng.uniform(0.85, 1.15)  # miscalibration to recover (1.0 == perfect)
             population = 0.5 - 0.5 * np.cos(np.pi * factor / factor_pi)
-            noise = 0.02
-            i_data[k] = population + rng.normal(0, noise, factor.size)
-            q_data[k] = rng.normal(0, noise, factor.size)
+            i_data[k], q_data[k] = iq_from_population(population, rng)
         return {"I": i_data, "Q": q_data}
 
     def estimate(self) -> QubitPowerRabiResult:
         assert self.dataset is not None, "run() populates self.dataset before estimate()"
         from scqat.estimators.power_rabi import PowerRabiEstimator
 
-        # scqat's contract: variable `signal` + coord `amp_prefactor` (the dimensionless
-        # amplitude multiplier). It returns `opt_amp_prefactor` == the pi-pulse factor.
-        prepared = self.dataset.rename({"I": "signal", "amp_factor": "amp_prefactor"})
+        # scqat's contract: complex IQ (`I`/`Q`) + coord `amp_prefactor` (the dimensionless
+        # amplitude multiplier). The estimator reduces IQ to the signed axial projection
+        # onto the |0>-|1> axis and returns `opt_amp_prefactor` == the pi-pulse factor.
+        prepared = self.dataset.rename({"amp_factor": "amp_prefactor"})
 
         results = per_qubit_results(prepared, PowerRabiEstimator(), artifact_dir=self.artifact_dir)
 

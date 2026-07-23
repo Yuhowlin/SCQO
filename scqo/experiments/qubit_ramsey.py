@@ -21,7 +21,7 @@ import numpy as np
 from pydantic import Field
 
 from .._scqat import per_qubit_results
-from ._sim import stable_seed
+from ._sim import iq_from_population, stable_seed
 from ..contract import DatasetContract
 from ..parameters import AveragingParameters, TargetSelection
 from ..experiment import Experiment
@@ -83,19 +83,17 @@ class QubitRamsey(Experiment):
             err = rng.uniform(-0.2, 0.2) * applied  # residual detuning to recover
             t2_star = rng.uniform(5e-6, 15e-6)
             fringe = 0.5 - 0.5 * np.exp(-t / t2_star) * np.cos(2 * np.pi * (applied + err) * t)
-            noise = 0.02
-            i_data[k] = fringe + rng.normal(0, noise, t.size)
-            q_data[k] = rng.normal(0, noise, t.size)
+            i_data[k], q_data[k] = iq_from_population(fringe, rng)
         return {"I": i_data, "Q": q_data}
 
     def estimate(self) -> QubitRamseyResult:
         assert self.dataset is not None, "run() populates self.dataset before estimate()"
         from scqat.estimators.ramsey import RamseyEstimator
 
-        # scqat's contract: variable `signal` + coord `idle_time` in seconds. The estimator
-        # selects single/beat/relaxation; the beat (charge dispersion) case calibrates on the
-        # mean of the two fringe frequencies.
-        prepared = self.dataset.rename({"I": "signal", "idle_time_ns": "idle_time"})
+        # scqat's contract: complex IQ (`I`/`Q`) + coord `idle_time` in seconds. The estimator
+        # reduces IQ to the signed axial projection, then selects single/beat/relaxation; the
+        # beat (charge dispersion) case calibrates on the mean of the two fringe frequencies.
+        prepared = self.dataset.rename({"idle_time_ns": "idle_time"})
         prepared = prepared.assign_coords(idle_time=prepared["idle_time"] * 1e-9)
 
         results = per_qubit_results(prepared, RamseyEstimator(), artifact_dir=self.artifact_dir)

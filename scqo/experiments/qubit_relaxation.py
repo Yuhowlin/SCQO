@@ -18,7 +18,7 @@ import numpy as np
 from pydantic import Field
 
 from .._scqat import per_qubit_results
-from ._sim import stable_seed
+from ._sim import iq_from_population, stable_seed
 from ..contract import DatasetContract
 from ..experiment import Experiment
 from ..parameters import AveragingParameters, TargetSelection
@@ -68,17 +68,16 @@ class QubitRelaxation(Experiment):
         q_data = np.empty_like(i_data)
         for k in range(len(targets)):
             t1 = rng.uniform(20e-6, 60e-6)  # hidden truth the fit must recover
-            noise = 0.02
-            i_data[k] = np.exp(-t / t1) + rng.normal(0, noise, t.size)
-            q_data[k] = rng.normal(0, noise, t.size)
+            i_data[k], q_data[k] = iq_from_population(np.exp(-t / t1), rng)
         return {"I": i_data, "Q": q_data}
 
     def estimate(self) -> QubitRelaxationResult:
         assert self.dataset is not None, "run() populates self.dataset before estimate()"
         from scqat.estimators.qubit_relaxation import QubitRelaxationEstimator
 
-        # scqat's contract: variable `signal` + coord `wait_time` in seconds.
-        prepared = self.dataset.rename({"I": "signal", "wait_time_ns": "wait_time"})
+        # scqat's contract: complex IQ (`I`/`Q`) + coord `wait_time` in seconds; the
+        # estimator reduces IQ to the signed axial projection before the decay fit.
+        prepared = self.dataset.rename({"wait_time_ns": "wait_time"})
         prepared = prepared.assign_coords(wait_time=prepared["wait_time"] * 1e-9)
 
         results = per_qubit_results(prepared, QubitRelaxationEstimator(), artifact_dir=self.artifact_dir)
