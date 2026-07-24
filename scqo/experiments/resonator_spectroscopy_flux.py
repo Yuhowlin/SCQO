@@ -26,6 +26,13 @@ import numpy as np
 from pydantic import Field
 
 from .._scqat import per_qubit_results
+from ._capabilities import (
+    NUM_FLUX_DESC,
+    FluxComponentParameters,
+    FluxSweepParameters,
+    flux_sweep,
+    foreign_flux_source,
+)
 from ._sim import stable_seed
 from ..contract import DatasetContract
 from ..experiment import Experiment
@@ -33,14 +40,15 @@ from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
 
 
-class ResonatorSpectroscopyFluxParameters(TargetSelection, AveragingParameters):
+class ResonatorSpectroscopyFluxParameters(
+    TargetSelection, AveragingParameters, FluxSweepParameters, FluxComponentParameters
+):
     """Inputs for the resonator-vs-flux map."""
 
     frequency_span_hz: float = Field(20e6, gt=0, description="Total readout-detuning span around the current readout_freq.")
     num_freq_points: int = Field(101, gt=1, description="Number of frequency points.")
-    min_flux_v: float = Field(-0.3, ge=-0.5, description="Lowest flux bias (V) on the qubit's own flux line.")
-    max_flux_v: float = Field(0.3, le=0.5, description="Highest flux bias (V).")
-    num_flux_points: int = Field(21, gt=4, description="Number of flux points (the dispersive fit needs >= 5 good slices).")
+    # capability default narrowed: the dispersive fit needs >= 5 good slices
+    num_flux_points: int = Field(21, gt=4, description=NUM_FLUX_DESC + " (the dispersive fit needs >= 5 good slices).")
     f_q_max_hz: float | None = Field(
         None, description="Qubit maximum frequency (Hz) to hold fixed in the dispersive fit; None = estimator heuristic. Ignored by the 'sine' method."
     )
@@ -73,15 +81,6 @@ class ResonatorSpectroscopyFluxParameters(TargetSelection, AveragingParameters):
             "data (on the simulated backend, whose Q quadrature is noise, slices fall "
             "back to the coarse argmin centre)."
         ),
-    )
-    flux_component: str | None = Field(
-        None,
-        description="Roster component whose flux line is swept INSTEAD of each target's "
-                    "own z-line: a qubit name (its z) or a pair name (its tunable "
-                    "coupler). None = each target fluxes itself. With an assigned "
-                    "source the run is RECORD-ONLY (fits saved, zero suggestions): the "
-                    "dispersive quantities then describe crosstalk / coupler-induced "
-                    "shift, not the target's own flux arch.",
     )
 
 
@@ -124,7 +123,7 @@ class ResonatorSpectroscopyFlux(Experiment):
     def define_sweep(self) -> dict[str, np.ndarray]:
         span = self.params.frequency_span_hz
         return {
-            "flux_bias_v": np.linspace(self.params.min_flux_v, self.params.max_flux_v, self.params.num_flux_points),
+            **flux_sweep(self.params),
             "detuning_hz": np.linspace(-span / 2, span / 2, self.params.num_freq_points),
         }
 
@@ -220,10 +219,8 @@ class ResonatorSpectroscopyFlux(Experiment):
         """
         if self.result is None:
             return
-        if self.params.flux_component is not None:
-            # Foreign flux source (neighbor z or a pair's coupler): the fitted
-            # quantities are crosstalk / coupler-shift data, NOT the target's own
-            # arch — record-only, the fits stay findable/trendable in result.fit.
+        if foreign_flux_source(self.params):
+            # Crosstalk / coupler-shift data, not the target's own arch — record-only.
             return
         # f_r0/g are physical only from the dispersive model with a known f_q_max.
         constrained = (

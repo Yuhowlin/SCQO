@@ -1,29 +1,48 @@
+"""Qubit relaxation vs flux — T1 spectrum over a swept z bias (backend-free half).
+
+Excite, wait a swept delay while a Z pulse holds the qubit off its idle flux, and
+fit the T1 decay at every flux point: a T1-vs-flux map for TLS-defect hunting.
+Record-only diagnostic — no ``update()``; the per-flux fits live in the run
+record (``result.fit``).
+"""
+
 from __future__ import annotations
 
-from typing import ClassVar, Dict, Any, List
+from typing import ClassVar
 
 import numpy as np
-import xarray as xr
 from pydantic import Field
 
 from ..contract import DatasetContract
 from ..experiment import Experiment
 from ..result import Outcome, Result
 from ..parameters import AveragingParameters, TargetSelection
+from ._capabilities import (
+    MAX_FLUX_DESC,
+    MIN_FLUX_DESC,
+    STATE_ALT,
+    FluxSweepParameters,
+    StateReadoutParameters,
+    flux_sweep,
+    readout_vars,
+    signal_rename,
+    state_row,
+)
 from ._sim import stable_seed
 
 
-class QubitRelaxationFluxParameters(TargetSelection, AveragingParameters):
+class QubitRelaxationFluxParameters(
+    TargetSelection, AveragingParameters, StateReadoutParameters, FluxSweepParameters
+):
     """Parameters for T1 vs flux spectroscopy."""
 
     min_wait_ns: float = Field(16.0, ge=0.0, description="Minimum idle delay.")
     max_wait_ns: float = Field(40000.0, gt=0.0, description="Maximum idle delay.")
     num_wait_points: int = Field(51, gt=1, description="Number of wait time points.")
-    min_flux_amp_in_v: float = Field(-0.08, description="Minimum flux pulse amplitude.")
-    max_flux_amp_in_v: float = Field(0.08, description="Maximum flux pulse amplitude.")
-    num_flux_points: int = Field(21, gt=1, description="Number of flux bias points.")
+    # capability defaults narrowed to the coherence window (canonical text constants)
+    min_flux_v: float = Field(-0.08, ge=-0.5, description=MIN_FLUX_DESC)
+    max_flux_v: float = Field(0.08, le=0.5, description=MAX_FLUX_DESC)
     prepare_state: int = Field(1, description="State to prepare (0 for g, 1 for e).")
-    use_state_discrimination: bool = Field(False, description="Use state classification.")
 
 
 class QubitRelaxationFluxResult(Result):
@@ -41,9 +60,10 @@ class QubitRelaxationFlux(Experiment):
     Parameters: ClassVar[type] = QubitRelaxationFluxParameters
     Result: ClassVar[type] = QubitRelaxationFluxResult
     Contract: ClassVar[DatasetContract] = DatasetContract(
-        sweeps=("flux_amp", "wait_time_ns"),
+        sweeps=("flux_bias_v", "wait_time_ns"),
         sweep_units=("V", "ns"),
         variables=("I", "Q"),
+        alt_variables=STATE_ALT,
     )
 
     params: QubitRelaxationFluxParameters
@@ -51,24 +71,16 @@ class QubitRelaxationFlux(Experiment):
     required_operations: ClassVar[tuple[str, ...]] = ("rx", "readout", "flux_bias")
 
     def define_sweep(self) -> dict[str, np.ndarray]:
-        flux_amp = np.linspace(
-            self.params.min_flux_amp_in_v,
-            self.params.max_flux_amp_in_v,
-            self.params.num_flux_points,
-        )
         wait_time = np.linspace(
             self.params.min_wait_ns,
             self.params.max_wait_ns,
             self.params.num_wait_points,
         )
-        return {
-            "flux_amp": flux_amp,
-            "wait_time_ns": wait_time,
-        }
+        return {**flux_sweep(self.params), "wait_time_ns": wait_time}
 
     def simulate(self, coords: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         """Generate synthetic decay curves with a simulated TLS (Two-Level System) defect dip."""
-        flux = coords["flux_amp"]
+        flux = coords["flux_bias_v"]
         wait = coords["wait_time_ns"]
         qubits = self.params.targets
 
@@ -78,7 +90,9 @@ class QubitRelaxationFlux(Experiment):
 
         i_data = np.zeros((n_qubits, n_flux, n_wait))
         q_data = np.zeros((n_qubits, n_flux, n_wait))
+        state = np.zeros_like(i_data)
 
+        use_state = self.params.use_state_discrimination
         rng = np.random.default_rng(stable_seed("qubit_relaxation_flux", *qubits))
         for k in range(n_qubits):
             for f_idx, f_amp in enumerate(flux):
@@ -97,18 +111,28 @@ class QubitRelaxationFlux(Experiment):
                     decay = np.ones_like(wait)
 
                 noise = 0.02
-                i_data[k, f_idx] = decay + rng.normal(0, noise, n_wait)
-                q_data[k, f_idx] = rng.normal(0, noise, n_wait)
+                if use_state:
+                    state[k, f_idx] = state_row(decay, rng)
+                else:
+                    i_data[k, f_idx] = decay + rng.normal(0, noise, n_wait)
+                    q_data[k, f_idx] = rng.normal(0, noise, n_wait)
 
-        return {"I": i_data, "Q": q_data}
+        return readout_vars(use_state, state, i_data, q_data)
 
     def estimate(self) -> QubitRelaxationFluxResult:
         assert self.dataset is not None, "run() populates self.dataset before estimate()"
         from scqat.estimators.qubit_relaxation_flux import QubitRelaxationFluxEstimator
         from .._scqat import per_qubit_results
 
-        # Rename to scqat expected contract: variable signal + coords flux_amp & wait_time (seconds)
-        prepared = self.dataset.rename({"I": "signal", "wait_time_ns": "wait_time"})
+        # scqat's contract: variable `signal` + coords `flux_bias` & `wait_time` (seconds).
+        # A discriminated probe returns the averaged `state`; otherwise the raw I
+        # quadrature is the pre-reduced signal.
+        rename = signal_rename(
+            self.dataset,
+            {"wait_time_ns": "wait_time", "flux_bias_v": "flux_bias"},
+            iq_fallback="I",
+        )
+        prepared = self.dataset.rename(rename)
         prepared = prepared.assign_coords(wait_time=prepared["wait_time"] * 1e-9)
 
         results = per_qubit_results(
@@ -119,7 +143,7 @@ class QubitRelaxationFlux(Experiment):
         for qubit in self.params.targets:
             r = results[qubit]
             result.fit[qubit] = {
-                "flux_amp": [float(x) for x in r["flux_amp"]],
+                "flux_bias_v": [float(x) for x in r["flux_bias"]],
                 "t1": [float(x) for x in r["t1"]],
                 "t1_stderr": [float(x) for x in r["t1_stderr"]],
                 "amplitude": [float(x) for x in r["amplitude"]],

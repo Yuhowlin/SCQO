@@ -17,6 +17,7 @@ import numpy as np
 from pydantic import Field
 
 from .._scqat import per_qubit_results
+from ._capabilities import STATE_ALT, StateReadoutParameters, readout_vars, signal_rename, state_row
 from ._sim import iq_from_population, stable_seed
 from ..contract import DatasetContract
 from ..experiment import Experiment
@@ -24,19 +25,12 @@ from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
 
 
-class QubitEchoParameters(TargetSelection, AveragingParameters):
+class QubitEchoParameters(TargetSelection, AveragingParameters, StateReadoutParameters):
     """Inputs for a Hahn-echo measurement."""
 
     min_wait_ns: float = Field(32, ge=0, description="Shortest total echo idle time.")
     max_wait_ns: float = Field(400_000, gt=0, description="Longest total idle time (should exceed a few T2_echo).")
     num_points: int = Field(51, gt=1, description="Number of idle-time points.")
-    use_state_discrimination: bool = Field(
-        False,
-        description="Discriminate each shot on the FPGA and return the averaged state "
-        "(population) instead of I/Q. Requires a calibrated discriminator "
-        "(run single_shot_readout, then accept its readout_rotation_rad / "
-        "readout_threshold suggestions).",
-    )
 
 
 class QubitEchoResult(Result):
@@ -60,7 +54,7 @@ class QubitEcho(Experiment):
     Result: ClassVar[type] = QubitEchoResult
     Contract: ClassVar[DatasetContract] = DatasetContract(
         sweeps=("wait_time_ns",), sweep_units=("ns",), variables=("I", "Q"),
-        alt_variables=(("state",),),
+        alt_variables=STATE_ALT,
     )
     required_operations: ClassVar[tuple[str, ...]] = ("rx", "readout")
     #: stored blob centers ride the dataset -> axial axis = the measured g->e vector
@@ -85,11 +79,10 @@ class QubitEcho(Experiment):
             t2e = rng.uniform(30e-6, 80e-6)  # hidden truth the fit must recover
             population = np.exp(-t / t2e)
             if use_state:
-                # FPGA-discriminated averaged state: a population in [0, 1]
-                state[k] = np.clip(population + rng.normal(0, 0.02, t.size), 0.0, 1.0)
+                state[k] = state_row(population, rng)
             else:
                 i_data[k], q_data[k] = iq_from_population(population, rng)
-        return {"state": state} if use_state else {"I": i_data, "Q": q_data}
+        return readout_vars(use_state, state, i_data, q_data)
 
     def estimate(self) -> QubitEchoResult:
         assert self.dataset is not None, "run() populates self.dataset before estimate()"
@@ -99,9 +92,7 @@ class QubitEcho(Experiment):
         # estimator reduces IQ to the signed axial projection before the decay fit.
         # A discriminated probe returns the averaged `state` instead — the estimator's
         # pre-reduced `signal` input.
-        rename = {"wait_time_ns": "idle_time"}
-        if "state" in self.dataset.data_vars:
-            rename["state"] = "signal"
+        rename = signal_rename(self.dataset, {"wait_time_ns": "idle_time"})
         prepared = self.dataset.rename(rename)
         prepared = prepared.assign_coords(idle_time=prepared["idle_time"] * 1e-9)
 

@@ -5,6 +5,11 @@ and device writeback — everything *except* ``probe()``. Concrete drivers subcl
 these and implement ``probe()`` for their instrument, then ``@register`` the subclass.
 """
 
+from ._capabilities import (
+    FluxComponentParameters,
+    FluxSweepParameters,
+    StateReadoutParameters,
+)
 from .pair_zz_coupler import PairZZCoupler, PairZZCouplerParameters, PairZZCouplerResult
 from .qubit_drag_alternating import (
     QubitDragAlternating,
@@ -76,6 +81,9 @@ from .resonator_spectroscopy import (
 )
 
 __all__ = [
+    "FluxComponentParameters",
+    "FluxSweepParameters",
+    "StateReadoutParameters",
     "PairZZCoupler",
     "PairZZCouplerParameters",
     "PairZZCouplerResult",

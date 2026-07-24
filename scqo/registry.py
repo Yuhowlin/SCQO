@@ -81,16 +81,35 @@ def get(name: str) -> type[Experiment]:
         raise KeyError(f"Unknown experiment {name!r}. Available: {sorted(_REGISTRY)}") from None
 
 
+def _derived_tags(cls: type[Experiment]) -> list[str]:
+    """Capability tags DERIVED from Parameters-mixin subclassing — never a declared
+    string, so a tag cannot lie or rot as the code evolves. Experiments with no
+    tags are legitimate (a new experiment may not be classifiable yet). Lazy
+    import: pulling the capability mixins imports ``scqo.experiments``, which
+    ``catalog()``'s ``_discover()`` does anyway; ``register()``/``get()`` stay light."""
+    from .experiments._capabilities import FluxSweepParameters, StateReadoutParameters
+
+    tags = []
+    if issubclass(cls.Parameters, StateReadoutParameters):
+        tags.append("state_readout")
+    if issubclass(cls.Parameters, FluxSweepParameters):
+        tags.append("flux")
+    return tags
+
+
 def catalog() -> list[dict]:
-    """Return ``[{name, description, maturity, parameters_schema}, ...]`` for every
-    registered experiment. ``maturity`` is ``"core"`` (promoted, governed) or
-    ``"contrib"`` (sandbox prototype — an AI loop should avoid these unless told)."""
+    """Return ``[{name, description, maturity, tags, parameters_schema}, ...]`` for
+    every registered experiment. ``maturity`` is ``"core"`` (promoted, governed) or
+    ``"contrib"`` (sandbox prototype — an AI loop should avoid these unless told).
+    ``tags`` are derived capability markers (see :func:`_derived_tags`); an empty
+    list is legitimate."""
     _discover()
     return [
         {
             "name": cls.name,
             "description": cls.description,
             "maturity": _MATURITY.get(cls.name, "core"),
+            "tags": _derived_tags(cls),
             "parameters_schema": cls.Parameters.model_json_schema(),
         }
         for cls in _REGISTRY.values()

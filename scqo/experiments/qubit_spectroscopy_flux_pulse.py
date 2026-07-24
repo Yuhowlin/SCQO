@@ -40,6 +40,13 @@ import numpy as np
 from pydantic import Field
 
 from .._scqat import per_qubit_results
+from ._capabilities import (
+    NUM_FLUX_DESC,
+    FluxComponentParameters,
+    FluxSweepParameters,
+    flux_sweep,
+    foreign_flux_source,
+)
 from ._drive_power import drive_power_boundary
 from ._sim import stable_seed
 from ..contract import DatasetContract
@@ -48,14 +55,15 @@ from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
 
 
-class QubitSpectroscopyFluxPulseParameters(TargetSelection, AveragingParameters):
+class QubitSpectroscopyFluxPulseParameters(
+    TargetSelection, AveragingParameters, FluxSweepParameters, FluxComponentParameters
+):
     """Inputs for the qubit-frequency-vs-flux map."""
 
     frequency_span_hz: float = Field(400e6, gt=0, description="Total drive-detuning span around the current drive_freq.")
     num_freq_points: int = Field(101, gt=1, description="Number of frequency points.")
-    min_flux_v: float = Field(-0.3, ge=-0.5, description="Lowest flux bias (V) on the qubit's own flux line.")
-    max_flux_v: float = Field(0.3, le=0.5, description="Highest flux bias (V).")
-    num_flux_points: int = Field(21, gt=4, description="Number of flux points (the arch fit needs >= 5 good slices).")
+    # capability default narrowed: the arch fit needs >= 5 good slices
+    num_flux_points: int = Field(21, gt=4, description=NUM_FLUX_DESC + " (the arch fit needs >= 5 good slices).")
     ec_ghz: float = Field(0.2, gt=0, description="Charging energy (GHz) held fixed in the arch model.")
     drive_power_dbm: float = Field(
         -25.0,
@@ -63,14 +71,6 @@ class QubitSpectroscopyFluxPulseParameters(TargetSelection, AveragingParameters)
         description="Absolute saturation-drive power (dBm at the instrument drive port), set "
         "as a recorded boundary write through the drive chain before the flux map and reverted "
         "after. QM caps at +10 dBm; Qblox above ~-1 dBm needs amplitude > 0.5.",
-    )
-    flux_component: str | None = Field(
-        None,
-        description="QUBIT whose z-line is swept instead of each target's own (the "
-                    "probe plays z pulses, so a pair's coupler is not sweepable here "
-                    "— use resonator_spectroscopy_flux for coupler maps). None = each "
-                    "target fluxes itself. With an assigned source the run is "
-                    "RECORD-ONLY (crosstalk map, zero suggestions).",
     )
 
 
@@ -91,7 +91,9 @@ class QubitSpectroscopyFluxPulse(Experiment):
         "finds the 0-1 peak at every flux and fits the transmon arch; proposes sweet "
         "spot (v_offset_v), flux period (v_per_phi0_v) on the qubit's ZControl "
         "component and ej_sum_hz/f_q_max_hz on the transmon as physical parameters "
-        "(the Phase-3 EJ/EC inference inputs — no instrument knob)."
+        "(the Phase-3 EJ/EC inference inputs — no instrument knob). flux_component "
+        "may name a qubit z-line only (the probe plays z pulses) — coupler maps "
+        "belong to resonator_spectroscopy_flux."
     )
     Parameters: ClassVar[type] = QubitSpectroscopyFluxPulseParameters
     Result: ClassVar[type] = QubitSpectroscopyFluxPulseResult
@@ -107,7 +109,7 @@ class QubitSpectroscopyFluxPulse(Experiment):
     def define_sweep(self) -> dict[str, np.ndarray]:
         span = self.params.frequency_span_hz
         return {
-            "flux_bias_v": np.linspace(self.params.min_flux_v, self.params.max_flux_v, self.params.num_flux_points),
+            **flux_sweep(self.params),
             "detuning_hz": np.linspace(-span / 2, span / 2, self.params.num_freq_points),
         }
 
@@ -210,9 +212,8 @@ class QubitSpectroscopyFluxPulse(Experiment):
         """
         if self.result is None:
             return
-        if self.params.flux_component is not None:
-            # Foreign z-line swept: the map is flux CROSSTALK data, not the
-            # target's own arch — record-only, no standing-value suggestions.
+        if foreign_flux_source(self.params):
+            # Flux CROSSTALK data, not the target's own arch — record-only.
             return
         for qubit, fit in self.result.fit.items():
             if self.result.outcomes[qubit] is not Outcome.SUCCESSFUL:

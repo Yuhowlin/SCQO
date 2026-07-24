@@ -960,3 +960,32 @@ def test_ported_experiment_runs(name, estimator_mod, flux):
     result = sess.run(name, {"targets": ["q0"], "num_averages": 30})
     assert result["outcomes"]["q0"] == Outcome.SUCCESSFUL.value
     assert list(result["fit"]) == ["q0"]  # fit keyed by the run target name
+
+
+@pytest.mark.parametrize("name,estimator_mod,flux,params", [
+    ("qubit_sqrb", "scqat.estimators.qubit_sqrb", False,
+     {"num_random_sequences": 10, "max_circuit_depth": 64}),
+    ("qubit_relaxation_flux", "scqat.estimators.qubit_relaxation_flux", True,
+     {"num_flux_points": 5, "num_wait_points": 21}),
+    ("qubit_echo_flux", "scqat.estimators.qubit_echo_flux", True,
+     {"num_flux_points": 5, "num_wait_points": 21}),
+])
+def test_state_mode_runs_newly_wired(tmp_path, name, estimator_mod, flux, params):
+    """The newly wired state-readout carriers (StateReadoutParameters via
+    _capabilities): use_state_discrimination=True makes simulate() emit the
+    averaged `state` (no I/Q), the STATE_ALT contract accepts it, and the run
+    succeeds end-to-end. Kept separate from test_state_mode_runs_coherent_drive —
+    these estimators consume the pre-reduced signal directly and don't stamp
+    reduction_method."""
+    import xarray as xr
+
+    pytest.importorskip(estimator_mod)
+    roster = _flux_roster() if flux else demo_roster()
+    sess = Session(SimulatedBackend(_device()), roster,
+                   data_root=tmp_path / "data", device_name="devSW")
+    result = sess.run(name, {"targets": ["q0"], "num_averages": 30,
+                             "use_state_discrimination": True, **params})
+    assert result["outcomes"]["q0"] == Outcome.SUCCESSFUL.value
+    run_dir = tmp_path / "data" / sess.load_run(result["run_id"])["record"]["path"]
+    ds = xr.load_dataset(run_dir / "dataset.nc")
+    assert "state" in ds.data_vars and "I" not in ds.data_vars

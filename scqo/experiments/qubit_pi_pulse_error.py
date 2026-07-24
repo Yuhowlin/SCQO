@@ -6,7 +6,7 @@ Sweeps drive amplitude factor (e.g. 0.90 to 1.10) across repeated odd gate count
 
 from __future__ import annotations
 
-from typing import ClassVar, Dict, Any, List
+from typing import ClassVar, List
 
 import numpy as np
 from pydantic import Field
@@ -28,10 +28,6 @@ class QubitPiPulseErrorParameters(TargetSelection, AveragingParameters):
         default_factory=lambda: [1, 3, 5, 7, 9, 11],
         description="List of odd gate counts (repetitions of X180).",
     )
-    use_state_discrimination: bool = Field(
-        False,
-        description="Use state discrimination classification."
-    )
 
 
 class QubitPiPulseErrorResult(Result):
@@ -48,13 +44,14 @@ class QubitPiPulseError(Experiment):
     )
     Parameters: ClassVar[type] = QubitPiPulseErrorParameters
     Result: ClassVar[type] = QubitPiPulseErrorResult
-    # raw (I, Q), or the FPGA-discriminated state, or a bare I quadrature — the
-    # alt sets are checked with the same dims rigor as the primary set.
+    # raw (I, Q) or a bare I quadrature — this probe never returns a discriminated
+    # `state` (the QM shell hardcodes use_state_discrimination=False), so the
+    # contract truthfully omits it.
     Contract: ClassVar[DatasetContract] = DatasetContract(
         sweeps=("gate_count", "amp_factor"),
         sweep_units=("", "dimensionless"),
         variables=("I", "Q"),
-        alt_variables=(("state",), ("I",)),
+        alt_variables=(("I",),),
     )
 
     params: QubitPiPulseErrorParameters
@@ -104,7 +101,7 @@ class QubitPiPulseError(Experiment):
 
         for qubit in self.params.targets:
             try:
-                var_name = "state" if "state" in ds.data_vars else ("I" if "I" in ds.data_vars else "signal")
+                var_name = "I" if "I" in ds.data_vars else "signal"
                 if "target" in ds.dims:
                     data = ds[var_name].sel(target=qubit).values
                 else:

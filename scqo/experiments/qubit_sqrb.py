@@ -16,10 +16,11 @@ from ..contract import DatasetContract
 from ..parameters import AveragingParameters, TargetSelection
 from ..experiment import Experiment
 from ..result import Outcome, Result
+from ._capabilities import STATE_ALT, StateReadoutParameters, readout_vars, state_row
 from ._sim import stable_seed
 
 
-class QubitSQRBParameters(TargetSelection, AveragingParameters):
+class QubitSQRBParameters(TargetSelection, AveragingParameters, StateReadoutParameters):
     """Inputs for a Qubit SQRB experiment."""
 
     num_random_sequences: int = Field(
@@ -40,10 +41,6 @@ class QubitSQRBParameters(TargetSelection, AveragingParameters):
     log_scale: bool = Field(
         True,
         description="Use logarithmic depth scaling (1, 2, 4, 8, 16...)."
-    )
-    use_state_discrimination: bool = Field(
-        False,
-        description="Use state discrimination to classify |0> vs |1> population."
     )
     seed: Optional[int] = Field(
         None,
@@ -88,7 +85,7 @@ class QubitSQRB(Experiment):
         sweeps=("sequence_idx", "depth"),
         sweep_units=("", ""),
         variables=("I", "Q"),
-        alt_variables=(("state",), ("I",)),
+        alt_variables=(*STATE_ALT, ("I",)),
     )
 
     required_operations: ClassVar[tuple[str, ...]] = ("rx", "readout")
@@ -112,7 +109,10 @@ class QubitSQRB(Experiment):
         # acquire() labels axes ("target", "sequence_idx", "depth").
         I_data = np.zeros((n_qubits, n_seqs, n_depths))
         Q_data = np.zeros((n_qubits, n_seqs, n_depths))
+        state = np.zeros_like(I_data)
 
+        use_state = self.params.use_state_discrimination
+        shot_noise = 0.2 / np.sqrt(self.params.num_averages)
         rng = np.random.default_rng(stable_seed("qubit_sqrb", *qubits))
         for q_idx in range(n_qubits):
             for d_idx, depth in enumerate(depths):
@@ -123,18 +123,21 @@ class QubitSQRB(Experiment):
                 seq_p0 = p0 + rng.normal(0, 0.03, n_seqs)
                 seq_p0 = np.clip(seq_p0, 0.0, 1.0)
 
-                # Shot noise (per sequence, at this depth)
-                I_data[q_idx, :, d_idx] = seq_p0 + rng.normal(0, 0.2 / np.sqrt(self.params.num_averages), n_seqs)
+                # Shot noise (per sequence, at this depth) — one draw in either mode,
+                # so the I/Q stream is unchanged when discrimination is off.
+                if use_state:
+                    state[q_idx, :, d_idx] = state_row(seq_p0, rng, noise=shot_noise)
+                else:
+                    I_data[q_idx, :, d_idx] = seq_p0 + rng.normal(0, shot_noise, n_seqs)
 
-        return {
-            "I": I_data,
-            "Q": Q_data
-        }
+        return readout_vars(use_state, state, I_data, Q_data)
 
     def estimate(self) -> QubitSQRBResult:
         assert self.dataset is not None, "run() populates self.dataset before estimate()"
         from scqat.estimators.qubit_sqrb import QubitSQRBEstimator
 
+        # No rename needed: the scqat estimator natively prefers a `state` data var
+        # and falls back to `I`/`signal` itself.
         results = per_qubit_results(
             self.dataset, QubitSQRBEstimator(), artifact_dir=self.artifact_dir
         )

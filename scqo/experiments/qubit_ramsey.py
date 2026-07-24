@@ -21,6 +21,7 @@ import numpy as np
 from pydantic import Field
 
 from .._scqat import per_qubit_results
+from ._capabilities import STATE_ALT, StateReadoutParameters, readout_vars, signal_rename, state_row
 from ._sim import iq_from_population, stable_seed
 from ..contract import DatasetContract
 from ..parameters import AveragingParameters, TargetSelection
@@ -28,7 +29,7 @@ from ..experiment import Experiment
 from ..result import Outcome, Result
 
 
-class QubitRamseyParameters(TargetSelection, AveragingParameters):
+class QubitRamseyParameters(TargetSelection, AveragingParameters, StateReadoutParameters):
     """Inputs for a Ramsey experiment."""
 
     frequency_detuning_hz: float = Field(
@@ -37,13 +38,6 @@ class QubitRamseyParameters(TargetSelection, AveragingParameters):
     min_idle_time_ns: float = Field(16, ge=0, description="Shortest idle delay between the two pi/2 pulses.")
     max_idle_time_ns: float = Field(4000, gt=0, description="Longest idle delay.")
     num_points: int = Field(101, gt=1, description="Number of idle-time points.")
-    use_state_discrimination: bool = Field(
-        False,
-        description="Discriminate each shot on the FPGA and return the averaged state "
-        "(population) instead of I/Q. Requires a calibrated discriminator "
-        "(run single_shot_readout, then accept its readout_rotation_rad / "
-        "readout_threshold suggestions).",
-    )
 
 
 class QubitRamseyResult(Result):
@@ -70,7 +64,7 @@ class QubitRamsey(Experiment):
     Result: ClassVar[type] = QubitRamseyResult
     Contract: ClassVar[DatasetContract] = DatasetContract(
         sweeps=("idle_time_ns",), sweep_units=("ns",), variables=("I", "Q"),
-        alt_variables=(("state",),),
+        alt_variables=STATE_ALT,
     )
     required_operations: ClassVar[tuple[str, ...]] = ("rx", "readout")
     #: stored blob centers ride the dataset -> axial axis = the measured g->e vector
@@ -99,11 +93,10 @@ class QubitRamsey(Experiment):
             t2_star = rng.uniform(5e-6, 15e-6)
             fringe = 0.5 - 0.5 * np.exp(-t / t2_star) * np.cos(2 * np.pi * (applied + err) * t)
             if use_state:
-                # FPGA-discriminated averaged state: a population in [0, 1]
-                state[k] = np.clip(fringe + rng.normal(0, 0.02, t.size), 0.0, 1.0)
+                state[k] = state_row(fringe, rng)
             else:
                 i_data[k], q_data[k] = iq_from_population(fringe, rng)
-        return {"state": state} if use_state else {"I": i_data, "Q": q_data}
+        return readout_vars(use_state, state, i_data, q_data)
 
     def estimate(self) -> QubitRamseyResult:
         assert self.dataset is not None, "run() populates self.dataset before estimate()"
@@ -114,9 +107,7 @@ class QubitRamsey(Experiment):
         # beat (charge dispersion) case calibrates on the mean of the two fringe frequencies.
         # A discriminated probe returns the averaged `state` instead — the estimator's
         # pre-reduced `signal` input.
-        rename = {"idle_time_ns": "idle_time"}
-        if "state" in self.dataset.data_vars:
-            rename["state"] = "signal"
+        rename = signal_rename(self.dataset, {"idle_time_ns": "idle_time"})
         prepared = self.dataset.rename(rename)
         prepared = prepared.assign_coords(idle_time=prepared["idle_time"] * 1e-9)
 

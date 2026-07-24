@@ -38,7 +38,10 @@ def _schema_epilog(experiment: str, config_path: str | None) -> str:
     file_label = cfg.parameters_source.name if cfg.parameters_source else "parameters file"
     schema = entry["parameters_schema"]
     required = set(schema.get("required", []))
-    lines = [entry["description"], "", "parameters (set with --set KEY=VALUE):"]
+    lines = [entry["description"]]
+    if entry.get("tags"):
+        lines.append("tags: " + ", ".join(entry["tags"]))
+    lines += ["", "parameters (set with --set KEY=VALUE):"]
     for key, spec in schema.get("properties", {}).items():
         if key in file_defaults:
             default = f"{file_defaults[key]!r} [{file_label}]"
@@ -100,6 +103,8 @@ def run_experiment_cli(
         print(f"# user overlay: {cfg.user_source or 'none'}")
         for entry in sess.catalog():
             tag = " [contrib]" if entry.get("maturity") == "contrib" else ""
+            if entry.get("tags"):
+                tag += " [" + ",".join(entry["tags"]) + "]"
             print(f"{entry['name'] + tag:32s} {entry['description']}")
         return 0
 
