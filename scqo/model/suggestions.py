@@ -256,6 +256,15 @@ class SuggestionCapture:
                 f"{', '.join(sorted(self.roster.entities))}")
         return _capture_view_class(self.roster, name)(self, name)
 
+    def channel(self, target: str, kind: str) -> EntityView:
+        """Default-channel addressing, identical surface to the live device
+        so update() is oblivious to capture vs live."""
+        return self.component(self.roster.default_channel(target, kind))
+
+    def resonator_of(self, target: str) -> str:
+        """Topology passthrough, identical surface to the live device."""
+        return self._device.resonator_of(target)
+
     def snapshot(self) -> dict:
         return self._device.snapshot()
 

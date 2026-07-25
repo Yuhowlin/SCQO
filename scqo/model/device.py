@@ -361,6 +361,23 @@ class RecordingDevice:
             f"{name!r} is a {type(e).__name__.lower()} — it carries no "
             f"knobs; address its channels {channels or '(none wired)'}")
 
+    def channel(self, target: str, kind: str) -> EntityView:
+        """The view of the target's DEFAULT channel of one kind — how
+        update() addresses knobs without knowing wiring names
+        (``device.channel(q, "readout").readout_freq_hz = ...``)."""
+        return self.component(self.roster.default_channel(target, kind))
+
+    def resonator_of(self, target: str) -> str:
+        """The NAME of the target's attached resonator (unique qubit ref) —
+        update() proposes resonator facts under it."""
+        hits = [m.name for m in self.roster.modes().values()
+                if m.kind == "resonator" and m.refs.get("qubit") == target]
+        if len(hits) != 1:
+            raise KeyError(
+                f"{target!r} has {'no' if not hits else 'several'} attached "
+                f"resonator(s){': ' + str(sorted(hits)) if hits else ''}")
+        return hits[0]
+
     def snapshot(self) -> dict:
         """The merged runtime view (run before/after records): knobs from
         the runtime config PLUS the store's monitor values — the old

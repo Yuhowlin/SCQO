@@ -97,6 +97,235 @@ class Session:
         self.parameter_defaults = dict(parameter_defaults or {})
         self.parameter_defaults_source = parameter_defaults_source
 
+    # ----------------------------------------------------------- run flow
+
+    def catalog(self) -> list[dict]:
+        """Available measurements with their JSON parameter schemas; standing
+        parameter defaults overlay the schemas with x-default-source."""
+        import copy
+
+        from . import experiments as registry
+        entries = registry.catalog()
+        if not self.parameter_defaults:
+            return entries
+        source = self.parameter_defaults_source or "parameter_defaults"
+        overlaid = []
+        for entry in entries:
+            table = self.parameter_defaults.get(entry["name"]) or {}
+            props = entry["parameters_schema"].get("properties", {})
+            known = {k: v for k, v in table.items() if k in props}
+            if known:
+                entry = copy.deepcopy(entry)
+                schema = entry["parameters_schema"]
+                required = schema.get("required", [])
+                for key, value in known.items():
+                    schema["properties"][key]["default"] = value
+                    schema["properties"][key]["x-default-source"] = source
+                    if key in required:
+                        required.remove(key)
+            overlaid.append(entry)
+        return overlaid
+
+    def run(self, experiment: str, params: dict[str, Any],
+            update: str | bool = "suggest", *,
+            tags: list[str] | None = None, note: str = "") -> dict:
+        """Run an experiment by name; return its structured result as a dict.
+        ``update``: "suggest" (default — update() captured as pending
+        Suggestions), "apply" (capture then immediately accept), "none".
+        A failed run returns a structured result with ``error`` set, never
+        raises; with a data_root every run persists to its own folder."""
+        from pydantic import ValidationError
+
+        from . import experiments as registry
+        from .suggestions import SuggestionCapture
+
+        mode = {True: "apply", False: "none"}.get(update, update)
+        if mode not in ("suggest", "apply", "none"):
+            raise ValueError(
+                f"update must be 'suggest', 'apply' or 'none' (or a bool), "
+                f"got {update!r}")
+        cls = registry.get(experiment)
+        defaults = self.parameter_defaults.get(experiment, {})
+        merged = {**defaults, **params}
+        try:
+            validated = cls.Parameters(**merged)
+        except ValidationError as err:
+            return self._invalid_params(cls, merged, defaults, params,
+                                        err).model_dump(mode="json")
+        exp = cls(self.backend, validated)
+        exp.device = self.device  # route through the recording surface
+        exp.design = self.design
+
+        gate_error = self._validate_targets(cls, exp)
+        if gate_error is not None:
+            return {**gate_error.model_dump(mode="json"), "suggestions": []}
+
+        started_at = _now()
+        run_id = run_dir = None
+        if self.datastore is not None:
+            run_id, run_dir = self.datastore.new_run_dir(experiment)
+            exp.artifact_dir = run_dir / "analysis"
+
+        device_before = self.device.snapshot()
+        self.device.set_context(experiment, run_id)
+        updated = False
+        suggestions: list[Suggestion] = []
+        try:
+            try:
+                result = exp.run()
+            except Exception as err:
+                result = self._failure(cls, exp, err)
+            else:
+                if mode != "none" and result.any_success:
+                    capture = SuggestionCapture(self.device, self.physical,
+                                                self.roster)
+                    exp.device = capture
+                    try:
+                        exp.update()
+                        suggestions = capture.suggestions
+                    except Exception as err:
+                        result.error = (
+                            f"measurement succeeded but suggestion capture "
+                            f"failed (nothing suggested or applied): "
+                            f"{type(err).__name__}: {err}")
+                    finally:
+                        exp.device = self.device
+                    if mode == "apply" and suggestions:
+                        try:
+                            applied, errors = self._apply(
+                                suggestions, experiment=experiment,
+                                run_id=run_id)
+                            updated = bool(applied)
+                            if self._persist:
+                                self.device.save()
+                            self.physical.save()
+                            if errors:
+                                result.error = (
+                                    f"measurement succeeded but device "
+                                    f"update failed (device may be "
+                                    f"partially updated): "
+                                    + "; ".join(errors))
+                        except Exception as err:
+                            result.error = (
+                                f"measurement succeeded but device "
+                                f"update/save failed (device may be "
+                                f"partially updated): "
+                                f"{type(err).__name__}: {err}")
+        finally:
+            self.device.set_context(None, None)
+
+        payload = result.model_dump(mode="json")
+        suggestion_dicts = [s.model_dump(mode="json") for s in suggestions]
+        if self.datastore is not None:
+            try:
+                power_context = getattr(self.backend, "power_context",
+                                        lambda t: {})(
+                    list(getattr(exp.params, "targets", []))) or {}
+            except Exception:
+                power_context = {}
+            try:
+                self.datastore.persist_run(
+                    run_id=run_id, run_dir=run_dir, experiment=experiment,
+                    params=exp.params, dataset=exp.dataset, result=payload,
+                    device_before=device_before,
+                    device_after=self.device.snapshot(),
+                    started_at=started_at, ended_at=_now(),
+                    backend=self.backend_label, updated_device=updated,
+                    suggestions=suggestion_dicts,
+                    power_context=power_context,
+                    tags=list(dict.fromkeys(
+                        [*self.default_tags, *(tags or []),
+                         *getattr(exp, "seed_tags", [])])),
+                    note=note)
+            except Exception as err:  # never lose a measurement over a save
+                payload["datastore_error"] = f"{type(err).__name__}: {err}"
+            else:
+                payload["run_id"] = run_id
+                payload["data_path"] = str(run_dir)
+        payload["suggestions"] = suggestion_dicts
+        return payload
+
+    def _validate_targets(self, cls, exp):
+        """Roster gate before any hardware: targets exist, their KIND is in
+        the experiment's ``target_kinds``, and ``required_operations`` are
+        carried (derived from wiring for modes, declared for composites).
+        A ``flux_component`` Parameter must name an entity with a default
+        flux channel — kind-agnostic, so qubit z-lines and coupler z-lines
+        gate identically."""
+        from ..result import Outcome
+
+        targets = list(getattr(exp.params, "targets", []))
+        problems: list[str] = []
+        want_kinds = set(cls.target_kinds)
+        want_ops = set(cls.required_operations)
+        flux_component = getattr(exp.params, "flux_component", None)
+        if flux_component is not None:
+            want_ops -= {"flux_bias"}  # the assigned source actuates instead
+            if flux_component not in self.roster:
+                problems.append(f"flux_component {flux_component!r}: not in "
+                                f"this device's roster")
+            elif (flux_component, "flux") not in self.roster.defaults:
+                problems.append(
+                    f"flux_component {flux_component!r}: has no flux "
+                    f"channel (nothing to sweep)")
+        for t in targets:
+            if t not in self.roster:
+                problems.append(
+                    f"{t}: not in this device's roster "
+                    f"({', '.join(sorted(self.roster.entities))})")
+                continue
+            e = self.roster.entities[t]
+            if e.kind not in want_kinds:
+                problems.append(f"{t}: is kind {e.kind!r}, {cls.name} "
+                                f"targets {sorted(want_kinds)}")
+                continue
+            try:
+                have_ops = set(self.roster.operations(t))
+            except Exception:
+                have_ops = set()
+            missing = want_ops - have_ops
+            if missing:
+                problems.append(
+                    f"{t}: lacks operation(s) {sorted(missing)} "
+                    f"(carried: {sorted(have_ops) or 'none'})")
+        if not problems:
+            return None
+        return cls.Result(
+            outcomes={t: Outcome.FAILED for t in targets},
+            error="target validation refused the run before any hardware: "
+                  + "; ".join(problems))
+
+    @staticmethod
+    def _failure(cls, exp, err):
+        from ..contract import ContractError
+        from ..result import Outcome
+
+        outcome = (Outcome.NO_DATA if isinstance(err, ContractError)
+                   else Outcome.FAILED)
+        targets = getattr(exp.params, "targets", [])
+        return cls.Result(outcomes={t: outcome for t in targets},
+                          error=f"{type(err).__name__}: {err}")
+
+    def _invalid_params(self, cls, merged, defaults, caller, err):
+        from ..result import Outcome
+
+        hints = []
+        for detail in err.errors():
+            key = str(detail["loc"][0]) if detail.get("loc") else ""
+            if key and key in defaults and key not in caller:
+                source = (self.parameter_defaults_source
+                          or "the session's parameter_defaults")
+                hints.append(f"'{key}' came from {source} [{cls.name}] — "
+                             f"fix it there")
+        targets = merged.get("targets")
+        targets = ([t for t in targets if isinstance(t, str)]
+                   if isinstance(targets, list) else [])
+        message = f"invalid parameters for {cls.name!r}: {err}"
+        if hints:
+            message += "\n" + "\n".join(hints)
+        return cls.Result(outcomes={t: Outcome.FAILED for t in targets},
+                          error=message)
+
     # ------------------------------------------------------------- writing
 
     def _write_state(self, entity: str, field: str, value) -> None:

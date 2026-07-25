@@ -153,15 +153,11 @@ def load_design(path: str | Path, roster: Roster) -> Design:
                         source=str(path))
 
 
-def seed_value(roster: Roster, design: Design, channel: str,
-               field: str) -> float | None:
-    """The design fallback for one channel knob: resolve its
-    ``design_source`` (ref-role hop, fact field) against the datasheet.
-
-    Returns None when the knob declares no source, the hop does not resolve
-    (multi-target channel, no via), or the datasheet is silent — callers
-    fall through to their code default.
-    """
+def seed_source(roster: Roster, channel: str,
+                field: str) -> tuple[str, str] | None:
+    """The (entity, fact) a channel knob's ``design_source`` hop resolves to
+    — None when the knob declares no source or the hop does not resolve
+    (multi-target channel, no via)."""
     try:
         spec = roster.fields_of(channel).get(field)
     except RosterError as err:  # one exception surface for the seed lookup
@@ -182,4 +178,14 @@ def seed_value(roster: Roster, design: Design, channel: str,
         anchor = None
     if anchor is None:
         return None
-    return design.get(anchor, fact)
+    return anchor, fact
+
+
+def seed_value(roster: Roster, design: Design, channel: str,
+               field: str) -> float | None:
+    """The design fallback for one channel knob — the datasheet value at its
+    :func:`seed_source`, or None (callers fall through to code defaults)."""
+    source = seed_source(roster, channel, field)
+    if source is None:
+        return None
+    return design.get(*source)
