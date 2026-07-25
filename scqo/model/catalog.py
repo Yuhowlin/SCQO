@@ -313,13 +313,16 @@ OP_KNOBS: dict[str, FieldSpec] = {
                              role="knob"),
     "vz_low_rad": FieldSpec("rad", "Virtual-Z correction on the low qubit.",
                             role="knob"),
-    "waveform": FieldSpec(
-        "", "Optimized pulse samples (dimensionless DAC fraction).",
-        role="knob", portable=False, shape="float[]"),
+    # dt BEFORE waveform: pushes go in declaration order and a waveform
+    # without its sample period is not physically interpretable — the same
+    # ordering discipline as amp-before-power and duration-before-window.
     "waveform_dt_s": FieldSpec(
         "s", "Sample period of <op>_waveform — mandatory companion so the "
              "array is physically interpretable without vendor context.",
         role="knob"),
+    "waveform": FieldSpec(
+        "", "Optimized pulse samples (dimensionless DAC fraction).",
+        role="knob", portable=False, shape="float[]"),
 }
 
 # ------------------------------------------------------------------ channels
@@ -583,6 +586,16 @@ def _validate_catalog() -> None:
     overlap = mode_fields & set(seen)
     assert not overlap, (
         f"fields {sorted(overlap)} exist on both a mode and a channel kind")
+
+    # The chain-reconcile anchor is unique by construction: at most one
+    # *_power_dbm knob per channel kind, and the op family must never mint
+    # one (a second anchor on one entity would make reconcile attribution
+    # ambiguous — the RecordingDevice relies on this).
+    for kind, spec in CHANNELS.items():
+        anchors = [f for f in spec.fields if f.endswith("_power_dbm")]
+        assert len(anchors) <= 1, f"channels.{kind}: two chain anchors {anchors}"
+    assert not any(s.endswith("_power_dbm") for s in OP_KNOBS), (
+        "OP_KNOBS must not mint chain anchors")
 
     # Every DERIVATION row must reference declared kinds; pump has no rows.
     for (ch, mk) in DERIVATION:

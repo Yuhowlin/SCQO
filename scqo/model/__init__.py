@@ -34,6 +34,14 @@ from .entities import (  # noqa: F401
     Mode,
     Provenance,
 )
+from .device import (  # noqa: F401
+    ComponentInfo,
+    CompositeView,
+    DeviceModel,
+    EntityView,
+    RecordingDevice,
+    make_view_base,
+)
 from .design import (  # noqa: F401
     DESIGN_FILE,
     Design,

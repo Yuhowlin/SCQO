@@ -328,6 +328,13 @@ class Store:
                         f"{len(b)}) — another session wrote a conflicting "
                         f"pair; re-record both sides together")
 
+    def check(self, entity: str, field: str, value) -> "float | list[float]":
+        """Validate one prospective write WITHOUT recording it — the
+        recording device calls this BEFORE pushing to the vendor, so a
+        store-invalid value (wrong shape, NaN list element, waveform without
+        its dt, paired-length break) can never reach the instrument."""
+        return self._validate(entity, field, value)
+
     def record(self, entity: str, field: str, value, *,
                experiment: str | None = None, run_id: str | None = None,
                coupled_to: str | None = None) -> None:
