@@ -26,3 +26,18 @@ from .catalog import (  # noqa: F401
     derived_op,
     op_knob_fields,
 )
+from .entities import (  # noqa: F401
+    Channel,
+    Composite,
+    Entity,
+    Line,
+    Mode,
+    Provenance,
+)
+from .roster import (  # noqa: F401
+    COMPONENTS_FILE,
+    Roster,
+    RosterError,
+    load_components,
+    parse_components,
+)

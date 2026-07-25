@@ -58,9 +58,11 @@ def test_unit_suffix_convention_holds_and_is_enforced():
     assert "readout_freq_hz" in CHANNELS["readout"].fields
     # Flux set-points are the stated source-native exemption (no _v lie).
     assert CHANNELS["flux"].fields["idle_flux"].unit == "source-native"
-    # The lint actually fires on a violating field.
+    # The lint actually fires on a violating field — in BOTH directions.
     with pytest.raises(AssertionError, match="unit"):
         _validate_fields("t", {"bad_freq": FieldSpec("Hz", "d", role="knob")})
+    with pytest.raises(AssertionError, match="promises unit"):
+        _validate_fields("t", {"bad_hz": FieldSpec("", "d", role="knob")})
 
 
 def test_design_ok_is_fact_only_and_context_free():

@@ -489,6 +489,18 @@ def op_knob_fields(operation: str) -> dict[str, FieldSpec]:
     return {f"{operation}_{suffix}": spec for suffix, spec in OP_KNOBS.items()}
 
 
+#: Every field name the static catalogs claim — the roster loader refuses a
+#: declared operation whose OP_KNOBS instantiation would collide with one
+#: (the cross-catalog uniqueness invariant behind `scqo set q1.<field>` must
+#: hold for roster-minted names too, and the import-time assert below cannot
+#: see those).
+ALL_STATIC_FIELDS: frozenset[str] = frozenset(
+    name
+    for family in (MODES, COMPOSITES, CHANNELS)
+    for spec in family.values()
+    for name in spec.fields)
+
+
 # ------------------------------------------------------------------- lints
 
 #: unit -> mandatory trailing name token for dimensioned fields. Source-native
@@ -503,6 +515,13 @@ def _validate_fields(owner: str, fields: dict[str, FieldSpec]) -> None:
             assert name.endswith(token), (
                 f"{owner}.{name}: unit {spec.unit!r} requires the name to end "
                 f"with {token!r} — a unit suffix in a name must always be true")
+        # The lint is bidirectional: a name CLAIMING a unit token must carry
+        # that unit, or the "a unit suffix in a name is always true" guarantee
+        # is only half enforced.
+        for unit, tok in _UNIT_TOKENS.items():
+            assert not (name.endswith(tok) and spec.unit != unit), (
+                f"{owner}.{name}: name token {tok!r} promises unit {unit!r}, "
+                f"got {spec.unit!r}")
         assert not (spec.design_ok and spec.role != "fact"), (
             f"{owner}.{name}: design_ok is a fact-only concept")
         assert not (spec.design_only and not spec.design_ok), (

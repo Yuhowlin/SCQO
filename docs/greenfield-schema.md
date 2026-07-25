@@ -53,11 +53,12 @@ wiring); QEC composite kinds are registered only when per-stabilizer calibrated 
 
 ## 2. Entity model
 
-Every roster entity shares one base: `name`, `kind`, refs (`role → [names]`), `derived` flag. One
-**global flat namespace** across all sections — names key the stores, history, trends, and
-`design.toml`. Four thin dataclasses over the base (mode / composite / line / channel; composites add
-`operations`, channels add `target/line/via`) — deliberately *not* one dataclass with an untyped
-attrs dict.
+Every roster entity shares one base: `name`, `kind`, `derived` flag (minted-entity provenance),
+`retired` flag (post-cut decommissioning, §7). One **global flat namespace** across all sections —
+names key the stores, history, trends, and `design.toml`. Four thin dataclasses over the base —
+modes carry their kind's scalar refs, composites carry `roles` (role → member names) plus
+`operations`, channels carry `target`/`line`/`via` — deliberately *not* one dataclass with an
+untyped attrs dict.
 
 All four sections use the same discriminator word: `kind = "<lowercase token>"`.
 
@@ -180,7 +181,7 @@ via    = "q1_res"              # mediator: ANY mode (a resonator, a cat buffer, 
 
 ## 6. Field machinery
 
-`FieldSpec = {unit, doc, role, portable, design_ok, shape}` with
+`FieldSpec = {unit, doc, role, portable, design_ok, shape, paired_with, design_source}` with
 `role ∈ {fact, knob, monitor}` — the store router:
 
 | role | store | pushed to vendor | meaning |
@@ -193,7 +194,11 @@ One entity name may span both stores (`q1_z`: `flux_offset`/`flux_per_phi0` fact
 knob). `shape` is `float` or `float[]` (arrays are intra-field sequences only — waveform samples,
 distortion taps; **never** entity-aligned positions). Legal `(role, portable, design_ok)`
 combinations are enforced at catalog registration; `portable`'s consumer is cross-setup
-carry-forward per the placement rule.
+carry-forward per the placement rule. `paired_with` declares the equal-length partner of a paired
+array (on multi-target channels the compiled `__<target>` instances re-point it per target).
+`design_source` on a channel knob names the (ref-role hop, fact field) that seeds bring-up
+(`drive_freq_hz ← target.f_01_hz`, `readout_freq_hz ← via.f_r_hz`); the anchor order stays
+standing state, else design value, else code default.
 
 ### Naming rules (lint-enforced at catalog registration)
 
@@ -270,12 +275,17 @@ the sole home of the function/suffix/op vocabulary (doctor always prints both sp
 |---|---|---|---|
 | drive | transmon, flux_transmon, fluxonium | `rx` | `_xy` |
 | drive | cavity | `displace` | `_xy` |
-| readout | transmon-family, fluxonium, cavity | `readout` | `_ro` (+ mints `<t>_res` when no via) |
+| readout | transmon-family, fluxonium, cavity | `readout` | `_ro` (+ mints `<t>_res`; qubit kinds only — see caveat) |
 | flux | flux_transmon, fluxonium | `flux_bias` | `_z` |
 | pump | any mode / composite / list | *(none — legal, no derived op)* | *(explicit-only)* |
 
 Single-mode operations are **derived** from this table (wiring cannot drift from declared
 capability); composite operations are **declared** (§4). List targets validate per element.
+
+*Rider caveat:* a readout **rider** serves qubit kinds only — a rider cannot name a `via`
+mediator, and its minted resonator's `qubit` ref is qubit-typed, so cavity readout (emission
+collection) always uses the explicit `[channels.*]` hatch with `via`; the loader's error says
+exactly that. The (readout × cavity) row is the hatch's legality, not the rider's.
 
 ### Addressing
 
