@@ -183,6 +183,40 @@ def test_push_mode_restores_saved_knobs_into_the_vendor(tmp_path, roster,
     assert device.component("q1_xy").drive_freq_hz == 5.136e9
 
 
+def test_push_mode_tolerates_unrealized_knobs(tmp_path, roster):
+    """A knob the backend declares Unrealized raises NotImplementedError —
+    capability, not failure: seeding skips it and keeps going."""
+    class PartialVendor(FakeVendor):
+        def component(self, name):
+            view = super().component(name)
+            if name == "q1_xy":
+                original = view.__setattr__
+
+                class _Refusing:
+                    name = "q1_xy"
+
+                    def __setattr__(self, field, value):
+                        if field == "drag_beta":
+                            raise NotImplementedError("no DRAG on this box")
+                        original(field, value)
+
+                    def __getattr__(self, field):
+                        return getattr(view, field)
+                return _Refusing()
+            return view
+
+    seed = state_store(tmp_path, roster, setup="qm_a")
+    seed.record("q1_xy", "drag_beta", -1.0)     # the unrealized one
+    seed.record("q1_xy", "pi_amp", 0.44)        # must still land
+    seed.save()
+    vendor = PartialVendor({"q1_xy": {"pi_amp": 0.1}})
+    device = RecordingDevice(vendor, roster,
+                             state_store(tmp_path, roster, setup="qm_a"),
+                             on_load="push")      # must not raise
+    assert vendor.data["q1_xy"]["pi_amp"] == 0.44
+    assert device.component("q1_xy").pi_amp == 0.44
+
+
 def test_push_mode_tolerates_unrealized_entities(tmp_path, roster, vendor):
     seed = state_store(tmp_path, roster, setup="qm_a")
     seed.record("q3_xy", "pi_amp", 0.5)               # vendor has no q3_xy

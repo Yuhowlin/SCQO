@@ -323,9 +323,15 @@ class RecordingDevice:
                     self._vendor_write(name, f, self._copy(value))
                     pushed.append(f)
                 except KeyError:
-                    # A roster entity the vendor does not realize (a mismatch
+                    # A roster ENTITY the vendor does not realize (a mismatch
                     # the doctor witnesses) must not brick construction.
                     break
+                except NotImplementedError:
+                    # A single knob the backend declares Unrealized (its
+                    # fieldmap says so, and `scqo state --fields` shows it):
+                    # capability, not failure. Skip it and keep seeding the
+                    # entity's other knobs.
+                    continue
             if pushed:
                 anchor = next((f for f in pushed
                                if f.endswith("_power_dbm")), pushed[-1])
