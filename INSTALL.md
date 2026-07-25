@@ -22,7 +22,7 @@ actually running a measurement.**
 | venv | prompt | contents | activate when you… |
 |---|---|---|---|
 | `D:\github\.venv-view` | `(view)` | scqo `[viewer]` + scqat + datasette + pytest — **no instrument libraries** | look at data (the common case): run-viewer, SQL browser, `scqo find`, `scqo tag`. Works identically on an analysis-only laptop/Mac. |
-| `D:\github\.venv-qblox` | `(qblox)` | the view stack + LCHQBDriver + `qblox-scheduler==1.0.0b4` (hardware-proven) + scqo-contrib | measure on the Qblox cluster: `scqo run`, `scqo state` |
+| `D:\github\.venv-qblox` | `(qblox)` | the view stack + LCHQBDriver + `qblox-scheduler==1.0.0b4` (hardware-proven) | measure on the Qblox cluster: `scqo run`, `scqo state` |
 | `D:\github\.venv-qm` | `(.venv-qm)` | pinned QM stack, py3.11 (`LCHQMDriver\requirements-qm.lock.txt`) + scqo/scqat/LCHQMDriver editables | measure on the OPX1000 or use qualibrate — `qm.bat` activates it for you |
 
 All three import scqo/scqat from the same editable checkouts, so they never drift on
@@ -38,11 +38,17 @@ git clone https://github.com/shiau109/SCQO.git
 git clone https://github.com/shiau109/scqat.git
 git clone https://github.com/shiau109/LCHQBDriver.git    # only if this machine drives the Qblox cluster
 git clone https://github.com/shiau109/LCHQMDriver.git    # only if this machine drives the OPX1000
-git clone https://github.com/shiau109/scqo-contrib.git   # optional: the Tier-2 sandbox
+git clone https://github.com/shiau109/scqo-contrib.git   # optional sandbox - see the note below before installing it
 ```
 
 (A repo that is still **private** answers `Repository not found` when the active
 GitHub credential cannot see it — sign in with an account that has access.)
+
+> **scqo-contrib is NOT part of the current release.** Its sandbox experiments
+> still import the device model that v0.13 deleted, so it is pinned at v0.12.0
+> and must not be installed into a v0.13 environment — the install lines below
+> deliberately omit it. Clone it if you want to read or re-point it; check
+> `RELEASES.toml` before adding it back to any env.
 
 **Windows: install uv once per machine** (no admin needed):
 
@@ -83,7 +89,7 @@ uv pip install --python .venv-view\Scripts\python.exe -e ".\SCQO[viewer]" -e .\s
 
 # qblox — measurement env for the Qblox cluster
 uv venv .venv-qblox --python 3.12 --prompt qblox
-uv pip install --python .venv-qblox\Scripts\python.exe -e ".\SCQO[viewer]" -e .\scqat -e .\LCHQBDriver -e .\scqo-contrib datasette pytest httpx
+uv pip install --python .venv-qblox\Scripts\python.exe -e ".\SCQO[viewer]" -e .\scqat -e .\LCHQBDriver datasette pytest httpx
 uv pip install --python .venv-qblox\Scripts\python.exe "qblox-scheduler==1.0.0b4"   # exact hardware-proven build (see note)
 
 # qm — measurement env for the OPX1000 (pinned, py3.11)
@@ -95,7 +101,7 @@ uv pip install --python .venv-qm\Scripts\python.exe -e .\scqat -e .\SCQO -e .\LC
 ```
 
 (Each scqo install line also puts the **`scqo` command** on that venv's PATH — the
-whole Tier-1 surface (`scqo run/find/accept/tag/state/user/device/doctor`)
+whole Tier-1 surface (`scqo run/find/accept/suggest/set/tag/state/user/device/doctor`)
 works from any directory. `[viewer]` pulls the run-viewer's web extras —
 fastapi/uvicorn/jinja2/python-multipart —
 for `python -m scqo.viewer`; `datasette` powers the SQL browser `python -m scqo.browse`.
@@ -154,7 +160,8 @@ not by this file):
 | `"qblox"` / `"qm"` | real instrument | real | needs the driver repo's venv; QM keeps `state_sync="pull"` |
 
 Optionally describe each sample in `<data_root>\devices.toml` (one table per chip:
-description, design values — instrument-independent facts only); the viewer's Device
+description and provenance notes — instrument-independent, human-facing only;
+as-designed TARGETS belong in the sample's own design.toml); the viewer's Device
 page shows the matching card. All samples share ONE `data_root` and ONE index —
 filter with `--device` / the viewer's device dropdown.
 
@@ -171,7 +178,7 @@ setup era. The operator's checklist:
 2. Build the new vendor config as usual (wiring/attenuation are new-fridge facts).
    **Seed the frequencies from the sample's last known values**: open the viewer's
    Device page (it reads saved snapshots, so it works after the old instrument is
-   disconnected) and copy `readout_freq` / `drive_freq` per qubit — these are sample
+   disconnected) and copy `readout_freq_hz` / `drive_freq_hz` per qubit — these are sample
    properties and transfer well.
 3. Do **NOT** transfer `pi_amp` / `readout_amp` / `drive_amp` — they encode the
    setup (line attenuation, output gain). Re-derive them with the standard
@@ -279,7 +286,8 @@ Two hand-edited TOML files complete the lab picture. The principle:
 full environment (cycle id + setup name + operator + backend).
 
 `<data_root>\devices.toml` — optional; one table per sample (instrument-independent
-facts only: description, design values). The viewer's Device page shows the matching
+facts only: description and notes — as-designed targets live in the sample's
+design.toml). The viewer's Device page shows the matching
 card; display-only, a typo warns and is ignored.
 
 `<data_root>\<device>\cooldowns.toml` — the device's cycle registry: one table per
@@ -368,10 +376,12 @@ changes what a run DOES:**
   stays pending until `scqo accept <run_id>`. The pre-v0.6 behavior is one flag
   away: `scqo run ... --accept` (or `update="apply"` in Python).
 - **T1/T2*/T2echo moved out of the device state.** `scqo state` no longer shows
-  them — they are SAMPLE physics now, living in `<data_root>\<device>\physical.json`
-  with their own change history: `scqo state --physical [--history]`. Legacy
+  them — they are SAMPLE physics now, living in each context's
+  `<data_root>\<device>\<cooldown>\<setup>\scqo\physical.json` with its own
+  change history: `scqo state --physical [--history]`. Legacy
   `t1_s`/`t2_star_s`/`t2_echo_s` keys in an old `scqo_state.json` are simply not
-  read (`readout_fidelity` stays: it is a fact about qubit+setup).
+  read (the per-state `fidelity_g`/`fidelity_e` monitors stay: they are facts
+  about qubit+setup, stored but never pushed).
 - **Nothing to migrate:** the run index rebuilds itself (schema v6); pre-v0.6
   runs reindex with no suggestions. Find undecided runs any time with
   `scqo find --pending` or bare `scqo accept`.
@@ -425,7 +435,7 @@ and the commands regrouped.**
   it steps the output chain (QM `full_scale_power_dbm` / Qblox `output_att`) one
   power point at a time (amp held ~0.5 for SNR), so its dBm axis is wide and
   cross-backend comparable (slow: one compile+run per point). Proposes
-  `readout_power_dbm` + `readout_freq`. See TUTORIAL §2 "Readout power — two modes".
+  `readout_power_dbm` + `readout_freq_hz`. See TUTORIAL §2 "Readout power — two modes".
 - **Run records gain `power_context`** (raw chain values per qubit at run end) in
   `record.json` — provenance only; the index schema is UNCHANGED (v7, no reindex).
 - **The FAST punchout is RENAMED**: `resonator_spectroscopy_power` →
@@ -436,7 +446,7 @@ and the commands regrouped.**
   old name (`scqo find --experiment resonator_spectroscopy_power`).
 - **Both punchouts now take the SAME absolute-dBm inputs** —
   `min_power_dbm`/`max_power_dbm` (default −50…−20), same fields, same proposals
-  (`readout_power_dbm` + `readout_freq`); only the mechanism differs and the figure
+  (`readout_power_dbm` + `readout_freq_hz`); only the mechanism differs and the figure
   labels it. `_amp` realizes the window by temporarily solving the chain for
   `max_power_dbm` (a recorded write, auto-reverted — the run leaves the device as
   found) and sweeping the amplitude down from it, so any window up to the chain max
@@ -517,12 +527,27 @@ folder and prints every remaining step paste-ready (it never edits shared files)
    (just `backend` + optional `note`) to the new `cooldowns.toml`; for real
    backends create the DERIVED folder `cd1\<name>\backend_config\` and copy the
    vendor files in under the canonical names.
-2. **Optional**: a `devices.toml` entry (description/design facts for the viewer).
-3. **Users**: `scqo user --device <name>` — that is the whole selection (a
+2. **Manager, once per sample**: hand-write the sample's ROSTER,
+   `<data_root>\<name>\components.toml` (schema 3, sibling of `cooldowns.toml`) —
+   its `[modes]` / `[composites]` / `[lines]` describe the chip and its wiring, and
+   the lines' rider lists mint the channels and readout resonators. This file does
+   not auto-create: without it every run refuses, because SCQO will not guess what
+   a name means. Take the wiring from the vendor config rather than assuming it —
+   several resonators sharing one line IS the multiplexed readout, and saying so is
+   what lets SCQO address them correctly. Entity names must match the vendor config
+   exactly. See TUTORIAL §9 for the full walkthrough and a worked example.
+3. **Recommended**: the sample's DATASHEET, `<data_root>\<name>\design.toml` —
+   as-designed targets per entity (`f_01_hz`, `f_r_hz`, ...). Bring-up sweeps centre
+   on these before anything is measured; without them the first run of a fresh chip
+   refuses for want of an anchor. Declarations only — never back-fill it from
+   measurements.
+4. **Optional**: a `devices.toml` entry (description/notes for the viewer).
+5. **Users**: `scqo user --device <name>` — that is the whole selection (a
    single-setup cycle auto-selects; several → `scqo user --setup <name>`).
    Everything else auto-creates on first use: `<data_root>\<name>\` run folders,
    each context's `<cooldown>\<setup>\scqo\` folder, the index row, viewer pages.
-   Verify with `scqo device list`.
+   Verify with `scqo device list`, then `scqo doctor` (it checks the roster, the
+   datasheet's coverage, and the roster-vs-vendor inventory).
 
 ### Cleaning state — from "just the index" to factory reset
 
@@ -672,7 +697,7 @@ python scripts\check_real_config.py D:\qpu_data\SQ_demo\QM_OPX1000_config
 Expected output: 5 numbered steps, each OK, ending in a `PASS - scqo works against
 this real ...` line. The QM script skips qubits whose state is uncalibrated (fields
 `None`) automatically; on the Qblox device non-`q*` elements like the coupler
-(`c12`) are excluded by the `q*` default — pass `--qubits` to choose explicitly.
+(`c12`) are excluded by the `q*` default — pass `--targets` to choose explicitly.
 Both lab configs passed on 2026-07-04 (and this test caught three real integration
 bugs before any hardware time was spent — that's its job).
 
@@ -723,10 +748,17 @@ The rules that make this safe:
 - The server runs a **git tag** of all repos (first cut: `v0.1.0`, `git checkout
   v0.1.0` in each); dev machines track `main`. Update the server deliberately, after
   CI is green — never mid-cooldown on a whim. The update procedure:
-  `git fetch --tags; git checkout <new tag>` in each repo, re-run section 3, restart
-  the viewer (editable installs pick the new code up on restart). **Which tags belong
-  together — and any REQUIRED upgrade action — is recorded per release in
-  [RELEASES.toml](RELEASES.toml)** (process: [RELEASING.md](RELEASING.md)).
+  `git fetch --tags; git checkout <tag>` in each repo, re-run section 3, restart
+  the viewer (editable installs pick the new code up on restart). **The tag is NOT
+  always the same word in every repo** — read the release's row in
+  [RELEASES.toml](RELEASES.toml) and check out each repo's own listed tag (a
+  release may bump only some of them, and a repo may be deliberately left behind).
+  **Which tags belong together — and any REQUIRED upgrade action — is recorded per
+  release there** (process: [RELEASING.md](RELEASING.md)).
+  **Always re-run the `uv pip install -e` lines after checking out a tag**: an
+  editable install serves the live source, but its recorded VERSION is frozen at
+  install time, so `scqo doctor` keeps reporting the old number — and entry points
+  (the `scqo` command, the backend registrations) only register at install time.
   **Upgrading across v0.4.0**: the `scqo` console command and the backend entry
   points register at INSTALL time, not import time — also re-run the section-1
   `uv pip install -e` lines for `.venv-view`, `.venv-qblox` and `.venv-qm`; finish
@@ -803,7 +835,7 @@ A student measuring from their own laptop, with nothing installed on it:
 ```
 ssh <user>@<server>
 D:\github\.venv-qblox\Scripts\Activate.ps1
-scqo run resonator_spectroscopy --qubits q1
+scqo run resonator_spectroscopy --targets q1
 ```
 
 …then views the figures at `http://<server>:8080`.
