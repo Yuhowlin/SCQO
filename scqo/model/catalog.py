@@ -70,10 +70,13 @@ class FieldSpec:
     #: Name of a same-catalog float[] partner that must stay equal-length
     #: (declared on ONE side of the pair; checked at store write).
     paired_with: str | None = None
-    #: Bring-up seed for channel knobs: (ref role to hop, fact field there).
-    #: Role None = the channel's target itself. Anchor order stays standing
-    #: state, else design, else code default.
-    design_source: tuple[str | None, str] | None = None
+    #: Bring-up seed for channel knobs: (ref role to hop, fact field(s)
+    #: there — a tuple lists CANDIDATES, first with a design value wins:
+    #: drive_freq_hz seeds from f_01_hz on a fixed transmon and f_q_max_hz
+    #: on a flux-tunable, whichever the kind designs). Role None = the
+    #: channel's target itself. Anchor order stays standing state, else
+    #: design, else code default.
+    design_source: tuple[str | None, str | tuple[str, ...]] | None = None
 
 
 @dataclass(frozen=True)
@@ -335,7 +338,8 @@ CHANNELS: dict[str, ChannelKind] = {
             "drive_freq_hz": FieldSpec(
                 "Hz", "Drive frequency (operating CHOICE; the fact is the "
                       "target's f_01_hz).",
-                role="knob", design_source=(None, "f_01_hz")),
+                role="knob",
+                design_source=(None, ("f_01_hz", "f_q_max_hz"))),
             "pi_amp": FieldSpec(
                 "", "Calibrated pi (x180) pulse amplitude.",
                 role="knob", portable=False),

@@ -28,33 +28,50 @@ _FR_STEP = 0.1e9
 
 
 def demo_components(qubits: tuple[str, ...] = ("q0", "q1"), *,
-                    pair: bool = True) -> Roster:
-    """The chipT-shaped demo roster in the greenfield schema: fixed
-    transmons, one multiplexed feedline, a dedicated drive wire each, and
-    (default) a qubit_pair over the first two qubits — so every core test
-    exercises rider minting, multiplexed readout, and pair plumbing."""
-    lines = [f"[modes.{q}]\nkind = \"transmon\"" for q in qubits]
+                    pair: bool = True, tunable: bool = False) -> Roster:
+    """The chipT-shaped demo roster in the greenfield schema: one
+    multiplexed feedline, a dedicated drive wire each, and (default) a
+    qubit_pair over the first two qubits — so every core test exercises
+    rider minting, multiplexed readout, and pair plumbing.
+
+    ``tunable=True`` is the flux-demo variant: flux_transmon qubits with a
+    z wire each, plus a tracked coupler mode with its own flux wire on the
+    pair — the substrate for the flux/pair experiment tests."""
+    kind = "flux_transmon" if tunable else "transmon"
+    lines = [f"[modes.{q}]\nkind = \"{kind}\"" for q in qubits]
     if pair and len(qubits) >= 2:
         a, b = sorted(qubits[:2])
+        coupler = ""
+        if tunable:
+            lines.append(f"[modes.{a}_{b}_c]\nkind = \"flux_transmon\"")
+            coupler = f"coupler    = \"{a}_{b}_c\"\n"
         lines.append(
             f"[composites.{a}_{b}]\n"
             f"kind       = \"qubit_pair\"\n"
             f"high       = \"{qubits[1]}\"\n"     # design f grows with index
             f"low        = \"{qubits[0]}\"\n"
+            + coupler +
             f"operations = [\"iswap\"]")
+        if tunable:
+            lines.append(f"[lines.zc]\nflux = [\"{a}_{b}_c\"]")
     readout = ", ".join(f'"{q}"' for q in qubits)
     lines.append(f"[lines.fl]\nreadout = [{readout}]")
     lines.extend(f"[lines.{q}_xyl]\ndrive = [\"{q}\"]" for q in qubits)
+    if tunable:
+        lines.extend(f"[lines.{q}_zl]\nflux = [\"{q}\"]" for q in qubits)
     return parse_components("schema = 3\n" + "\n".join(lines))
 
 
 def demo_design(roster: Roster,
                 qubits: tuple[str, ...] = ("q0", "q1")) -> Design:
-    """Design targets matching :func:`demo_components` — f_01 per qubit,
-    f_r per minted resonator — validated through the real loader."""
+    """Design targets matching :func:`demo_components` — context-free per
+    kind (f_01 for fixed transmons, f_q_max for flux-tunables), f_r per
+    minted resonator — validated through the real loader."""
     blocks = ["schema = 1"]
     for i, q in enumerate(qubits):
-        blocks.append(f"[{q}]\nf_01_hz = {_F01 + i * _F01_STEP:.6g}")
+        field = ("f_q_max_hz" if roster.entities[q].kind == "flux_transmon"
+                 else "f_01_hz")
+        blocks.append(f"[{q}]\n{field} = {_F01 + i * _F01_STEP:.6g}")
         blocks.append(f"[{q}_res]\nf_r_hz = {_FR + i * _FR_STEP:.6g}")
     return parse_design("\n".join(blocks), roster)
 
@@ -76,10 +93,14 @@ def demo_vendor_state(roster: Roster, design: Design) -> dict:
         if e.kind == "drive":
             fields.setdefault("pi_amp", 0.1)
             fields.setdefault("drive_amp", 0.05)
+            fields.setdefault("drive_power_dbm", -13.0)
         elif e.kind == "readout":
             fields.setdefault("readout_amp", 0.08)
+            fields.setdefault("readout_power_dbm", -30.0)
             fields.setdefault("readout_duration_s", 8.0e-7)
             fields.setdefault("readout_integration_s", 8.0e-7)
+        elif e.kind == "flux":
+            fields.setdefault("idle_flux", 0.0)
         state[name] = fields
     for name, e in roster.composites().items():
         state[name] = {}

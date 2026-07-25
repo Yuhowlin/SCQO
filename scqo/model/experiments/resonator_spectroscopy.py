@@ -1,7 +1,7 @@
 """Resonator spectroscopy — the worked reference experiment, greenfield.
 
 Port of :mod:`scqo.experiments.resonator_spectroscopy`. The physics half is
-byte-for-byte; what moved is the device surface in ``update()`` and the
+preserved (cosmetically reflowed); what moved is the device surface in ``update()`` and the
 anchor spelling: the operating choice lands on the target's READOUT CHANNEL
 (``readout_freq_hz``) and the fit's physical content (``f_r_hz``,
 ``kappa_tot_hz``) on the attached RESONATOR mode.

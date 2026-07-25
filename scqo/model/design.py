@@ -153,11 +153,14 @@ def load_design(path: str | Path, roster: Roster) -> Design:
                         source=str(path))
 
 
-def seed_source(roster: Roster, channel: str,
+def seed_source(roster: Roster, design: Design, channel: str,
                 field: str) -> tuple[str, str] | None:
     """The (entity, fact) a channel knob's ``design_source`` hop resolves to
-    — None when the knob declares no source or the hop does not resolve
-    (multi-target channel, no via)."""
+    — with candidate facts, the first one the datasheet actually declares
+    (so drive_freq_hz seeds from f_01_hz on fixed transmons and f_q_max_hz
+    on flux-tunables). None when the knob declares no source, the hop does
+    not resolve (multi-target channel, no via), or no candidate is
+    declared."""
     try:
         spec = roster.fields_of(channel).get(field)
     except RosterError as err:  # one exception surface for the seed lookup
@@ -166,7 +169,9 @@ def seed_source(roster: Roster, channel: str,
              f"{channel}.{field}: unknown field (seed lookup)")
     if spec.design_source is None:
         return None
-    hop, fact = spec.design_source
+    hop, facts = spec.design_source
+    if isinstance(facts, str):
+        facts = (facts,)
     entity = roster.entities[channel]
     if not isinstance(entity, Channel):
         return None
@@ -178,14 +183,17 @@ def seed_source(roster: Roster, channel: str,
         anchor = None
     if anchor is None:
         return None
-    return anchor, fact
+    for fact in facts:
+        if design.get(anchor, fact) is not None:
+            return anchor, fact
+    return None
 
 
 def seed_value(roster: Roster, design: Design, channel: str,
                field: str) -> float | None:
     """The design fallback for one channel knob — the datasheet value at its
     :func:`seed_source`, or None (callers fall through to code defaults)."""
-    source = seed_source(roster, channel, field)
+    source = seed_source(roster, design, channel, field)
     if source is None:
         return None
     return design.get(*source)

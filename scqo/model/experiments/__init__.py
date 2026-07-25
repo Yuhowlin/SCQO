@@ -4,7 +4,9 @@ Transitional twin of :mod:`scqo.registry`: the greenfield ports register
 here so both stacks coexist until the final cutover deletes the old one and
 this package moves to ``scqo.experiments``. Same contract: ``@register`` a
 subclass, ``get(name)`` for dispatch, ``catalog()`` for the decision menu.
-Derived capability tags arrive with the capability-module port.
+Pending until the final cutover (tracked, not lost): derived capability
+tags (from the mixin subclass relations), the ``maturity`` field, and the
+contrib entry-point group merge.
 """
 
 from __future__ import annotations
@@ -42,4 +44,26 @@ def catalog() -> list[dict]:
     ]
 
 
-from . import resonator_spectroscopy  # noqa: E402,F401  (registration import)
+from . import (  # noqa: E402,F401  (registration imports)
+    pair_zz_coupler,
+    qubit_drag_alternating,
+    qubit_drag_equator,
+    qubit_echo,
+    qubit_echo_flux,
+    qubit_pi_pulse_error,
+    qubit_power_rabi,
+    qubit_ramsey,
+    qubit_relaxation,
+    qubit_relaxation_flux,
+    qubit_spectroscopy,
+    qubit_spectroscopy_flux_pulse,
+    qubit_sqrb,
+    qubit_tomography,
+    readout_frequency,
+    readout_power,
+    resonator_spectroscopy,
+    resonator_spectroscopy_flux,
+    resonator_spectroscopy_power_amp,
+    resonator_spectroscopy_power_chain,
+    single_shot_readout,
+)

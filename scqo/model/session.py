@@ -288,6 +288,7 @@ class Session:
                 problems.append(
                     f"{t}: lacks operation(s) {sorted(missing)} "
                     f"(carried: {sorted(have_ops) or 'none'})")
+        problems += cls.validate_targets(self.roster, targets)
         if not problems:
             return None
         return cls.Result(

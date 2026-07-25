@@ -186,8 +186,15 @@ def test_readout_seed_hops_via_the_resonator(roster, design):
     assert seed_value(roster, design, "q1_ro", "readout_freq_hz") == 5.93e9
 
 
+def test_drive_seed_candidates_cover_flux_tunables(roster, design):
+    # q1 is flux-tunable: no design f_01_hz, but the candidate list falls
+    # through to f_q_max_hz — park-at-sweet-spot is the bring-up seed.
+    assert seed_value(roster, design, "q1_xy", "drive_freq_hz") == 5.15e9
+
+
 def test_seed_is_none_when_undeclared_or_sourceless(roster, design):
-    # q1 is flux-tunable: its datasheet has no f_01_hz -> no seed.
-    assert seed_value(roster, design, "q1_xy", "drive_freq_hz") is None
+    # no candidate declared at all -> None (an empty datasheet).
+    empty = parse_design("schema = 1", roster)
+    assert seed_value(roster, empty, "q1_xy", "drive_freq_hz") is None
     # pi_amp declares no design_source at all.
     assert seed_value(roster, design, "q1_xy", "pi_amp") is None

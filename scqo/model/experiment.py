@@ -47,6 +47,14 @@ class Experiment(ABC):
     #: operations every target must carry — DERIVED from wiring for modes,
     #: DECLARED for composites.
     required_operations: ClassVar[tuple[str, ...]] = ()
+
+    @classmethod
+    def validate_targets(cls, roster, targets: list[str]) -> list[str]:
+        """Extra per-experiment pre-probe gating, beyond kinds + operations
+        (e.g. pair_zz_coupler requires a tracked coupler with a flux
+        channel). Return problem strings; [] when clear. Runs inside the
+        session's machine-readable gate — before any hardware."""
+        return []
     #: attach the stored |0>/|1> readout blob centers (the readout channel's
     #: pos_* monitors) to the acquired dataset as per-target ``ref_pos_*``
     #: variables. Set True only by experiments whose estimator consumes them.
@@ -101,7 +109,7 @@ class Experiment(ABC):
             value = None
         if value is not None:
             return float(value)
-        source = seed_source(roster, entity, field)
+        source = seed_source(roster, self.design, entity, field)
         seed = self.design.get(*source) if source is not None else None
         if seed is not None:
             tag = "seeded:{}.{}".format(*source)
