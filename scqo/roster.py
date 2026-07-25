@@ -1,76 +1,73 @@
-"""The component roster — WHICH components this device has (components.toml).
+"""The components.toml loader — topology in, validated entity graph out.
 
-One hand-edited file per device, sibling of ``cooldowns.toml``::
+Greenfield replacement for the old :mod:`scqo.roster`
+(docs/greenfield-schema.md sections 3-5, 7). The file declares four sections —
+``[modes]``, ``[composites]``, ``[lines]``, ``[channels]`` — and this loader:
 
-    <data_root>/<device>/components.toml
+1. parses them into typed entities (scalar-or-list normalized to tuples;
+   the internal model contains no unions);
+2. EXPANDS rider lists: each rider entry mints one channel via the frozen
+   suffix map, and readout riders also mint the target's ``<t>_res``
+   resonator mode (ref ``qubit=<t>``) — every minted entity stamped with
+   (line, rider, index) provenance, which every later error about it cites;
+3. enforces the NAMESPACE collision rule: any derived name colliding with any
+   declared name, in any section, is a load error naming both origins;
+4. resolves and validates every reference: mode refs, composite roles
+   (arity + kind typing + no entity in two roles + required roles + DAG over
+   composite refs), channel targets against the (channel kind x target kind)
+   DERIVATION table — identical for riders and explicit channels — THEN the
+   readout ``via`` default (the unique resonator whose qubit == target; zero
+   or several candidates = via required, candidates named). Graph validation
+   runs first so a bad target is reported as a bad target, never as a
+   missing via;
+5. COMPILES per-entity legal-field sets: kind catalog fields, plus full-name
+   per-operation knobs for each declared composite operation, plus
+   ``__<target>``-parameterized fact instances on multi-target channels
+   (their ``paired_with`` partners re-pointed per target). All later
+   validation (stores, design.toml) is set membership — no prefix parsing
+   anywhere. The lock (``Roster.signatures``) freezes the expanded entity
+   SIGNATURES — (name, kind, target(s)) — not the field sets.
 
-    schema = 1
-    [components.q1]
-    physical   = "FixedTransmon"
-    instrument = "ReadableTransmon"
-    operations = ["rx", "readout"]
-    [components.q1.design]
-    f_01_hz = 4.7e9                 # DESIGN values: declared (not measured) sample
-                                    # facts; keys must be fields of the PHYSICAL
-                                    # category; device-level = one copy above all
-                                    # setups/cooldowns
-    [components.q1_res]
-    physical = "Resonator"
-    [components.q1_res.design]
-    f_r_hz = 5.9e9
-    [components.q1_ro]
-    physical = "ReadoutLine"
-    members  = { transmon = "q1", resonator = "q1_res" }
-    [components.q1_xy]
-    physical = "XYControl"
-    members  = { transmon = "q1" }
-
-The roster is the AUTHORITY on which names exist and what they are; the driver's
-vendor-derived inventory is a witness (`scqo doctor` cross-checks). TRIAL-PHASE
-rule: the file is freely editable and doctor only WARNS about drift (orphaned
-names in state/history, category disagreement with the vendor); the append-only
-hardening comes at the production cut.
+Design values do NOT live here: a ``[design]`` table (or an in-table
+``design`` key) is refused with a pointer to design.toml. ``retired = true``
+is legal in every section (post-cut decommissioning keeps names resolving).
 """
 
 from __future__ import annotations
-
-import math
 
 try:  # the repo-wide pattern: stdlib tomllib on 3.11+, tomli backport below
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - py<3.11 envs
     import tomli as tomllib  # type: ignore[no-redef]
-from dataclasses import dataclass, field as _field
+
+from dataclasses import dataclass, replace
 from pathlib import Path
 
-from .categories import CATEGORIES, FieldSpec, pushed_fields
+from .catalog import (
+    ALL_STATIC_FIELDS,
+    CHANNELS,
+    COMPOSITES,
+    MODES,
+    OP_KNOBS,
+    QUBIT_LIKE,
+    FieldSpec,
+    derived_op,
+    op_knob_fields,
+)
+from .entities import Channel, Composite, Entity, Line, Mode, Provenance
 
 COMPONENTS_FILE = "components.toml"
+SCHEMA = 3
 
 #: Printed by doctor and by the missing-roster error — the smallest valid file.
 TEMPLATE = """\
-schema = 1
-[components.q1]
-physical   = "FixedTransmon"
-instrument = "ReadableTransmon"
-operations = ["rx", "readout"]
-[components.q1_res]
-physical = "Resonator"
-[components.q1_ro]
-physical = "ReadoutLine"
-members  = { transmon = "q1", resonator = "q1_res" }
-[components.q1_xy]
-physical = "XYControl"
-members  = { transmon = "q1" }
-# Two-qubit pair (QCQ): members are the HIGH/LOW idle-frequency qubits; the
-# optional coupler member is a physical-only satellite tracked like a resonator.
-# [components.q1_q2]
-# physical   = "Coupling"
-# instrument = "TransmonPair"
-# members    = { high = "q1", low = "q2" }   # + coupler = "q1_q2_c" (optional)
-# operations = ["coupler_bias", "iswap"]
-# [components.q1_q2_c]
-# physical = "FluxTunableTransmon"
+schema = 3
+[modes.q1]
+kind = "transmon"
+[lines.fl1]
+readout = ["q1"]
+[lines.xy1]
+drive = ["q1"]
 """
 
 
@@ -78,219 +75,630 @@ class RosterError(ValueError):
     """A components.toml that cannot be loaded correctly must fail loudly."""
 
 
+def _require(cond: bool, msg: str) -> None:
+    if not cond:
+        raise RosterError(msg)
+
+
+def _where(e: Entity) -> str:
+    """Error location: minted entities cite their provenance (the syntax the
+    user actually wrote), declared ones their section header."""
+    section = type(e).__name__.lower() + "s"
+    if e.derived is not None:
+        return f"{e.derived} (minted {e.name!r})"
+    return f"[{section}.{e.name}]"
+
+
+def _names(value, *, where: str, list_ok: bool = True) -> tuple[str, ...]:
+    """Scalar-or-list normalization: the TOML accepts both, the model holds
+    only tuples of names."""
+    if isinstance(value, str):
+        value = [value]
+    _require(isinstance(value, list) and value
+             and all(isinstance(v, str) and v for v in value),
+             f"{where}: expected a name or a non-empty list of names")
+    _require(list_ok or len(value) == 1,
+             f"{where}: exactly one name allowed here, got {len(value)}")
+    _require(len(set(value)) == len(value), f"{where}: duplicate names")
+    return tuple(value)
+
+
+def _check_name(name: str, where: str) -> None:
+    """Entity names feed the ``name.field`` addressing grammar and store
+    keys: identifiers only, no ``__`` (reserved for the field parameter
+    grammar), no leading underscore, and not ``schema`` (design.toml's flat
+    layout puts entity tables beside its schema stamp)."""
+    _require(isinstance(name, str) and name.isidentifier()
+             and "__" not in name and not name.startswith("_")
+             and name != "schema",
+             f"{where}: invalid entity name {name!r} (identifier, no '__', "
+             f"no leading '_', not the reserved word 'schema')")
+
+
+def _table(section: dict, name: str, header: str) -> dict:
+    table = section[name]
+    _require(isinstance(table, dict), f"[{header}.{name}]: expected a table")
+    _check_name(name, f"[{header}.{name}]")
+    return table
+
+
+def _retired(table: dict, where: str) -> bool:
+    value = table.get("retired", False)
+    _require(isinstance(value, bool), f"{where}: retired must be a boolean")
+    return value
+
+
+def _only_keys(table: dict, allowed: set[str], where: str) -> None:
+    _require("design" not in table,
+             f"{where}: design values live in design.toml, not the roster")
+    _require("derived" not in table,
+             f"{where}: 'derived' is stamped by the loader, never hand-written")
+    unknown = set(table) - allowed - {"retired"}
+    _require(not unknown,
+             f"{where}: unknown key(s) {sorted(unknown)} (allowed: "
+             f"{sorted(allowed) + ['retired']})")
+
+
+# ------------------------------------------------------------------ parsing
+
+def _parse_modes(section: dict) -> dict[str, Mode]:
+    modes: dict[str, Mode] = {}
+    for name in section:
+        where = f"[modes.{name}]"
+        table = _table(section, name, "modes")
+        kind = table.get("kind")
+        _require(kind in MODES,
+                 f"{where}: kind must be one of {sorted(MODES)}, got {kind!r}")
+        roles = MODES[kind].refs
+        _only_keys(table, {"kind", *roles}, where)
+        refs: dict[str, str] = {}
+        for role in roles:
+            _require(role in table,
+                     f"{where}: kind {kind!r} requires the {role!r} ref")
+            (refs[role],) = _names(table[role], where=f"{where}.{role}",
+                                   list_ok=False)
+        modes[name] = Mode(name=name, kind=kind, refs=refs,
+                           retired=_retired(table, where))
+    return modes
+
+
+def _parse_composites(section: dict) -> dict[str, Composite]:
+    composites: dict[str, Composite] = {}
+    for name in section:
+        where = f"[composites.{name}]"
+        table = _table(section, name, "composites")
+        kind = table.get("kind")
+        _require(kind in COMPOSITES,
+                 f"{where}: kind must be one of {sorted(COMPOSITES)}, "
+                 f"got {kind!r}")
+        spec = COMPOSITES[kind]
+        _only_keys(table, {"kind", "operations", *spec.roles}, where)
+        roles: dict[str, tuple[str, ...]] = {}
+        for role, rs in spec.roles.items():
+            if role not in table:
+                _require(rs.optional, f"{where}: kind {kind!r} requires the "
+                                      f"{role!r} role")
+                continue
+            roles[role] = _names(table[role], where=f"{where}.{role}",
+                                 list_ok=rs.list_ok)
+        ops = table.get("operations", [])
+        if isinstance(ops, str):  # scalar-or-list, like everywhere else
+            ops = [ops]
+        _require(isinstance(ops, list)
+                 and all(isinstance(o, str) and o.isidentifier()
+                         and "__" not in o for o in ops),
+                 f"{where}: operations must be identifiers (no '__')")
+        _require(len(set(ops)) == len(ops), f"{where}: duplicate operations")
+        for op in ops:
+            clash = sorted(set(op_knob_fields(op)) & ALL_STATIC_FIELDS)
+            _require(not clash,
+                     f"{where}: operation {op!r} would mint field(s) {clash} "
+                     f"that already exist in the static catalogs — pick "
+                     f"another operation name (field-name uniqueness is the "
+                     f"invariant behind default addressing)")
+        composites[name] = Composite(name=name, kind=kind, roles=roles,
+                                     operations=tuple(ops),
+                                     retired=_retired(table, where))
+    return composites
+
+
+#: rider key -> channel kind (exactly the kinds with a rider suffix).
+_RIDERS = {k: s for k, s in CHANNELS.items() if s.rider_suffix is not None}
+
+
+def _parse_lines(section: dict) -> tuple[dict[str, Line],
+                                         dict[str, dict[str, tuple[str, ...]]]]:
+    lines: dict[str, Line] = {}
+    riders: dict[str, dict[str, tuple[str, ...]]] = {}
+    for name in section:
+        where = f"[lines.{name}]"
+        table = _table(section, name, "lines")
+        _require("pump" not in table,
+                 f"{where}: pump channels are explicit-only "
+                 f"([channels.*]), never rider-derived")
+        _only_keys(table, set(_RIDERS), where)
+        lines[name] = Line(name=name, retired=_retired(table, where))
+        riders[name] = {kind: _names(targets, where=f"{where}.{kind}")
+                        for kind, targets in table.items()
+                        if kind in _RIDERS}
+    return lines, riders
+
+
+def _parse_channels(section: dict) -> dict[str, Channel]:
+    channels: dict[str, Channel] = {}
+    for name in section:
+        where = f"[channels.{name}]"
+        table = _table(section, name, "channels")
+        kind = table.get("kind")
+        _require(kind in CHANNELS,
+                 f"{where}: kind must be one of {sorted(CHANNELS)}, "
+                 f"got {kind!r}")
+        allowed = {"kind", "target", "line"} | ({"via"} if CHANNELS[kind].via_ok
+                                                else set())
+        _only_keys(table, allowed, where)
+        _require("target" in table, f"{where}: target is required")
+        _require("line" in table, f"{where}: line is required")
+        via = table.get("via")
+        if via is not None:
+            (via,) = _names(via, where=f"{where}.via", list_ok=False)
+        (line,) = _names(table["line"], where=f"{where}.line", list_ok=False)
+        channels[name] = Channel(
+            name=name, kind=kind, via=via, line=line,
+            target=_names(table["target"], where=f"{where}.target"),
+            retired=_retired(table, where))
+    return channels
+
+
+# ---------------------------------------------------------------- expansion
+
+def _expand(modes: dict[str, Mode],
+            riders: dict[str, dict[str, tuple[str, ...]]],
+            ) -> tuple[dict[str, Mode], dict[str, Channel]]:
+    """Mint channels (and readout resonators) from rider lists, with
+    provenance. Derived-derived collisions (one target in two same-kind
+    riders) are caught here with both origins named."""
+    minted_modes: dict[str, Mode] = {}
+    minted_channels: dict[str, Channel] = {}
+    origin: dict[str, Provenance] = {}
+    for line, by_kind in riders.items():
+        for kind, targets in by_kind.items():
+            spec = _RIDERS[kind]
+            for index, target in enumerate(targets):
+                prov = Provenance(line=line, rider=kind, index=index)
+                ch_name = target + spec.rider_suffix
+                if ch_name in minted_channels:
+                    raise RosterError(
+                        f"{prov}: derived channel {ch_name!r} already minted "
+                        f"by {origin[ch_name]} — a second {kind} channel for "
+                        f"{target!r} needs an explicit [channels.*] name")
+                via = None
+                if spec.mints_resonator:
+                    declared = modes.get(target)
+                    # A rider cannot name a via mediator, and the minted
+                    # resonator's qubit ref is QUBIT_LIKE-typed — so a
+                    # non-qubit readout (cavity emission collection) must use
+                    # the explicit hatch. Say so here, against the syntax the
+                    # user wrote, instead of failing later on a minted mode.
+                    if declared is not None and declared.kind not in QUBIT_LIKE:
+                        raise RosterError(
+                            f"{prov}: readout rider on {target!r} (kind "
+                            f"{declared.kind!r}) — a non-qubit readout needs "
+                            f"an explicit [channels.*] entry with via (a "
+                            f"rider cannot name the mediator)")
+                    res = target + "_res"
+                    minted_modes[res] = Mode(
+                        name=res, kind="resonator",
+                        refs={"qubit": target}, derived=prov)
+                    via = res
+                minted_channels[ch_name] = Channel(
+                    name=ch_name, kind=kind, target=(target,), line=line,
+                    via=via, derived=prov)
+                origin[ch_name] = prov
+    return minted_modes, minted_channels
+
+
+# --------------------------------------------------------------- validation
+
+def _origin(e: Entity) -> str:
+    if e.derived is not None:
+        return f"minted by {e.derived}"
+    return f"declared as {_where(e)}"
+
+
+def _collide(*groups: dict[str, Entity]) -> dict[str, Entity]:
+    """The namespace rule: ONE flat namespace across all sections, declared
+    and derived alike; any collision is a load error naming both origins."""
+    entities: dict[str, Entity] = {}
+    for group in groups:
+        for name, entity in group.items():
+            prior = entities.get(name)
+            if prior is not None:
+                raise RosterError(
+                    f"name {name!r} is both {_origin(prior)} and "
+                    f"{_origin(entity)} — one name, one entity")
+            entities[name] = entity
+    return entities
+
+
+def _validate_graph(entities: dict[str, Entity]) -> None:
+    """Reference, typing, and table validation — runs BEFORE via defaulting
+    so a bad target is reported as a bad target."""
+    for e in entities.values():
+        where = _where(e)
+        if isinstance(e, Mode):
+            for role, allows in MODES[e.kind].refs.items():
+                m = entities.get(e.refs[role])
+                _require(isinstance(m, Mode),
+                         f"{where}.{role}: {e.refs[role]!r} is not a declared "
+                         f"mode")
+                _require(m.kind in allows,
+                         f"{where}.{role}: {m.name!r} is kind {m.kind!r}, "
+                         f"allowed: {allows}")
+        elif isinstance(e, Composite):
+            filled: dict[str, str] = {}
+            for role, members in e.roles.items():
+                allows = COMPOSITES[e.kind].roles[role].allows
+                for n in members:
+                    _require(n not in filled or filled[n] == role,
+                             f"{where}: {n!r} fills both {filled.get(n)!r} "
+                             f"and {role!r} — one entity, one role")
+                    filled[n] = role
+                    member = entities.get(n)
+                    _require(member is not None and not isinstance(
+                        member, (Line, Channel)),
+                        f"{where}.{role}: {n!r} is not a mode or composite")
+                    _require(member.kind in allows,
+                             f"{where}.{role}: {n!r} is kind "
+                             f"{member.kind!r}, allowed: {allows}")
+        elif isinstance(e, Channel):
+            spec = CHANNELS[e.kind]
+            _require(isinstance(entities.get(e.line), Line),
+                     f"{where}: line {e.line!r} is not a declared [lines.*] "
+                     f"entry")
+            for t in e.target:
+                target = entities.get(t)
+                _require(target is not None and not isinstance(
+                    target, (Line, Channel)),
+                    f"{where}: target {t!r} is not a mode or composite")
+                if spec.any_target:
+                    # A LIST target is a multi-mode physical path; a composite
+                    # is spelled as the single scalar target (doc section 5).
+                    _require(len(e.target) == 1 or isinstance(target, Mode),
+                             f"{where}: {t!r} is a composite inside a target "
+                             f"list — a composite target is spelled alone")
+                    continue
+                _require(isinstance(target, Mode),
+                         f"{where}: a {e.kind} channel targets modes, "
+                         f"{t!r} is a composite")
+                try:
+                    derived_op(e.kind, target.kind)
+                except KeyError:
+                    raise RosterError(
+                        f"{where}: no ({e.kind} x {target.kind}) row in the "
+                        f"legality table — a {target.kind} cannot carry a "
+                        f"{e.kind} channel (capability by construction)"
+                        ) from None
+    _check_dag(entities)
+
+
+def _check_dag(entities: dict[str, Entity]) -> None:
+    """Composite -> composite references must form a DAG (cycle = load
+    error). Unreachable with today's kinds (no role allows a composite yet);
+    pinned separately so hierarchy kinds arrive onto a tested rule."""
+    visiting: set[str] = set()
+    done: set[str] = set()
+
+    def visit(name: str, path: tuple[str, ...]) -> None:
+        if name in done:
+            return
+        _require(name not in visiting,
+                 f"composite reference cycle: {' -> '.join(path + (name,))}")
+        visiting.add(name)
+        e = entities[name]
+        if isinstance(e, Composite):
+            for members in e.roles.values():
+                for n in members:
+                    if isinstance(entities.get(n), Composite):
+                        visit(n, path + (name,))
+        visiting.discard(name)
+        done.add(name)
+
+    for name, e in entities.items():
+        if isinstance(e, Composite):
+            visit(name, ())
+
+
+def _resolve_via(entities: dict[str, Entity]) -> dict[str, Entity]:
+    """Fill the via default on explicit readout channels (the unique
+    resonator whose qubit ref == the single target), then validate every via
+    ref. Runs AFTER graph validation: targets are known-good here."""
+    out = dict(entities)
+    for name, e in entities.items():
+        if not (isinstance(e, Channel) and e.kind == "readout"):
+            continue
+        where = _where(e)
+        if e.via is None:
+            _require(len(e.target) == 1,
+                     f"{where}: a multi-target readout channel needs an "
+                     f"explicit via (one measurement, one mediator)")
+            candidates = [m.name for m in entities.values()
+                          if isinstance(m, Mode) and m.kind == "resonator"
+                          and m.refs.get("qubit") == e.target[0]]
+            _require(len(candidates) == 1,
+                     f"{where}: via is required — "
+                     + (f"no resonator has qubit = {e.target[0]!r}"
+                        if not candidates else
+                        f"several resonators claim qubit = {e.target[0]!r}: "
+                        f"{sorted(candidates)}"))
+            e = replace(e, via=candidates[0])
+            out[name] = e
+        _require(isinstance(entities.get(e.via), Mode),
+                 f"{where}.via: {e.via!r} is not a declared mode")
+    return out
+
+
+# -------------------------------------------------------------- compilation
+
 @dataclass(frozen=True)
-class Component:
-    """One declared component: name + its two category slots + topology + design."""
+class LegalField:
+    """One compiled legal field of one entity, with why-legal provenance."""
 
-    name: str
-    physical: str | None = None
-    instrument: str | None = None
-    members: dict[str, str] = _field(default_factory=dict)
-    operations: tuple[str, ...] = ()
-    #: declared design targets, keyed by PHYSICAL-category field names.
-    design: dict[str, float] = _field(default_factory=dict)
+    spec: FieldSpec
+    why: str
 
+
+def _compile(entities: dict[str, Entity]) -> dict[str, dict[str, LegalField]]:
+    legal: dict[str, dict[str, LegalField]] = {}
+    for name, e in entities.items():
+        fields: dict[str, LegalField] = {}
+        if isinstance(e, Mode):
+            for f, spec in MODES[e.kind].fields.items():
+                fields[f] = LegalField(spec, f"modes kind {e.kind!r}")
+        elif isinstance(e, Composite):
+            for f, spec in COMPOSITES[e.kind].fields.items():
+                fields[f] = LegalField(spec, f"composites kind {e.kind!r}")
+            # Per-leg couplings are single-coupler facts: with zero or several
+            # coupler modes the referent is ambiguous, so the fields are
+            # illegal (the audit's data-integrity rule for qubit_pair).
+            if e.kind == "qubit_pair" and len(e.roles.get("coupler", ())) != 1:
+                fields.pop("j_high_c_hz", None)
+                fields.pop("j_low_c_hz", None)
+            for op in e.operations:
+                for f, spec in op_knob_fields(op).items():
+                    fields[f] = LegalField(spec, f"operation {op!r}")
+        elif isinstance(e, Channel):
+            multi = len(e.target) > 1
+            for f, spec in CHANNELS[e.kind].fields.items():
+                if multi and spec.role == "fact":
+                    # Per-target facts on a broadcast/joint channel: only the
+                    # __<target> instances are legal (a bare per-target fact
+                    # would be ambiguous); knobs and monitors stay singular
+                    # (one knob, one joint monitor — that is the point of a
+                    # multi-target channel). Paired-array partners re-point to
+                    # the same target's instance so the equal-length store
+                    # check never dangles.
+                    for t in e.target:
+                        inst = spec if spec.paired_with is None else replace(
+                            spec, paired_with=f"{spec.paired_with}__{t}")
+                        fields[f"{f}__{t}"] = LegalField(
+                            inst, f"channel kind {e.kind!r}, target {t!r}")
+                else:
+                    fields[f] = LegalField(spec, f"channel kind {e.kind!r}")
+        else:  # Line: zero neutral fields in v1
+            pass
+        legal[name] = fields
+    return legal
+
+
+# ------------------------------------------------------------------- roster
 
 class Roster:
-    """The validated component set of one device, with routing + topology lookup."""
+    """The validated, expanded entity graph of one device."""
 
-    def __init__(self, components: dict[str, Component]) -> None:
-        self.components = components
+    def __init__(self, entities: dict[str, Entity],
+                 legal: dict[str, dict[str, LegalField]]) -> None:
+        self.entities = entities
+        self._legal = legal
+        #: (target name, channel kind) -> the ONE channel default addressing
+        #: resolves to; absent when zero or several candidates exist
+        #: (multi-target channels never consume the slot).
+        self.defaults: dict[tuple[str, str], str] = {}
+        seen: dict[tuple[str, str], int] = {}
+        for e in entities.values():
+            if isinstance(e, Channel) and len(e.target) == 1:
+                key = (e.target[0], e.kind)
+                seen[key] = seen.get(key, 0) + 1
+                self.defaults[key] = e.name
+        for key, count in seen.items():
+            if count > 1:
+                del self.defaults[key]
 
     def __contains__(self, name: str) -> bool:
-        return name in self.components
+        return name in self.entities
 
-    def __iter__(self):
-        return iter(self.components)
+    def modes(self) -> dict[str, Mode]:
+        return {n: e for n, e in self.entities.items() if isinstance(e, Mode)}
 
-    def category(self, name: str) -> tuple[str | None, str | None]:
-        """The (physical, instrument) category pair bound to ``name``."""
-        c = self.components[name]
-        return c.physical, c.instrument
+    def composites(self) -> dict[str, Composite]:
+        return {n: e for n, e in self.entities.items()
+                if isinstance(e, Composite)}
 
-    def members(self, name: str) -> dict[str, str]:
-        return dict(self.components[name].members)
+    def lines(self) -> dict[str, Line]:
+        return {n: e for n, e in self.entities.items() if isinstance(e, Line)}
+
+    def channels(self) -> dict[str, Channel]:
+        return {n: e for n, e in self.entities.items()
+                if isinstance(e, Channel)}
+
+    def channels_of(self, target: str) -> tuple[Channel, ...]:
+        return tuple(e for e in self.entities.values()
+                     if isinstance(e, Channel) and target in e.target)
 
     def operations(self, name: str) -> tuple[str, ...]:
-        return self.components[name].operations
+        """Derived single-mode operations (from wiring, keyed on kind) for a
+        mode; declared operations for a composite."""
+        e = self.entities.get(name)
+        _require(e is not None, f"unknown entity {name!r}")
+        if isinstance(e, Composite):
+            return e.operations
+        _require(isinstance(e, Mode), f"{name!r} carries no operations")
+        ops: list[str] = []
+        for ch in self.channels_of(name):
+            op = derived_op(ch.kind, e.kind)
+            if op is not None and op not in ops:
+                ops.append(op)
+        return tuple(ops)
 
-    def design(self, name: str, field: str) -> float | None:
-        """The declared design value (None if not declared)."""
-        return self.components[name].design.get(field)
+    def fields_of(self, name: str, *, design: bool = False
+                  ) -> dict[str, FieldSpec]:
+        """The compiled legal field set of one entity — store-legal by
+        default; ``design=True`` gives the design.toml vocabulary instead."""
+        _require(name in self._legal, f"unknown entity {name!r}")
+        if design:
+            return {f: lf.spec for f, lf in self._legal[name].items()
+                    if lf.spec.design_ok}
+        return {f: lf.spec for f, lf in self._legal[name].items()
+                if not lf.spec.design_only}
 
-    def fields_of(self, name: str) -> dict[str, tuple[str, FieldSpec]]:
-        """Effective ``{field: (side, spec)}`` for one name — the union of its
-        two category slots, with ``requires_physical`` pruning applied (a
-        FixedTransmon's ReadableTransmon face has no idle_flux_v)."""
-        c = self.components[name]
-        out: dict[str, tuple[str, FieldSpec]] = {}
-        for cat_name in (c.physical, c.instrument):
-            if cat_name is None:
-                continue
-            spec = CATEGORIES[cat_name]
-            for f, fs in spec.fields.items():
-                if fs.requires_physical and c.physical not in fs.requires_physical:
-                    continue
-                out[f] = (spec.side, fs)
-        return out
-
-    def resolve(self, name: str, field: str) -> tuple[str, FieldSpec]:
-        """THE routing function: (store side, spec) for one component's field.
-
-        Raises :class:`KeyError` with a category-aware message naming the
-        component's actual fields (callers wrap it for their own error style).
-        """
-        if name not in self.components:
-            raise KeyError(f"unknown component {name!r} — roster has: "
-                           f"{', '.join(sorted(self.components))}")
-        fields = self.fields_of(name)
-        if field not in fields:
-            c = self.components[name]
-            cats = " + ".join(x for x in (c.physical, c.instrument) if x)
-            raise KeyError(
-                f"{cats or 'component'} {name!r} has no field {field!r} — its "
-                f"fields: {', '.join(sorted(fields)) or '(none)'}")
-        return fields[field]
-
-    def pushed(self, name: str) -> tuple[str, ...]:
-        """The vendor-realized fields of one name (instrument slot, pruned),
-        in declaration order — the per-name successor of PUSHED_FIELDS."""
-        c = self.components[name]
-        if c.instrument is None:
-            return ()
-        return tuple(f for f in pushed_fields(c.instrument)
-                     if f in self.fields_of(name))
-
-    def one(self, name: str, category: str) -> str:
-        """The exactly-one component of ``category`` reachable from ``name``:
-        directly (a term referencing it) or via one shared interaction term
-        (``one("q1", "Resonator") -> "q1_res"`` through q1_ro). Raises
-        :class:`RosterError` unless exactly one exists."""
-        found: set[str] = set()
-        for other in self.components.values():
-            if name in other.members.values():
-                if category in (other.physical, other.instrument):
-                    found.add(other.name)          # the term itself
-                for m in other.members.values():   # siblings through the term
-                    if m != name and category in (
-                            self.components[m].physical, self.components[m].instrument):
-                        found.add(m)
-        if len(found) != 1:
+    def spec(self, name: str, field: str) -> FieldSpec:
+        """FieldSpec for a store write, with exact-cause errors."""
+        _require(name in self._legal, f"unknown entity {name!r}")
+        lf = self._legal[name].get(field)
+        if lf is not None and lf.spec.design_only:
             raise RosterError(
-                f"expected exactly one {category} related to {name!r}, found "
-                f"{sorted(found) or 'none'} — declare the topology in components.toml")
-        return found.pop()
+                f"{name}.{field}: design.toml-only vocabulary (a declared "
+                f"fabrication constant, never measured into a store)")
+        if lf is not None:
+            return lf.spec
+        e = self.entities[name]
+        if isinstance(e, Composite):
+            for suffix in OP_KNOBS:
+                if field.endswith("_" + suffix):
+                    op = field[: -len(suffix) - 1]
+                    if op and op not in e.operations:
+                        raise RosterError(
+                            f"{name}.{field}: operation {op!r} is not "
+                            f"declared on this composite "
+                            f"(declared: {sorted(e.operations)})")
+        raise RosterError(
+            f"{name}.{field}: unknown field for this entity "
+            f"(kind {e.kind!r}; legal: {sorted(self.fields_of(name))})")
 
-    def names(self, instrument_category: str | None = None) -> list[str]:
-        """All names, or those whose instrument slot matches (default targets)."""
-        if instrument_category is None:
-            return list(self.components)
-        return [n for n, c in self.components.items()
-                if c.instrument == instrument_category]
+    def resolve_field(self, name: str, field: str) -> tuple[str, FieldSpec]:
+        """Qubit-closure addressing: route ``q1.pi_amp`` to the entity that
+        owns the field. Search order — SELF first, then the target's DEFAULT
+        channels, then the attached resonator; first hit wins (self-
+        precedence resolves the one legal overlap, n_th). Explicit entity
+        names (``q1_xy.pi_amp``) hit on self and pass straight through."""
+        _require(name in self._legal, f"unknown entity {name!r}")
+        fields = self.fields_of(name)
+        if field in fields:
+            return name, fields[field]
+        e = self.entities[name]
+        if isinstance(e, Mode):
+            for kind, chspec in CHANNELS.items():
+                ch = self.defaults.get((name, kind))
+                if ch is not None:
+                    chf = self.fields_of(ch)
+                    if field in chf:
+                        return ch, chf[field]
+                elif field in chspec.fields:
+                    # The field belongs to this kind but the target has no
+                    # DEFAULT channel of it — several declared, or none.
+                    extras = sorted(c.name for c in self.channels_of(name)
+                                    if c.kind == kind)
+                    if extras:
+                        raise RosterError(
+                            f"{name}.{field}: ambiguous — several {kind} "
+                            f"channels on {name!r}: {extras}; address one "
+                            f"explicitly")
+            hits = []
+            for res in self.entities.values():
+                if (isinstance(res, Mode) and res.kind == "resonator"
+                        and res.refs.get("qubit") == name
+                        and field in self.fields_of(res.name)):
+                    hits.append(res.name)
+            if len(hits) == 1:
+                return hits[0], self.fields_of(hits[0])[field]
+            if len(hits) > 1:
+                raise RosterError(
+                    f"{name}.{field}: ambiguous — several resonators claim "
+                    f"qubit {name!r}: {sorted(hits)}; address one explicitly")
+        # Hints cover the field AND its per-target instances on multi-target
+        # channels (q1.flux_offset on a broadcast coil -> coil.flux_offset__q1).
+        owners = sorted(f"{n}.{field}" for n in self.entities
+                        if field in self.fields_of(n))
+        owners += sorted(f"{n}.{field}__{name}" for n in self.entities
+                         if f"{field}__{name}" in self.fields_of(n))
+        hint = (f" — did you mean {' or '.join(owners[:3])}?"
+                if owners else "")
+        raise RosterError(
+            f"{name}.{field}: no entity in {name!r}'s closure carries this "
+            f"field{hint}")
+
+    def default_channel(self, target: str, kind: str) -> str:
+        """Default addressing: the ONE channel of this kind on this target."""
+        name = self.defaults.get((target, kind))
+        _require(name is not None,
+                 f"no unique {kind} channel for {target!r} — extras need "
+                 f"explicit channel addressing")
+        return name
+
+    def signatures(self) -> dict[str, tuple]:
+        """name -> lock signature of the EXPANDED roster: (entity class,
+        name, kind, target(s) for channels) — exactly the doc section-7
+        identity. Provenance, line, via, roles, and operations are NOT here,
+        so doc-legal post-cut appends never change a frozen signature."""
+        return {n: e.signature() for n, e in self.entities.items()}
+
+
+# ------------------------------------------------------------------ loading
+
+_SECTIONS = ("modes", "composites", "lines", "channels")
+
+
+def parse_components(text: str, *, source: str = COMPONENTS_FILE) -> Roster:
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as err:
+        raise RosterError(f"{source}: {err}") from None
+    stamp = data.get("schema")
+    _require(isinstance(stamp, int) and not isinstance(stamp, bool)
+             and stamp == SCHEMA,
+             f"{source}: schema = {SCHEMA} required (the integer; found "
+             f"{stamp!r}); pre-greenfield rosters are not read")
+    unknown = set(data) - {"schema", *_SECTIONS}
+    _require(not unknown,
+             f"{source}: unknown section(s) {sorted(unknown)}"
+             + (" — design values live in design.toml"
+                if "design" in unknown else ""))
+    for sec in _SECTIONS:
+        _require(isinstance(data.get(sec, {}), dict),
+                 f"{source}: [{sec}] must be a table of tables")
+    modes = _parse_modes(data.get("modes", {}))
+    composites = _parse_composites(data.get("composites", {}))
+    lines, riders = _parse_lines(data.get("lines", {}))
+    channels = _parse_channels(data.get("channels", {}))
+    minted_modes, minted_channels = _expand(modes, riders)
+    entities = _collide(modes, minted_modes, composites, lines, channels,
+                        minted_channels)
+    _validate_graph(entities)
+    entities = _resolve_via(entities)
+    return Roster(entities, _compile(entities))
 
 
 def load_components(device_dir: str | Path) -> Roster:
-    """Load and validate ``<device_dir>/components.toml``.
-
-    Raises :class:`RosterError` naming the exact fault (a wrong roster must
-    never half-load), or :class:`FileNotFoundError` whose message carries the
-    minimal template (the component model requires a roster per device).
-    """
-    path = Path(device_dir) / COMPONENTS_FILE
+    """The device's roster. ``device_dir`` is the device folder (its
+    ``components.toml`` sibling of ``cooldowns.toml``); a direct path to the
+    file itself is accepted too."""
+    path = Path(device_dir)
+    if path.is_dir() or path.suffix != ".toml":
+        path = path / COMPONENTS_FILE
     if not path.is_file():
-        raise FileNotFoundError(
-            f"{path} not found — the component model needs a roster per device. "
-            f"Minimal template:\n{TEMPLATE}")
-    # utf-8-sig: tolerate a UTF-8 BOM — PowerShell 5.1's `-Encoding utf8`
-    # writes one, and the roster is a hand-edited file.
-    data = tomllib.loads(path.read_text(encoding="utf-8-sig"))
-    raw = data.get("components", {})
-    if not isinstance(raw, dict) or not raw:
-        raise RosterError(f"{path}: no [components.<name>] tables")
-
-    components: dict[str, Component] = {}
-    for name, entry in raw.items():
-        if "." in name:
-            raise RosterError(f"{path}: component name {name!r} must be dot-free "
-                              f"(the name.field grammar splits on the first dot)")
-        if not isinstance(entry, dict):
-            raise RosterError(f"{path}: [components.{name}] must be a table")
-        phys = entry.get("physical")
-        instr = entry.get("instrument")
-        if phys is None and instr is None:
-            raise RosterError(f"{path}: {name} declares neither physical nor "
-                              f"instrument category")
-        for slot, cat in (("physical", phys), ("instrument", instr)):
-            if cat is None:
-                continue
-            if cat not in CATEGORIES:
-                raise RosterError(f"{path}: {name}.{slot} = {cat!r} is not a known "
-                                  f"category ({', '.join(sorted(CATEGORIES))})")
-            if CATEGORIES[cat].side != slot:
-                raise RosterError(f"{path}: {cat} is a {CATEGORIES[cat].side}-side "
-                                  f"category and cannot fill {name}.{slot}")
-        operations = tuple(entry.get("operations", ()))
-        if instr is not None:
-            bad_ops = set(operations) - set(CATEGORIES[instr].operations)
-            if bad_ops:
-                raise RosterError(f"{path}: {name} declares operations "
-                                  f"{sorted(bad_ops)} outside {instr}'s vocabulary "
-                                  f"{CATEGORIES[instr].operations}")
-        design = entry.get("design", {})
-        if not isinstance(design, dict):
-            raise RosterError(f"{path}: [components.{name}.design] must be a table")
-        components[name] = Component(
-            name=name, physical=phys, instrument=instr,
-            members=dict(entry.get("members", {})),
-            operations=operations, design=dict(design),
-        )
-
-    roster = Roster(components)
-    for name, c in components.items():
-        # members: roles legal for the category, targets exist, SAME-SIDE slot
-        # of the member matches the allowed categories (interaction terms are
-        # physical-side, so they constrain the member's physical slot).
-        role_spec = CATEGORIES[c.physical].member_roles if c.physical else {}
-        if c.members and not role_spec:
-            raise RosterError(f"{COMPONENTS_FILE}: {name} takes no members "
-                              f"(kind {CATEGORIES[c.physical].kind if c.physical else '-'})")
-        for role, target in c.members.items():
-            if role not in role_spec:
-                raise RosterError(f"{COMPONENTS_FILE}: {name} has unknown member "
-                                  f"role {role!r} (allowed: {', '.join(role_spec)})")
-            if target not in components:
-                raise RosterError(f"{COMPONENTS_FILE}: {name}.{role} = {target!r} "
-                                  f"is not a declared component")
-            member_cat = components[target].physical
-            if member_cat not in role_spec[role]:
-                raise RosterError(
-                    f"{COMPONENTS_FILE}: {name}.{role} = {target!r} must be one of "
-                    f"{role_spec[role]} (its physical slot is {member_cat!r})")
-        if c.physical:  # optional roles (e.g. Coupling's coupler satellite) may be omitted
-            missing = (set(role_spec) - set(CATEGORIES[c.physical].optional_roles)
-                       - set(c.members))
-        else:
-            missing = set(role_spec) - set(c.members)
-        if missing:
-            raise RosterError(f"{COMPONENTS_FILE}: {name} is missing member "
-                              f"role(s): {', '.join(sorted(missing))}")
-        # per-name field collision across the two slots
-        if c.physical and c.instrument:
-            clash = set(CATEGORIES[c.physical].fields) & set(CATEGORIES[c.instrument].fields)
-            if clash:
-                raise RosterError(f"{COMPONENTS_FILE}: {name}: field(s) "
-                                  f"{sorted(clash)} declared by BOTH its categories "
-                                  f"— routing would be ambiguous")
-        # design keys: physical vocabulary, finite numbers
-        if c.design and not c.physical:
-            raise RosterError(f"{COMPONENTS_FILE}: {name} has design values but no "
-                              f"physical category (design is physical-side only)")
-        for f, v in c.design.items():
-            if c.physical and f not in CATEGORIES[c.physical].fields:
-                raise RosterError(
-                    f"{COMPONENTS_FILE}: {name}.design.{f} is not a "
-                    f"{c.physical} field ({', '.join(CATEGORIES[c.physical].fields)})")
-            if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
-                raise RosterError(f"{COMPONENTS_FILE}: {name}.design.{f} = {v!r} "
-                                  f"must be a finite number")
-    return roster
+        raise RosterError(
+            f"no {path} — the roster is required. Smallest valid file:\n"
+            + TEMPLATE)
+    # utf-8-sig: PowerShell 5.1's `-Encoding utf8` writes a BOM into this
+    # hand-edited file; tolerate it (the old loader's deliberate choice).
+    return parse_components(path.read_text(encoding="utf-8-sig"),
+                            source=str(path))

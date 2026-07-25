@@ -1,15 +1,13 @@
-"""Single-shot readout fidelity — IQ blobs (backend-free half).
+"""Single-shot readout fidelity — IQ blobs, greenfield.
 
-The stack's first PER-SHOT experiment: prepare |g> and |e|, record every shot's
-I/Q point (no averaging), fit a two-Gaussian mixture and report the assignment
-fidelity and the confusion probabilities. ``p_e_given_g`` doubles as the
-thermal-population + assignment-error proxy — the quantity to compare across
-instruments for the same sample (filter runs by backend).
-
-Contract note: unlike every other experiment, the "sweep" axes are the prepared
-state {0, 1} and the shot index — probes must return one I/Q pair PER SHOT
-(non-averaged acquisition; Qblox: append bin mode, QM: no ``.average()`` on the
-stream). ``update()`` is a no-op (reported quantities).
+Port of :mod:`scqo.experiments.single_shot_readout`. The physics half
+(per-shot ``prepared_state`` x ``shot_idx`` contract, two-Gaussian fit) is
+byte-for-byte; what moved is the device surface in ``update()``: the
+aggregate ``readout_fidelity`` is DELETED — the per-state ``fidelity_g`` /
+``fidelity_e`` monitors and the ``pos_*`` blob centers land on the target's
+READOUT CHANNEL, where the discriminator knobs (``readout_rotation_rad`` /
+``readout_threshold`` / ``readout_rus_threshold``) a discriminating driver
+proposes now live too.
 """
 
 from __future__ import annotations
@@ -20,11 +18,12 @@ import numpy as np
 from pydantic import Field
 
 from .._scqat import per_qubit_results
-from ._sim import stable_seed
 from ..contract import DatasetContract
-from ..experiment import Experiment
+from ._sim import stable_seed
 from ..parameters import Parameters, TargetSelection
 from ..result import Outcome, Result
+from ..experiment import Experiment
+from . import register
 
 
 class SingleShotReadoutParameters(TargetSelection, Parameters):
@@ -34,23 +33,27 @@ class SingleShotReadoutParameters(TargetSelection, Parameters):
 
 
 class SingleShotReadoutResult(Result):
-    """``fit[qubit]``: ``readout_fidelity``, ``p_e_given_g`` (thermal + error proxy),
-    ``p_g_given_e`` (relaxation during readout + error), ``outlier_probability``,
-    and the measured blob centers ``mean_g_i``/``mean_g_q``/``mean_e_i``/``mean_e_q``
+    """``fit[qubit]``: ``readout_fidelity`` (aggregate, run-record-only — the
+    stored monitors are the per-state ``fidelity_g``/``fidelity_e`` on the
+    readout channel), ``p_e_given_g`` (thermal + error proxy), ``p_g_given_e``
+    (relaxation during readout + error), ``outlier_probability``, and the
+    measured blob centers ``mean_g_i``/``mean_g_q``/``mean_e_i``/``mean_e_q``
     (acquisition-frame units; instrument-dependent run-record facts — the input a
     driver's discriminator calibration consumes)."""
 
 
+@register
 class SingleShotReadout(Experiment):
     """Backend-agnostic IQ blobs. ``probe()`` must record every shot (no averaging)."""
 
     name: ClassVar[str] = "single_shot_readout"
     description: ClassVar[str] = (
         "Prepare |g> and |e> and record every readout shot's I/Q point; a two-Gaussian "
-        "mixture gives the assignment fidelity (recorded, record-only), the confusion "
-        "probabilities (run-record only) and the measured |g>/|e> blob centers (stored "
-        "as the readout_pos_* reference). A driver that can discriminate additionally "
-        "PROPOSES the readout discriminator settings (readout_rotation_rad / "
+        "mixture gives the per-state assignment fidelities (stored as the readout "
+        "channel's fidelity_g/fidelity_e monitors), the confusion probabilities "
+        "(run-record only) and the measured |g>/|e> blob centers (stored as the "
+        "channel's pos_* reference). A driver that can discriminate additionally "
+        "PROPOSES the readout channel's discriminator knobs (readout_rotation_rad / "
         "readout_threshold / readout_rus_threshold) as governed suggestions — review "
         "with scqo accept, then re-run to confirm; the run itself never mutates the "
         "readout frame, so its figure always shows the data as measured."
@@ -140,28 +143,37 @@ class SingleShotReadout(Experiment):
         return result
 
     def update(self) -> None:
-        # Record the assignment fidelity + the measured |g>/|e> blob centers as device
-        # state (record-only monitor fields). The centers are the stored REFERENCE the
-        # IQ->1D reductions consume (radial ref / axial positions) and the input of the
-        # volts->population conversion; consumers must staleness-gate them (they drift
-        # with the readout condition). The confusion entries (p_e_given_g = thermal
+        # Record the per-state assignment fidelities + the measured |g>/|e> blob
+        # centers on the target's READOUT CHANNEL (monitor fields, never pushed).
+        # fidelity_g/fidelity_e come from the confusion entries (rows sum to 1, so
+        # F_g = 1 - p_e_given_g and F_e = 1 - p_g_given_e); the aggregate
+        # (F_g+F_e)/2 is derivable and never stored (run-record-only in the fit).
+        # The centers are the stored REFERENCE the IQ->1D reductions consume
+        # (radial ref / axial positions) and the input of the volts->population
+        # conversion; consumers must staleness-gate them (they drift with the
+        # readout condition). The confusion entries (p_e_given_g = thermal
         # population etc.) deliberately stay run-record-only: they are
-        # instrument-dependent — compare across instruments by query, never as device
-        # state. The run never mutates the readout frame, so the centers are always in
-        # the frame the figure shows and are always safe to store.
+        # instrument-dependent — compare across instruments by query, never as
+        # device state. The run never mutates the readout frame, so the centers
+        # are always in the frame the figure shows and are always safe to store.
         #
-        # The DISCRIMINATOR settings (readout_rotation_rad / readout_threshold /
-        # readout_rus_threshold) are a driver concern (the vendor-convention math needs
-        # the current rotation): a backend that can discriminate overrides update() to
-        # PROPOSE them from these centers through self.device (governed suggestions).
+        # The DISCRIMINATOR knobs (the readout channel's readout_rotation_rad /
+        # readout_threshold / readout_rus_threshold) are a driver concern (the
+        # vendor-convention math needs the current rotation): a backend that can
+        # discriminate overrides update() to PROPOSE them from these centers
+        # through self.device (governed suggestions).
         if self.result is None:
             return
-        pos_fields = (("readout_pos_g_i", "mean_g_i"), ("readout_pos_g_q", "mean_g_q"),
-                      ("readout_pos_e_i", "mean_e_i"), ("readout_pos_e_q", "mean_e_q"))
+        pos_fields = (("pos_g_i", "mean_g_i"), ("pos_g_q", "mean_g_q"),
+                      ("pos_e_i", "mean_e_i"), ("pos_e_q", "mean_e_q"))
         for qubit, fit in self.result.fit.items():
             if self.result.outcomes[qubit] is Outcome.SUCCESSFUL:
-                view = self.device.component(qubit)
-                view.readout_fidelity = fit["readout_fidelity"]
+                view = self.device.channel(qubit, "readout")
+                view.fidelity_g = 1.0 - fit["p_e_given_g"]
+                view.fidelity_e = 1.0 - fit["p_g_given_e"]
                 if np.all(np.isfinite([fit[key] for _, key in pos_fields])):
                     for field, key in pos_fields:
                         setattr(view, field, fit[key])
+
+    def probe(self):  # pragma: no cover - driver half
+        raise NotImplementedError("a driver backend supplies probe()")

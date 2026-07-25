@@ -1,60 +1,37 @@
-"""Resonator spectroscopy vs ABSOLUTE readout power — the CHAIN-STEPPED punchout.
+"""Resonator spectroscopy vs ABSOLUTE power — chain-stepped punchout, greenfield.
 
-The sibling punchout (:mod:`.resonator_spectroscopy_power_amp`) solves the chain
-for the window top once and sweeps the digital amplitude down from it in one fast
-hardware program — quick, but its low end runs at a tiny DAC amplitude (poor SNR). This
-experiment instead steps the OUTPUT CHAIN per power point with a **Python loop**
-(neither backend can change QM ``full_scale_power_dbm`` / Qblox ``output_att``
-inside the FPGA loop), so the digital amplitude stays ~0.5 (best SNR) at every
-point and the absolute range is wide:
-
-* per point, the chain is re-solved so the digital amplitude stays at the
-  canonical ~0.5 of full scale wherever the chain can reach (the
-  ``readout_power_dbm`` setter policy: chain as attenuated as possible, the
-  amplitude absorbing the exact residual — every point hits its requested power
-  exactly, so the uniform-dB axis is truthful on both backends);
-* per point, ONE 1D detuning acquisition runs at CONSTANT power (drivers reuse
-  their plain resonator-spectroscopy probes, including the depletion waits), and
-  the points ascend low->high — a high->low power jump inside a fast loop, where
-  resonator ring-down could contaminate, never happens;
-* the run costs N_power separate compile+run cycles (QM: config+open per point,
-  seconds each — the default 21 points adds minutes; the price of per-point SNR).
-
-Audit trail (user-decided): only the BOUNDARY writes are recorded — set to
-``max_power_dbm`` at the start, revert at the end (2 ChangeRecords + coupled
-echoes per qubit, through the recorded device view). The per-point chain steps go
-through the RAW vendor views: unrecorded acquisition detail (like sweeping an IF
-inside a program), tracked instead in the dataset coords and the figure's
-amp/chain subplot. The knee found is proposed as ``readout_power_dbm`` (+ the dip
-position as ``readout_freq``) through the normal suggestion flow — nothing
-survives the run unless accepted.
-
-Absolute-scale honesty: QM's dBm axis is exact at the port; Qblox derives from
-the nominal +5 dBm full scale (±a few dB). A per-setup photon-number anchor
-(AC-Stark) is the Phase-3 refinement.
+Port of :mod:`scqo.experiments.resonator_spectroscopy_power_chain`. The
+physics half (the per-point chain-stepped run loop, simulator, punchout
+estimate, chain-provenance coords) is byte-for-byte; what moved is the
+device surface: the boundary set/revert, the estimate reads, and update()
+now address the target's READOUT CHANNEL (``readout_power_dbm`` /
+``readout_freq_hz``) via ``device.channel(t, "readout")``, and the
+per-point RAW vendor steps resolve the same channel entity through the
+roster's default-channel map.
 """
 
 from __future__ import annotations
 
 import math
-from typing import Any, ClassVar, Literal
+from typing import ClassVar, Literal
 
 import numpy as np
 import xarray as xr
 from pydantic import Field, model_validator
 
 from .._scqat import per_qubit_results
-from ._sim import stable_seed
 from ..contract import DatasetContract
-from ..experiment import Experiment
+from ._sim import stable_seed
 from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
+from ..experiment import Experiment
+from . import register
 
 
 class ResonatorSpectroscopyPowerChainParameters(TargetSelection, AveragingParameters):
     """Inputs for the chain-stepped absolute-power punchout scan."""
 
-    frequency_span_hz: float = Field(20e6, gt=0, description="Total detuning span around the current readout_freq.")
+    frequency_span_hz: float = Field(20e6, gt=0, description="Total detuning span around the current readout_freq_hz.")
     num_freq_points: int = Field(101, gt=1, description="Number of frequency points.")
     max_power_dbm: float = Field(
         -20.0,
@@ -88,10 +65,11 @@ class ResonatorSpectroscopyPowerChainParameters(TargetSelection, AveragingParame
 
 
 class ResonatorSpectroscopyPowerChainResult(Result):
-    """``fit[qubit]``: ``readout_power_dbm`` (new), ``readout_freq`` (new),
+    """``fit[qubit]``: ``readout_power_dbm`` (new), ``readout_freq_hz`` (new),
     ``optimal_power_dbm``, ``frequency_shift_hz``, plus the old values."""
 
 
+@register
 class ResonatorSpectroscopyPowerChain(Experiment):
     """Backend-agnostic chain-stepped punchout. ``probe()`` is supplied by a driver
     and builds the 1D DETUNING program at the CURRENT device state (the core run()
@@ -102,7 +80,7 @@ class ResonatorSpectroscopyPowerChain(Experiment):
         "Careful punchout that STEPS THE OUTPUT CHAIN (QM full_scale_power_dbm / Qblox "
         "output_att) per power point, holding the digital amplitude ~0.5 for best SNR (slow: "
         "one compile+run cycle per point; wide absolute range; cross-backend comparable). "
-        "Absolute dBm axis; proposes readout_power_dbm + readout_freq. Use for a calibrated "
+        "Absolute dBm axis; proposes readout_power_dbm + readout_freq_hz. Use for a calibrated "
         "wide sweep. (The sibling resonator_spectroscopy_power_amp is the fast amplitude-sweep "
         "version.)"
     )
@@ -142,8 +120,12 @@ class ResonatorSpectroscopyPowerChain(Experiment):
         power_grid = axes_2d["power_dbm"]
         top = float(self.params.max_power_dbm)
         targets = list(self.params.targets)
-        views = {q: self.device.component(q) for q in targets}
-        raw_views = {q: self.backend.device.component(q) for q in targets}
+        views = {q: self.device.channel(q, "readout") for q in targets}
+        raw_views = {
+            q: self.backend.device.component(
+                self.device.roster.default_channel(q, "readout"))
+            for q in targets
+        }
 
         previous: dict[str, float] = {}
         for q, view in views.items():
@@ -240,9 +222,11 @@ class ResonatorSpectroscopyPowerChain(Experiment):
         # optimal-power logic is derivative-based (Hz per dB step) and its output
         # `optimal_power` is already an absolute dBm value on this axis.
         targets = list(self.dataset["target"].values)
-        old_freqs = {q: float(self.device.component(q).readout_freq) for q in targets}
+        old_freqs = {q: float(self.device.channel(q, "readout").readout_freq_hz)
+                     for q in targets}
         # estimate() runs after the revert, so this reads the standing (pre-run) chain.
-        old_power = {q: float(self.device.component(q).readout_power_dbm) for q in targets}
+        old_power = {q: float(self.device.channel(q, "readout").readout_power_dbm)
+                     for q in targets}
         prepared = self.dataset.rename({"detuning_hz": "detuning", "power_dbm": "power"})
         prepared = prepared.transpose("target", "power", "detuning")
         detuning = prepared["detuning"].values
@@ -263,10 +247,10 @@ class ResonatorSpectroscopyPowerChain(Experiment):
             result.fit[qubit] = {
                 "readout_power_dbm": optimal_dbm,
                 "optimal_power_dbm": optimal_dbm,
-                "readout_freq": old_freqs[qubit] + shift,
+                "readout_freq_hz": old_freqs[qubit] + shift,
                 "frequency_shift_hz": shift,
                 "old_readout_power_dbm": old_power[qubit],
-                "old_readout_freq": old_freqs[qubit],
+                "old_readout_freq_hz": old_freqs[qubit],
             }
             ok = bool(r["optimal_success"]) and np.isfinite(optimal_dbm) and np.isfinite(shift)
             result.outcomes[qubit] = Outcome.SUCCESSFUL if ok else Outcome.FAILED
@@ -319,6 +303,9 @@ class ResonatorSpectroscopyPowerChain(Experiment):
             return
         for qubit, fit in self.result.fit.items():
             if self.result.outcomes[qubit] is Outcome.SUCCESSFUL:
-                view = self.device.component(qubit)
+                view = self.device.channel(qubit, "readout")
                 view.readout_power_dbm = fit["readout_power_dbm"]
-                view.readout_freq = fit["readout_freq"]
+                view.readout_freq_hz = fit["readout_freq_hz"]
+
+    def probe(self):  # pragma: no cover - driver half
+        raise NotImplementedError("a driver backend supplies probe()")

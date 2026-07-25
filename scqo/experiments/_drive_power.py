@@ -1,10 +1,14 @@
-"""Shared drive-power boundary for saturation-drive experiments (backend-free).
+"""Shared drive-power boundary for saturation-drive experiments — greenfield.
 
-``qubit_spectroscopy`` and ``qubit_spectroscopy_flux_pulse`` both treat the saturation
-power as a per-run STIMULUS: set ``drive_power_dbm`` through the RecordingDevice
-before acquiring, then revert it exactly afterwards (the punchout discipline of
-``resonator_spectroscopy_power_amp``). The boundary lives here so the two
-experiments share ONE implementation instead of copy-pasting the try/finally.
+Port of :mod:`scqo.experiments._drive_power`. The boundary discipline is
+unchanged (recorded set of ``drive_power_dbm`` before acquisition, exact
+revert afterwards — the punchout discipline of
+``resonator_spectroscopy_power_amp``); what moved is the device surface:
+the knob lives on each target's DRIVE CHANNEL, so the boundary reads and
+writes through ``experiment.device.channel(t, "drive")`` views instead of
+the old component views. ``qubit_spectroscopy`` and
+``qubit_spectroscopy_flux_pulse`` share this ONE implementation instead of
+copy-pasting the try/finally.
 """
 
 from __future__ import annotations
@@ -20,7 +24,7 @@ if TYPE_CHECKING:
 @contextmanager
 def drive_power_boundary(experiment: "Experiment", target_dbm: float) -> Iterator[None]:
     """Recorded set -> (acquire, in the ``with`` body) -> exact revert of
-    ``drive_power_dbm`` for every target.
+    ``drive_power_dbm`` for every target's drive channel.
 
     Each target's standing ``drive_power_dbm`` is read and validated FIRST (a
     single unknown/non-finite chain aborts before any write, so the device is
@@ -33,7 +37,7 @@ def drive_power_boundary(experiment: "Experiment", target_dbm: float) -> Iterato
     """
     target_dbm = float(target_dbm)
     targets = list(experiment.params.targets)
-    views = {q: experiment.device.component(q) for q in targets}
+    views = {q: experiment.device.channel(q, "drive") for q in targets}
 
     previous: dict[str, float] = {}
     for q, view in views.items():

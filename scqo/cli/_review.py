@@ -28,7 +28,7 @@ def _fmt_value(value: Any) -> str:
 def format_table(suggestions: list[dict]) -> str:
     """Numbered table of a run's suggestions (row numbers are stable: stored order)."""
     header = (
-        f"  {'#':>3} {'component':10} {'field':18} {'store':10} "
+        f"  {'#':>3} {'entity':10} {'field':18} {'role':10} "
         f"{'current':>14}    {'suggested':>14}   status"
     )
     lines = [header]
@@ -41,7 +41,7 @@ def format_table(suggestions: list[dict]) -> str:
             status += f" [operator: {s['proposed_by']}]" if s.get("proposed_by") else " [operator]"
         note = f"  # {s['comment']}" if s.get("comment") else ""
         lines.append(
-            f"  {i:>3} {s['component']:10} {s['field']:18} {s['store']:10} "
+            f"  {i:>3} {s['entity']:10} {s['field']:18} {s['role']:10} "
             f"{_fmt_value(s.get('before')):>14} -> {_fmt_value(s['after']):>14}{unit}"
             f"   {status}{note}"
         )
@@ -71,10 +71,10 @@ def parse_selection(text: str, suggestions: list[dict], *, allow_decided: bool =
         elif "." in token:
             name, _, field = token.partition(".")
             matches = [i for i in selectable
-                       if suggestions[i]["component"] == name and suggestions[i]["field"] == field]
+                       if suggestions[i]['entity'] == name and suggestions[i]["field"] == field]
         else:
             matches = [i for i in selectable
-                       if token in (suggestions[i]["component"], suggestions[i]["field"])]
+                       if token in (suggestions[i]['entity'], suggestions[i]["field"])]
         if not matches:
             raise ValueError(f"nothing {'selectable' if allow_decided else 'pending'} matches {token!r}")
         chosen += [i for i in matches if i not in chosen]
@@ -89,12 +89,12 @@ def format_summary(summary: dict) -> str:
     for item in summary.get("applied", []):
         was = item.get("current") if item.get("current") is not None else item.get("before")
         lines.append(
-            f"  applied  {item['component']}.{item['field']} "
-            f"{_fmt_value(was)} -> {_fmt_value(item['after'])}  [{item['store']}]"
+            f"  applied  {item['entity']}.{item['field']} "
+            f"{_fmt_value(was)} -> {_fmt_value(item['after'])}  [{item['role']}]"
         )
     for item in summary.get("stale", []):
         lines.append(
-            f"  SKIPPED  {item['component']}.{item['field']}: suggested from "
+            f"  SKIPPED  {item['entity']}.{item['field']}: suggested from "
             f"{_fmt_value(item['before'])} but the current value is "
             f"{_fmt_value(item['current'])} (stale — --force to apply anyway)"
         )
@@ -190,22 +190,22 @@ def review_interactively(
             when = (item["decided_at"] or "")[:10] or "?"
             who = item["decided_by"] or "?"
             if item["status"] == "accepted":
-                question = (f"row {row} {item['component']}.{item['field']} was accepted {when} by {who} - "
+                question = (f"row {row} {item['entity']}.{item['field']} was accepted {when} by {who} - "
                             f"re-apply (rollback, overwriting the current "
                             f"{_fmt_value(item['current'])})? [y/N]: ")
             else:
-                question = (f"row {row} {item['component']}.{item['field']} was rejected {when} by {who} - "
+                question = (f"row {row} {item['entity']}.{item['field']} was rejected {when} by {who} - "
                             f"accept it after all? [y/N]: ")
             if not _confirm(question):
                 print(f"  skipped row {row} (unchanged)", file=sys.stderr)
                 continue
         elif item["status"] == "pending" and item["stale"] and not force:
-            print(f"row {row} {item['component']}.{item['field']}: suggested from "
+            print(f"row {row} {item['entity']}.{item['field']}: suggested from "
                   f"{_fmt_value(item['before'])} but the current value is "
                   f"{_fmt_value(item['current'])} (changed since this run).", file=sys.stderr)
             if not _confirm(f"  overwrite {_fmt_value(item['current'])} -> "
                             f"{_fmt_value(item['after'])}? [y/N]: "):
-                print(f"  skipped {item['component']}.{item['field']} (stays pending)", file=sys.stderr)
+                print(f"  skipped {item['entity']}.{item['field']} (stays pending)", file=sys.stderr)
                 continue
         kept.append(i)
 

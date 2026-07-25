@@ -1,9 +1,11 @@
-"""Qubit relaxation vs flux — T1 spectrum over a swept z bias (backend-free half).
+"""Qubit relaxation vs flux — T1 spectrum over a swept z bias, greenfield.
 
-Excite, wait a swept delay while a Z pulse holds the qubit off its idle flux, and
-fit the T1 decay at every flux point: a T1-vs-flux map for TLS-defect hunting.
-Record-only diagnostic — no ``update()``; the per-flux fits live in the run
-record (``result.fit``).
+Port of :mod:`scqo.experiments.qubit_relaxation_flux`. The physics half is
+byte-for-byte; this is a record-only diagnostic (no ``update()``, the
+per-flux fits live in ``result.fit``), so nothing lands on the device
+surface — only the imports moved (capability helpers from
+``scqo.experiments._capabilities.flux`` / ``.state_readout``) and the
+driver stub ``probe()`` was added.
 """
 
 from __future__ import annotations
@@ -14,21 +16,24 @@ import numpy as np
 from pydantic import Field
 
 from ..contract import DatasetContract
-from ..experiment import Experiment
-from ..result import Outcome, Result
-from ..parameters import AveragingParameters, TargetSelection
-from ._capabilities import (
+from ._capabilities.flux import (
     MAX_FLUX_DESC,
     MIN_FLUX_DESC,
-    STATE_ALT,
     FluxSweepParameters,
-    StateReadoutParameters,
     flux_sweep,
+)
+from ._capabilities.state_readout import (
+    STATE_ALT,
+    StateReadoutParameters,
     readout_vars,
     signal_rename,
     state_row,
 )
 from ._sim import stable_seed
+from ..parameters import AveragingParameters, TargetSelection
+from ..result import Outcome, Result
+from ..experiment import Experiment
+from . import register
 
 
 class QubitRelaxationFluxParameters(
@@ -49,6 +54,7 @@ class QubitRelaxationFluxResult(Result):
     """Fitted T1 spectrum results."""
 
 
+@register
 class QubitRelaxationFlux(Experiment):
     """Measure qubit relaxation time T1 vs Z flux pulse amplitude."""
 
@@ -151,3 +157,6 @@ class QubitRelaxationFlux(Experiment):
             }
             result.outcomes[qubit] = Outcome.SUCCESSFUL if r.get("success", False) else Outcome.FAILED
         return result
+
+    def probe(self):  # pragma: no cover - driver half
+        raise NotImplementedError("a driver backend supplies probe()")

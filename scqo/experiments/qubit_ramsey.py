@@ -1,16 +1,9 @@
-"""Qubit Ramsey — second worked experiment, proving the pattern generalizes (backend-free half).
+"""Qubit Ramsey — greenfield port of :mod:`scqo.experiments.qubit_ramsey`.
 
-Differs from resonator spectroscopy on every axis that matters:
-  * sweep is **time** (idle delay), not frequency;
-  * fit is a **decaying cosine** yielding **two** quantities (residual detuning + T2*);
-  * writeback targets a **different** neutral device field: ``drive_freq``.
-
-A driver still only adds ``probe()``.
-
-Detuning convention: the experiment deliberately detunes the drive by
-``frequency_detuning_hz``; the Ramsey fringe then oscillates at
-``frequency_detuning_hz + err`` where ``err`` is the residual qubit-drive detuning.
-``estimate`` recovers ``err`` and corrects ``drive_freq`` by it.
+The physics half (time sweep, decaying-cosine fit yielding residual detuning +
+T2*) is byte-for-byte; what moved is the device surface: the corrected drive
+frequency lands on the target's DRIVE CHANNEL (``drive_freq_hz``) while its
+measured twin ``f_01_hz`` and ``t2_star_s`` stay as facts on the target MODE.
 """
 
 from __future__ import annotations
@@ -21,12 +14,19 @@ import numpy as np
 from pydantic import Field
 
 from .._scqat import per_qubit_results
-from ._capabilities import STATE_ALT, StateReadoutParameters, readout_vars, signal_rename, state_row
-from ._sim import iq_from_population, stable_seed
 from ..contract import DatasetContract
+from ._capabilities.state_readout import (
+    STATE_ALT,
+    StateReadoutParameters,
+    readout_vars,
+    signal_rename,
+    state_row,
+)
+from ._sim import iq_from_population, stable_seed
 from ..parameters import AveragingParameters, TargetSelection
-from ..experiment import Experiment
 from ..result import Outcome, Result
+from ..experiment import Experiment
+from . import register
 
 
 class QubitRamseyParameters(TargetSelection, AveragingParameters, StateReadoutParameters):
@@ -43,22 +43,23 @@ class QubitRamseyParameters(TargetSelection, AveragingParameters, StateReadoutPa
 class QubitRamseyResult(Result):
     """Output of QubitRamsey.
 
-    ``fit[qubit]`` carries ``drive_freq`` (new absolute Hz), its measured twin
+    ``fit[target]`` carries ``drive_freq_hz`` (new absolute Hz), its measured twin
     ``f_01_hz`` (same value; ``update()`` writes the knob and the fact together),
-    ``detuning_error_hz``, ``t2_star_s`` and ``old_drive_freq``.
+    ``detuning_error_hz``, ``t2_star_s`` and ``old_drive_freq_hz``.
     """
 
 
+@register
 class QubitRamsey(Experiment):
     """Backend-agnostic Ramsey. ``probe()`` is supplied by a driver."""
 
     name: ClassVar[str] = "qubit_ramsey"
     description: ClassVar[str] = (
         "Two pi/2 pulses separated by a swept idle time with an artificial drive detuning; "
-        "fits the decaying fringe to correct drive_freq and report T2*. "
-        "use_state_discrimination returns the FPGA-discriminated averaged state instead "
-        "of I/Q (needs a calibrated discriminator: run single_shot_readout and accept "
-        "its readout_rotation_rad / readout_threshold suggestions first)."
+        "fits the decaying fringe to correct the drive channel's drive_freq_hz and report "
+        "T2*. use_state_discrimination returns the FPGA-discriminated averaged state "
+        "instead of I/Q (needs a calibrated discriminator: run single_shot_readout and "
+        "accept its readout_rotation_rad / readout_threshold suggestions first)."
     )
     Parameters: ClassVar[type] = QubitRamseyParameters
     Result: ClassVar[type] = QubitRamseyResult
@@ -124,14 +125,14 @@ class QubitRamsey(Experiment):
                 osc_freq = float(r["f_1"])
             detuning_error = osc_freq - applied
             t2_star = float(r.get("tau_1", float("nan")))
-            old = float(self.device.component(qubit).drive_freq)
+            old = float(self.device.channel(qubit, "drive").drive_freq_hz)
             result.fit[qubit] = {
-                "drive_freq": old + detuning_error,
-                # the measured FACT twin of the drive_freq knob (same fit)
+                "drive_freq_hz": old + detuning_error,
+                # the measured FACT twin of the drive_freq_hz knob (same fit)
                 "f_01_hz": old + detuning_error,
                 "detuning_error_hz": detuning_error,
                 "t2_star_s": t2_star,
-                "old_drive_freq": old,
+                "old_drive_freq_hz": old,
             }
             # A fringe is expected: only a converged single/beat fit with a physical T2*
             # counts; the relaxation model (f=0) means no fringe was resolved.
@@ -144,11 +145,15 @@ class QubitRamsey(Experiment):
             return
         for qubit, fit in self.result.fit.items():
             if self.result.outcomes[qubit] is Outcome.SUCCESSFUL:
-                # Calibration knob first: applies are per-qubit atomic in capture
-                # order, so if the vendor rejects the corrected drive frequency the
-                # physical fields (f_01_hz, T2*) are skipped too — no half-applied
-                # qubit.
-                view = self.device.component(qubit)
-                view.drive_freq = fit["drive_freq"]  # the instrument knob
-                view.f_01_hz = fit["f_01_hz"]  # the measured physical fact (same fit)
-                view.t2_star_s = fit["t2_star_s"]
+                # Knob first as documentation of intent; under the entity
+                # split, apply atomicity is per-ENTITY now (q0_xy vs q0), so
+                # a vendor rejection of the drive frequency no longer skips
+                # the mode facts — they are vendor-free and land regardless.
+                self.device.channel(qubit, "drive").drive_freq_hz = (
+                    fit["drive_freq_hz"])  # the instrument knob
+                mode = self.device.component(qubit)
+                mode.f_01_hz = fit["f_01_hz"]  # the measured physical fact (same fit)
+                mode.t2_star_s = fit["t2_star_s"]
+
+    def probe(self):  # pragma: no cover - driver half
+        raise NotImplementedError("a driver backend supplies probe()")

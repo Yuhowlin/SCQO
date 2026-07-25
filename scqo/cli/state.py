@@ -6,7 +6,7 @@ Components are grouped by CATEGORY (the roster decides what each name is).
 
     scqo state                        # calibration tables per category (YOUR setup)
     scqo state --history              # last 20 changes (old -> new + cause + operator)
-    scqo state --history 100 --component q0
+    scqo state --history 100 --entity q0
     scqo state --physical             # the sample ledger: one row per component/field
     scqo state --physical --history   # ... and its change history (rows carry setup=)
     scqo state --sources              # which run set each CURRENT value (both stores)
@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import argparse
 
-from ..categories import CATEGORIES
+from ..report import design_rows, field_rows, state_rows
 from ._backends import build_session
 
 #: The placement rule, bench form (full version: TUTORIAL.md "Where does a value
@@ -68,7 +68,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--history", nargs="?", const=20, type=int, metavar="N",
                         help="show the last N recorded changes instead (default N=20)")
-    parser.add_argument("--component", help="restrict output to one component")
+    parser.add_argument("--entity", help="restrict output to one component")
     parser.add_argument("--physical", action="store_true",
                         help="the sample's measured physical parameters instead of the instrument config")
     parser.add_argument("--sources", action="store_true",
@@ -83,13 +83,13 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
     parser.add_argument("--config", help="lab config path (default: $SCQO_CONFIG or ~/.scqo/config.toml)")
     args = parser.parse_args(argv)
     if args.rule and (args.history is not None or args.physical or args.sources
-                      or args.component or args.fields or args.as_json):
+                      or args.entity or args.fields or args.as_json):
         parser.error("--rule prints the placement rule and combines with nothing")
     if args.sources and (args.history is not None or args.physical):
         parser.error("--sources always covers both stores; do not combine it with --history/--physical")
-    if args.fields and (args.history is not None or args.physical or args.sources or args.component):
+    if args.fields and (args.history is not None or args.physical or args.sources or args.entity):
         parser.error("--fields is a schema view (no per-component values); do not combine "
-                     "it with --history/--physical/--sources/--component")
+                     "it with --history/--physical/--sources/--entity")
     if args.as_json and not args.fields:
         parser.error("--json applies to --fields only")
 
@@ -103,21 +103,21 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
     _print_context(sess, cfg)
 
     if args.sources:
-        return _print_sources(sess, args.component)
+        return _print_sources(sess, args.entity)
 
     if args.history is None:
         if args.physical:
-            return _print_physical(sess, args.component)
-        return _print_state(sess, args.component)
+            return _print_physical(sess, args.entity)
+        return _print_state(sess, args.entity)
 
-    records = sess.history(store="physical" if args.physical else "instrument")
-    if args.component:
-        records = [r for r in records if r["component"] == args.component]
+    records = sess.history(store="physical" if args.physical else "state")
+    if args.entity:
+        records = [r for r in records if r['entity'] == args.entity]
     for r in records[-args.history:]:
         old = f"{r['old']:.6g}" if isinstance(r["old"], float) else r["old"]
         new = f"{r['new']:.6g}" if isinstance(r["new"], float) else r["new"]
         setup = f"  setup={r['setup']}" if r.get("setup") else ""
-        print(f"{r['timestamp'][:19]}  {r['component']:8s} {r['field']:16s} {old} -> {new}"
+        print(f"{r['timestamp'][:19]}  {r['entity']:8s} {r['field']:16s} {old} -> {new}"
               f"  ({r.get('experiment') or '?'}  run={r.get('run_id') or '-'}"
               f"  by={r.get('operator') or '-'}{setup})")
     if not records:
@@ -132,87 +132,88 @@ def _print_context(sess, cfg) -> None:
         print("# built-in demo device (nothing saved)")
         return
     print(f"# device: {cfg.device}   setup: {sess.setup_name or '-'}   "
-          f"cooldown: {sess.cooldown_id or '-'}   state: {sess.state_path or '-'}")
+          f"cooldown: {sess.cooldown_id or '-'}   scqo dir: {sess.scqo_dir or '-'}")
 
 
-def _print_state(sess, component_filter: str | None) -> int:
-    """The calibration tables, ONE PER INSTRUMENT CATEGORY present — columns in
-    the category's declaration order (no sparse union across categories)."""
-    state = sess.device_state()
-    by_cat: dict[str, list[str]] = {}
-    for name in state:
-        _phys, instr = (sess.roster.category(name) if name in sess.roster
-                        else (None, None))
-        by_cat.setdefault(instr or "?", []).append(name)
-    printed = False
-    for cat in sorted(by_cat):
-        names = [n for n in by_cat[cat]
-                 if not component_filter or n == component_filter]
-        if not names:
-            continue
-        fields = (list(CATEGORIES[cat].fields) if cat in CATEGORIES
-                  else sorted({f for n in names for f in state[n]}))
-        fields = [f for f in fields
-                  if any(f in state[n] for n in names)]  # requires_physical pruning
-        print(f"# {cat}")
-        print(f"{'component':10s}" + "".join(f"{f:>18s}" for f in fields))
+def _print_state(sess, entity_filter: str | None) -> int:
+    """The operating tables, ONE PER ENTITY KIND present — columns in the
+    kind catalog's declaration order."""
+    rows = [r for r in state_rows(sess.roster, sess.device_state(),
+                                  sess.physical_state())
+            if r["store"] == "scqo_state.json"
+            and (not entity_filter or r["entity"] == entity_filter)]
+    by_kind: dict[str, list[dict]] = {}
+    for r in rows:
+        by_kind.setdefault(r["kind"], []).append(r)
+    for kind in sorted(by_kind):
+        group = by_kind[kind]
+        names = sorted({r["entity"] for r in group})
+        fields: list[str] = []
+        for r in group:  # catalog order: state_rows preserves it per entity
+            if r["field"] not in fields:
+                fields.append(r["field"])
+        values = {(r["entity"], r["field"]): r["value"] for r in group}
+        print(f"# {kind}")
+        print(f"{'entity':12s}" + "".join(f"{f:>20s}" for f in fields))
         for name in names:
-            values = state[name]
             row = "".join(
-                f"{values.get(f):>18.6g}" if isinstance(values.get(f), float)
-                else f"{str(values.get(f)):>18s}"
-                for f in fields
-            )
-            print(f"{name:10s}{row}")
-        printed = True
-    if not printed:
-        print("no instrument state (component filter matched nothing?)")
+                f"{values.get((name, f)):>20.6g}"
+                if isinstance(values.get((name, f)), float)
+                else f"{str(values.get((name, f))):>20s}"
+                for f in fields)
+            print(f"{name:12s}{row}")
+    if not by_kind:
+        print("no operating state (entity filter matched nothing?)")
     return 0
 
 
 def _fields_payload(sess, cfg) -> dict:
-    """The field catalog per CATEGORY + the session backend's declared vendor
-    bindings (category-keyed since the component cutover) + its vendor-only
-    inventory. ``missing_bindings`` lists (category, field) pairs the backend
-    neither binds nor declares Unrealized — PER CATEGORY, and only for
-    categories the backend declares at all: a wholly absent category (e.g.
-    TransmonPair on a backend with no pair support) is capability, not drift —
-    its experiments are roster-refused pre-probe, never silently unbound."""
+    """The field catalog per entity KIND + the session backend's declared
+    vendor bindings + its vendor-only inventory. ``missing_bindings`` lists
+    ``kind.field`` pairs the backend neither binds nor declares Unrealized —
+    PER KIND, and only for kinds the backend declares at all: a wholly
+    absent kind (pump channels on a backend with no parametric support) is
+    capability, not drift; its experiments are roster-refused pre-probe."""
     from dataclasses import asdict
+
+    from ..catalog import CHANNELS, COMPOSITES, MODES
 
     bindings = sess.backend.field_bindings()
     unrealized = sess.backend.unrealized()
-    categories = []
+    kinds = []
     missing: list[str] = []
-    for cat, spec in CATEGORIES.items():
-        fields = []
-        for fname, fs in spec.fields.items():
-            kind = ("physical" if spec.side == "physical"
-                    else "pushed" if fs.push else "record-only")
-            b = bindings.get(cat, {}).get(fname)
-            u = unrealized.get(cat, {}).get(fname)
-            fields.append({
-                "name": fname, "unit": fs.unit, "kind": kind, "portable": fs.portable,
-                "binding": asdict(b) if b is not None else None,
-                "unrealized": asdict(u) if u is not None else None,
+    for family, catalog in (("mode", MODES), ("composite", COMPOSITES),
+                            ("channel", CHANNELS)):
+        for kind, spec in catalog.items():
+            fields = []
+            declared = kind in bindings or kind in unrealized
+            for fname, fs in spec.fields.items():
+                b = bindings.get(kind, {}).get(fname)
+                u = unrealized.get(kind, {}).get(fname)
+                fields.append({
+                    "name": fname, "unit": fs.unit, "role": fs.role,
+                    "portable": fs.portable, "shape": fs.shape,
+                    "design_ok": fs.design_ok,
+                    "binding": asdict(b) if b is not None else None,
+                    "unrealized": asdict(u) if u is not None else None,
+                })
+                if declared and fs.role == "knob" and b is None and u is None:
+                    missing.append(f"{kind}.{fname}")
+            kinds.append({
+                "kind": kind, "family": family, "doc": spec.doc,
+                "roles": sorted(getattr(spec, "roles", None)
+                                or getattr(spec, "refs", None) or {}),
+                "fields": fields,
             })
-            declared = cat in bindings or cat in unrealized
-            if (declared and spec.side == "instrument" and fs.push
-                    and b is None and u is None):
-                missing.append(f"{cat}.{fname}")
-        categories.append({
-            "category": cat, "side": spec.side, "kind": spec.kind,
-            "doc": spec.doc, "operations": list(spec.operations),
-            "fields": fields,
-        })
     return {
         "device": cfg.device or None,
         "setup": sess.setup_name or None,
         "cooldown": sess.cooldown_id or None,
         "backend": sess.backend_label,
-        "categories": categories,
+        "kinds": kinds,
         "vendor_only": [
-            {"name": name, **asdict(v)} for name, v in sess.backend.vendor_only().items()
+            {"name": name, **asdict(v)}
+            for name, v in sess.backend.vendor_only().items()
         ],
         "missing_bindings": missing,
     }
@@ -247,7 +248,7 @@ def _print_fields(sess, cfg, *, as_json: bool) -> int:
                 bound = "-"
             # portable "NO" is upper-case on purpose: it is the value you must
             # NOT copy to another backend's config.
-            print(f"{f['name']:20s}{f['unit'] or '-':6s}{f['kind']:13s}"
+            print(f"{f['name']:20s}{f['unit'] or '-':6s}{f['role']:13s}"
                   f"{'yes' if f['portable'] else 'NO':10s}{bound}")
             if b:
                 for label, text in (("convert", b["convert"]),
@@ -273,64 +274,75 @@ def _print_fields(sess, cfg, *, as_json: bool) -> int:
     if payload["missing_bindings"]:
         print("\n# WARN: pushed field(s) neither bound nor declared unrealized here: "
               + ", ".join(payload["missing_bindings"]))
-    elif not any(f["binding"] for c in payload["categories"] for f in c["fields"]):
+    elif not any(f["binding"] for c in payload["kinds"] for f in c["fields"]):
         print("\n# this backend declares no field bindings (simulated, or a pre-catalog driver)")
     print("\n# placement rule: scqo state --rule   (full text: TUTORIAL.md "
           "'Where does a value live?')")
     return 0
 
 
-def _catalog_field_order() -> dict[str, int]:
-    order: dict[str, int] = {}
-    for spec in CATEGORIES.values():
-        for f in spec.fields:
-            order.setdefault(f, len(order))
-    return order
-
-
-def _print_physical(sess, component_filter: str | None) -> int:
+def _print_physical(sess, entity_filter: str | None) -> int:
     """This context's measured physics (one (cooldown, setup) file), with each
-    component's category shown. Compare across setups/cooldowns via the run
-    index or the viewer trends page, not here."""
-    values = sess.physical_state()  # flat {component: {field: value}}
-    order = _catalog_field_order()
-    rows = sorted(
-        ((n, f, v)
-         for n, fields in values.items()
-         for f, v in fields.items()
-         if not component_filter or n == component_filter),
-        key=lambda r: (r[0], order.get(r[1], 999)),
-    )
+    entity's KIND shown. Compare across contexts via the run index or the
+    viewer trends page, not here."""
+    rows = [r for r in state_rows(sess.roster, {}, sess.physical_state())
+            if not entity_filter or r["entity"] == entity_filter]
     if not rows:
-        if component_filter and values:
-            print(f"no physical parameters recorded for component {component_filter!r}")
+        if entity_filter and sess.physical_state():
+            print(f"no physical parameters recorded for entity {entity_filter!r}")
         else:
-            print("no physical parameters recorded yet (accept a run that proposes them)")
+            print("no physical parameters recorded yet (accept a run that "
+                  "proposes them)")
         return 0
-    print(f"{'component':10s}{'category':22s}{'field':18s}{'value':>14s}")
-    for n, f, v in rows:
-        phys = sess.roster.category(n)[0] if n in sess.roster else "?"
-        value = f"{v:>14.6g}" if isinstance(v, float) else f"{str(v):>14s}"
-        print(f"{n:10s}{phys or '-':22s}{f:18s}{value}")
+    print(f"{'entity':12s}{'kind':18s}{'field':20s}{'value':>16s}{'  unit'}")
+    for r in rows:
+        value = (f"{r['value']:>16.6g}" if isinstance(r["value"], float)
+                 else f"{str(r['value']):>16s}")
+        print(f"{r['entity']:12s}{r['kind']:18s}{r['field']:20s}{value}"
+              f"  {r['unit']}")
     return 0
 
 
-def _print_sources(sess, component_filter: str | None) -> int:
+def _print_design(sess, entity_filter: str | None) -> int:
+    """The design-vs-measured column: declared targets joined key-for-key
+    against this context's measured facts."""
+    rows = [r for r in design_rows(sess.roster, sess.design,
+                                   sess.physical_state())
+            if not entity_filter or r["entity"] == entity_filter]
+    if not rows:
+        print("no design targets declared (design.toml)")
+        return 0
+    print(f"{'entity':12s}{'field':20s}{'designed':>16s}{'measured':>16s}"
+          f"{'delta':>16s}  unit")
+    for r in rows:
+        measured = ("-" if r["measured"] is None
+                    else f"{r['measured']:.6g}")
+        delta = "-" if r["delta"] is None else f"{r['delta']:+.3g}"
+        print(f"{r['entity']:12s}{r['field']:20s}{r['designed']:>16.6g}"
+              f"{measured:>16s}{delta:>16s}  {r['unit']}")
+    return 0
+
+
+def _print_sources(sess, entity_filter: str | None) -> int:
     """One provenance table over BOTH stores: which run set each current value."""
-    sources = sess.live_sources()
-    order = _catalog_field_order()
+    from ..report import live_sources
+
+    sources = {
+        "state": live_sources(sess.device_state(), sess.history()),
+        "physical": live_sources(sess.physical_state(),
+                                 sess.history(store="physical")),
+    }
     rows = [
-        info
-        for store in ("instrument", "physical")
+        dict(info, role=store)
+        for store in ("state", "physical")
         for name, fields in sorted(sources[store].items())
-        for info in (dict(fields[f], store=store)
-                     for f in sorted(fields, key=lambda f: order.get(f, 999)))
-        if not component_filter or info["component"] == component_filter
+        for info in (fields[f] for f in sorted(fields))
+        if not entity_filter or info["entity"] == entity_filter
     ]
     if not rows:
         print("no values yet")
         return 0
-    print(f"{'component':10s} {'field':18s} {'store':10s} {'current':>14s}  "
+    print(f"{'entity':10s} {'field':18s} {'role':10s} {'current':>14s}  "
           f"{'source':46s} {'when':19s} {'by'}")
     externals = False
     for info in rows:
@@ -343,7 +355,7 @@ def _print_sources(sess, component_filter: str | None) -> int:
         }[info["status"]]
         externals = externals or info["status"] == "external"
         when = (info["timestamp"] or "")[:19] or "-"
-        print(f"{info['component']:10s} {info['field']:18s} {info['store']:10s} {value:>14s}  "
+        print(f"{info['entity']:10s} {info['field']:18s} {info['role']:10s} {value:>14s}  "
               f"{source:46s} {when:19s} {info['operator'] or '-'}")
     if externals:  # ASCII only: reaches consoles in whatever codepage the lab runs
         print("# (externally changed) = the current value matches no SCQO record - "

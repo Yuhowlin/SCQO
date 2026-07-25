@@ -357,7 +357,7 @@ def test_user_overlay_applies_to_explicit_config_path(monkeypatch, tmp_path):
 
 
 def test_make_session_wires_parameter_defaults(monkeypatch, tmp_path):
-    from scqo.testing import InMemoryDevice, SimulatedBackend, demo_roster
+    from scqo.testing import SimulatedBackend, demo_device
 
     params = tmp_path / "parameters.toml"
     params.write_text("[qubit_ramsey]\nnum_points = 201\n", encoding="utf-8")
@@ -365,8 +365,9 @@ def test_make_session_wires_parameter_defaults(monkeypatch, tmp_path):
     config = tmp_path / "config.toml"
     config.write_text("[lab]\n", encoding="utf-8")
     cfg = labconfig.load(config)
-    sess = labconfig.make_session(SimulatedBackend(InMemoryDevice({"q0": {"readout_freq": 5.9e9}})),
-                                  cfg, demo_roster(), backend_label="simulated")
+    roster, design, vendor = demo_device()
+    sess = labconfig.make_session(SimulatedBackend(vendor), cfg, roster, design=design,
+                                  backend_label="simulated")
     assert sess.parameter_defaults == {"qubit_ramsey": {"num_points": 201}}
     assert sess.parameter_defaults_source == str(params)
     assert sess.backend_label == "simulated"
@@ -375,7 +376,7 @@ def test_make_session_wires_parameter_defaults(monkeypatch, tmp_path):
 def test_make_session_scqo_folder_and_forced_push(tmp_path):
     """State + physics live in <data_root>/<device>/<cooldown>/<setup>/scqo/;
     simulated always persists (forced push — an in-memory demo has no vendor truth)."""
-    from scqo.testing import InMemoryDevice, SimulatedBackend, demo_roster
+    from scqo.testing import SimulatedBackend, demo_device
 
     config = tmp_path / "config.toml"
     config.write_text(
@@ -383,26 +384,24 @@ def test_make_session_scqo_folder_and_forced_push(tmp_path):
         encoding="utf-8",
     )
     cfg = labconfig.load(config)
-    backend = SimulatedBackend(InMemoryDevice({"q0": {"readout_freq": 5.9e9, "drive_freq": 4e9,
-                                                      "pi_amp": 0.2, "readout_amp": 0.2}}))
+    roster, design, vendor = demo_device(("q0",))  # roster matches the vendor
     scqo_dir = tmp_path / "data" / "chipA" / "cd1" / "bench" / "scqo"
-    sess = labconfig.make_session(backend, cfg, demo_roster(("q0",)),  # roster matches the vendor
+    sess = labconfig.make_session(SimulatedBackend(vendor), cfg, roster, design=design,
                                   backend_label="simulated",
                                   setup_name="bench", cooldown_id="cd1")
-    sess.device.component("q0").pi_amp = 0.33
+    sess.device.component("q0_xy").pi_amp = 0.33  # knobs live on the drive CHANNEL
     sess.physical.record("q0", "t1_s", 25e-6)
     sess.device.save(); sess.physical.save()
-    assert sess.state_path == str(scqo_dir / "scqo_state.json")
+    assert sess.scqo_dir == scqo_dir
     assert (scqo_dir / "scqo_state.json").is_file()
     assert (scqo_dir / "physical.json").is_file()  # physics beside state, same context
     assert not (tmp_path / "data" / "chipA" / "scqo_state.json").exists()  # no per-device file
     # forced push: a FRESH simulated session over a fresh vendor still sees the value
-    backend2 = SimulatedBackend(InMemoryDevice({"q0": {"readout_freq": 5.9e9, "drive_freq": 4e9,
-                                                       "pi_amp": 0.2, "readout_amp": 0.2}}))
-    sess2 = labconfig.make_session(backend2, cfg, demo_roster(("q0",)),
+    roster2, design2, vendor2 = demo_device(("q0",))
+    sess2 = labconfig.make_session(SimulatedBackend(vendor2), cfg, roster2, design=design2,
                                    backend_label="simulated",
                                    setup_name="bench", cooldown_id="cd1")
-    assert sess2.device_state()["q0"]["pi_amp"] == 0.33
+    assert sess2.device_state()["q0_xy"]["pi_amp"] == 0.33
 
 
 def test_make_session_refuses_persistence_without_setup_or_cooldown(tmp_path):
@@ -410,7 +409,7 @@ def test_make_session_refuses_persistence_without_setup_or_cooldown(tmp_path):
     folder is <device>/<cooldown>/<setup>/scqo/)."""
     import pytest
 
-    from scqo.testing import InMemoryDevice, SimulatedBackend, demo_roster
+    from scqo.testing import SimulatedBackend, demo_device
 
     config = tmp_path / "config.toml"
     config.write_text(
@@ -418,11 +417,11 @@ def test_make_session_refuses_persistence_without_setup_or_cooldown(tmp_path):
         encoding="utf-8",
     )
     cfg = labconfig.load(config)
-    backend = SimulatedBackend(InMemoryDevice({"q0": {"readout_freq": 5.9e9, "drive_freq": 4e9,
-                                                      "pi_amp": 0.2, "readout_amp": 0.2}}))
+    roster, design, vendor = demo_device()
+    backend = SimulatedBackend(vendor)
     with pytest.raises(ValueError, match="cooldown id"):
-        labconfig.make_session(backend, cfg, demo_roster(), backend_label="simulated",
+        labconfig.make_session(backend, cfg, roster, design=design, backend_label="simulated",
                                setup_name="bench")
     with pytest.raises(ValueError, match="setup name"):
-        labconfig.make_session(backend, cfg, demo_roster(), backend_label="simulated",
+        labconfig.make_session(backend, cfg, roster, design=design, backend_label="simulated",
                                cooldown_id="cd1")

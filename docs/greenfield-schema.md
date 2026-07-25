@@ -1,6 +1,13 @@
 # Greenfield device-description schema
 
-**Status: DESIGN — not implemented.** Finalized 2026-07-25.
+**Status: IMPLEMENTED in `scqo/model/` on branch `greenfield`; the old model is still live on
+`main` until the namespace cutover.** Design finalized 2026-07-25.
+Built in reviewed phases — catalogs, roster loader, `design.toml`, stores, device layer, testing
+substrate, session, all 21 experiments, and the operational surfaces (lock, doctor witnesses,
+report data). Each phase was gated by an adversarial review; where a review changed a design
+decision, this document was amended in the same commit, so it stays the single source of truth.
+Remaining: re-point the CLI/viewer shells in place, delete the old modules, move `scqo/model/*`
+to `scqo/*`, then the driver repos.
 **Mandate:** straightforward, clean code first; no backward compatibility (one fresh-start cutover release when implemented).
 **Provenance:** designed interactively, then hardened by three multi-agent passes — (1) three independent
 design drafts + two adversarial attacks; (2) expressiveness stress test against four published devices
@@ -53,11 +60,12 @@ wiring); QEC composite kinds are registered only when per-stabilizer calibrated 
 
 ## 2. Entity model
 
-Every roster entity shares one base: `name`, `kind`, refs (`role → [names]`), `derived` flag. One
-**global flat namespace** across all sections — names key the stores, history, trends, and
-`design.toml`. Four thin dataclasses over the base (mode / composite / line / channel; composites add
-`operations`, channels add `target/line/via`) — deliberately *not* one dataclass with an untyped
-attrs dict.
+Every roster entity shares one base: `name`, `kind`, `derived` flag (minted-entity provenance),
+`retired` flag (post-cut decommissioning, §7). One **global flat namespace** across all sections —
+names key the stores, history, trends, and `design.toml`. Four thin dataclasses over the base —
+modes carry their kind's scalar refs, composites carry `roles` (role → member names) plus
+`operations`, channels carry `target`/`line`/`via` — deliberately *not* one dataclass with an
+untyped attrs dict.
 
 All four sections use the same discriminator word: `kind = "<lowercase token>"`.
 
@@ -180,7 +188,7 @@ via    = "q1_res"              # mediator: ANY mode (a resonator, a cat buffer, 
 
 ## 6. Field machinery
 
-`FieldSpec = {unit, doc, role, portable, design_ok, shape}` with
+`FieldSpec = {unit, doc, role, portable, design_ok, shape, paired_with, design_source}` with
 `role ∈ {fact, knob, monitor}` — the store router:
 
 | role | store | pushed to vendor | meaning |
@@ -193,7 +201,11 @@ One entity name may span both stores (`q1_z`: `flux_offset`/`flux_per_phi0` fact
 knob). `shape` is `float` or `float[]` (arrays are intra-field sequences only — waveform samples,
 distortion taps; **never** entity-aligned positions). Legal `(role, portable, design_ok)`
 combinations are enforced at catalog registration; `portable`'s consumer is cross-setup
-carry-forward per the placement rule.
+carry-forward per the placement rule. `paired_with` declares the equal-length partner of a paired
+array (on multi-target channels the compiled `__<target>` instances re-point it per target).
+`design_source` on a channel knob names the (ref-role hop, fact field) that seeds bring-up
+(`drive_freq_hz ← target.f_01_hz`, `readout_freq_hz ← via.f_r_hz`); the anchor order stays
+standing state, else design value, else code default.
 
 ### Naming rules (lint-enforced at catalog registration)
 
@@ -270,12 +282,17 @@ the sole home of the function/suffix/op vocabulary (doctor always prints both sp
 |---|---|---|---|
 | drive | transmon, flux_transmon, fluxonium | `rx` | `_xy` |
 | drive | cavity | `displace` | `_xy` |
-| readout | transmon-family, fluxonium, cavity | `readout` | `_ro` (+ mints `<t>_res` when no via) |
+| readout | transmon-family, fluxonium, cavity | `readout` | `_ro` (+ mints `<t>_res`; qubit kinds only — see caveat) |
 | flux | flux_transmon, fluxonium | `flux_bias` | `_z` |
 | pump | any mode / composite / list | *(none — legal, no derived op)* | *(explicit-only)* |
 
 Single-mode operations are **derived** from this table (wiring cannot drift from declared
 capability); composite operations are **declared** (§4). List targets validate per element.
+
+*Rider caveat:* a readout **rider** serves qubit kinds only — a rider cannot name a `via`
+mediator, and its minted resonator's `qubit` ref is qubit-typed, so cavity readout (emission
+collection) always uses the explicit `[channels.*]` hatch with `via`; the loader's error says
+exactly that. The (readout × cavity) row is the hatch's legality, not the rider's.
 
 ### Addressing
 
@@ -295,6 +312,13 @@ default slot.
   `__<param>` instances), tagged with why-legal provenance. All later validation of both stores and
   `design.toml` is set membership — no prefix parsing anywhere; every rejection names its exact
   cause ("operation cz not declared on this composite" vs "unknown field").
+- **Relation validation is batch-aware** (settled in implementation): a *proposal* (suggestion
+  capture, `suggest`) validates shape and finiteness only — its partner may itself only be
+  proposed. A *direct write* (`set_values`) validates the batch as a sequence: the waveform→dt
+  prerequisite per step (satisfiable by ordering the assignments) and paired-array lengths at
+  batch END, so a redone fit changes both partners in one call. `accept` applies per-entity groups
+  in catalog field order with a group-level pre-check; the store enforces pair equality at save.
+  Two assignment keys resolving to one (entity, field) are refused.
 
 ### `design.toml`
 
@@ -308,11 +332,14 @@ after the production cut.
 ### Append-only production cut
 
 `scqo device freeze` writes `components.lock`: the expanded name set with per-name signature
-(name, kind, target(s), channel kind). Post-cut, every load must produce a **superset by
-signature**; provenance is diagnostic only, never compared. Deleting a rider entry deletes its
-minted names and fails the check; appending a rider to a frozen line only adds names — post-cut
-evolution is always an append. Retirement is `retired = true`, never deletion, so store keys and
-history keep resolving.
+(entity class, name, kind, target(s) for channels) — and **nothing more**. Post-cut, every load
+must produce a **superset by signature**; provenance, line, via, roles, and operations are
+diagnostic or wiring, never compared, so declaring a new operation on a frozen composite or
+rewiring a rider to another line stays legal (the doctor's vendor/wiring witnesses cover the
+rewire). Deleting a rider entry deletes its minted names and fails the check; appending a rider to
+a frozen line only adds names — post-cut evolution is always an append. Retirement is
+`retired = true`, never deletion, so store keys and history keep resolving. Freezing happens once:
+a second `freeze` refuses rather than blessing whatever drifted.
 
 ### Doctor witnesses (vendor cross-checks)
 
@@ -500,12 +527,33 @@ single-shot run per qubit; trends either restart at the cutover epoch or the vie
 old→new key map. Both drivers' fieldmaps and every experiment's `update()` re-target in the same
 release.
 
-## 11. Open decisions
+## 11. Decisions the implementation settled
 
-- Implementation scheduling — this design is unscheduled; it should land as its own combo release
-  during a trial phase, before any production cut hardens a roster.
+Beyond the amendments folded into §2–§7 above, the build settled these (each with tests):
+
+- **Bring-up seeds take candidate facts.** `design_source` may name several facts, first declared
+  wins: `drive_freq_hz` seeds from `f_01_hz` on a fixed transmon and falls through to `f_q_max_hz`
+  on a flux-tunable (park at the sweet spot). `seed_anchor` resolves the structural half (entity +
+  candidates) for the field catalog; `seed_value` picks against the datasheet.
+- **Per-experiment pre-probe gating** is an `Experiment.validate_targets(roster, targets)` hook,
+  used by `pair_zz_coupler` to require a tracked coupler with a flux channel — the successor to the
+  deleted `coupler_bias` operation. The session runs it inside the machine-readable gate.
+- **A foreign `flux_component` is kind-agnostic**: any entity with a default flux channel (another
+  qubit's z, a coupler's z). Such runs stay RECORD-ONLY. The old per-class category narrowing has
+  no successor and needed none.
+- **`readout_fidelity` stays deleted**: `single_shot_readout` proposes `fidelity_g`/`fidelity_e`;
+  the aggregate is derived by whoever displays it.
+- **Doctor witnesses and report rows are model-side, renderer-free** (`checks.py`, `report.py`), so
+  the CLI is a table printer and the same data serves tests, the viewer, and an AI loop. Vendor
+  inventory and the line→port annotation are inputs — the drivers supply them at the cutover, and
+  every witness degrades to a clear WARN without them.
+
+## 12. Open decisions
+
 - Kind-name spellings on registration by demand (`cat_system` vs alternatives; QEC kind names).
 - Naming convention for deliberate extra same-kind channels (e.g. a second drive channel for a
   cross-drive study) — reserve `<target>_<suffix><n>`?
 - Whether doctor warns when a `design.toml` value is edited after measurements exist for that field
   (lightweight provenance for the one hand-edited file that has none).
+- Derived capability tags, the `maturity` field, and the contrib entry-point merge return to the
+  registry at the namespace cutover (tracked in `scqo/model/experiments/__init__.py`).

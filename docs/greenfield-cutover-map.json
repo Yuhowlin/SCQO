@@ -1,0 +1,828 @@
+{
+  "summary": "Read-only inventory: every consumer of the old SCQO component model that the greenfield cutover must re-target",
+  "agentCount": 5,
+  "logs": [],
+  "result": [
+    {
+      "area": "scqo-core",
+      "area_summary": "SCQO core (scqo/ excluding experiments/, cli/, viewer/) touches the old model through four source modules (categories.py, roster.py, device.py, config.py+physical.py) and five consumers (session.py, suggestions.py, experiment.py, backend.py, testing.py), plus re-exports and light touchpoints. REPLACED OUTRIGHT: CATEGORIES/CategorySpec and the whole two-slot (physical, instrument) category model; FieldSpec.push/requires_physical/design_source (become role fact|knob|monitor + design_ok + shape); Component/Roster/load_components and every Roster method (category, members, operations, design, fields_of, resolve, pushed, one, names) — succeeded by four typed sections + rider expansion + compiled legal-field sets + ref/via navigation; make_view_base(category) per-instrument-category driver bases (become per-channel-kind + composite surfaces); pushed_fields/field_categories/OPERATIONS; the ReadableTransmon knob lump and TransmonPair's coupler_decouple_v/coupler_interaction_v (re-homed to channel idle_flux and per-operation composite knobs); state-file top-level \"config\" -> \"values\" and STATE_SCHEMA 2 -> 3; Experiment.target_category/required_operations/flux_component_categories gating vocabulary (reformulated over the channel-kind x target-kind table); field spellings readout_freq/drive_freq/idle_flux_v/readout_pos_* -> _hz-suffixed, source-native, channel-homed names. SURVIVE: _state_io.py wholesale (history sidecars preserved verbatim per schema doc section 1/10); provenance.py wholesale (name-agnostic dict functions); the suggest->accept machinery (Suggestion status lifecycle, select_suggestions, decision_editor, reject_suggestions, SuggestionCapture pattern — re-routed onto legal-field sets); RecordingDevice/PhysicalStore store mechanics (lock, merge-save, v-gate archive pattern, push-first writes, coupled-echo reconcile, portable/twin doctrine — drive_amp/drive_power_dbm and readout twins keep their names, just re-homed to q*_xy/q*_ro); ChangeRecord row shape (with the category-stamp question below); datastore.py layout (setup_scqo_dir, scqo_state.json/physical.json filenames, run-folder device_before/after snapshots — snapshot shape {entity:{field:value}} survives with new keys); _current_operator/_now; VendorBinding/VendorOnly/Unrealized dataclass shapes (re-keyed by channel kind). CLEAN (no old-model symbols): registry.py, contract.py, result.py, _scqat.py, browse.py, __main__.py, _state_io.py.",
+      "design_questions": "(1) ChangeRecord.category stamp (config.py:91-92, physical.py:120, suggestions.py:47-48): the doc says history sidecars are \"unchanged\", but rows stamp the old category name (\"ReadableTransmon\") — does it become the entity kind (\"readout\"/\"qubit_pair\"), and is the JSON key renamed? (2) Array-valued fields: flux facts distortion_amp[]/distortion_tau_s[] and composite <op>_waveform[] are float[] per section 6, but ChangeRecord.old/new are typed float, physical._clean_values (physical.py:46-53) drops non-numeric leaves, the accept staleness guard compares with != (session.py:500, 526), and testing._InMemoryComponent casts float(value) (testing.py:74) — the value model for arrays in history/suggestions/staleness is unspecified. (3) Anchor/design fallback: FieldSpec.design_source is deleted, but Experiment.anchor() (experiment.py:95-129) needs a knob->design.toml mapping (readout_freq_hz on q1_ro anchors on q1_res's design f_r_hz via the qubit ref) — the successor mechanism is not in the doc. (4) Cutover archive policy: does the _archive_v1/_load_v2 pattern repeat as _archive_v2/_load_v3, or do schema-3 stores simply start empty (\"fresh-start stores\" in section 10 is ambiguous about what happens to on-disk v2 files at first contact)? (5) Experiment gating surface: exact successor ClassVars for target_category/required_operations/flux_component_categories (presumably required derived/declared operations + section membership) — Phase 5 must define them; the doc gives the validation authority (the kind table) but not the experiment-side declaration shape. (6) Driver view surface for composites: per-operation knobs have entity-dependent names (declared operations), so make_view_base's abstract-property-per-field pattern cannot enumerate them per kind — per-entity view generation or a generic get/set contract is an implementation choice the doc leaves open. (7) Doctor witnesses (a)-(d) need each line's declared vendor port set — no Backend accessor for the vendor wiring annotation exists or is specified. (8) If config.py is dissolved/renamed, the model-neutral helpers it exports (_current_operator, _now, _load_v2 pattern; imported by datastore.py:51, physical.py:40, suggestions.py:33-34, session.py:38-41) need a stated new home. (9) Suggestion.store Literal[\"instrument\",\"physical\"] (suggestions.py:46): keep the two-store word or carry the field role directly (\"fact\"/\"knob\"/\"monitor\") on stored run records.",
+      "files": [
+        {
+          "path": "D:\\github\\SCQO\\scqo\\categories.py",
+          "symbols": "Entire module is the old schema source: FieldSpec (28-56, push/portable/requires_physical/design_source), CategorySpec (59-83, side/kind/member_roles/optional_roles/operations), _TRANSMON_FIELDS (86-99), CATEGORIES catalog (103-359) incl. ReadableTransmon knob lump (206-337), TransmonPair coupler_decouple_v/coupler_interaction_v (339-358), OPERATIONS (362), pushed_fields (365-368), field_categories (371-377), _validate_catalog (380-419)",
+          "change": "Deleted and rewritten as the greenfield kind catalogs: four thin entity dataclasses' field catalogs (section 6 tables), FieldSpec={unit,doc,role,portable,design_ok,shape}, the frozen (channel kind x target kind) table with rider suffixes and derived ops (section 7), naming lint + cross-catalog field-name uniqueness assertion at import; knobs re-home from ReadableTransmon to drive/readout/flux/pump channel kinds and per-operation composite knob families",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\roster.py",
+          "symbols": "COMPONENTS_FILE (48), TEMPLATE (51-74), RosterError (77), Component one-name/two-slots dataclass (81-91) incl. design dict (91), Roster (94-189): category (106-109), members (111), operations (114), design (117-119), fields_of w/ requires_physical pruning (121-135), resolve routing (137-153), pushed (155-162), one() topology search (164-182), names(instrument_category) (184-189); load_components validation (192-296) — member_roles/optional_roles checks (249-276), two-slot field-collision check (277-283), in-roster design validation (284-295)",
+          "change": "Rewritten as the greenfield loader: [modes]/[composites]/[lines]/[channels] parsing, rider lists minting channels + <t>_res resonators via the frozen suffix map, via-defaulting, DAG check on refs, namespace-collision rule, minted-entity provenance stamps, compiled legal-field sets with why-legal provenance, components.lock freeze/superset check; Roster.design()/in-roster [*.design] tables move to the separate design.toml loader; one() replaced by refs (resonator's qubit ref) and default addressing; resolve() replaced by set-membership + role router",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\device.py",
+          "symbols": "from .categories import CATEGORIES (27); ComponentView.name/category (30-38); ComponentInfo(category, operations, members) (41-47); make_view_base(category) generating abstract property pairs per pushed field of an instrument category (64-81); DeviceModel.component/save/snapshot (84-99); components() default witness assuming ReadableTransmon + ('rx','readout') (101-107)",
+          "change": "Driver view bases become per-channel-kind (drive/readout/flux/pump — properties = role==knob fields) plus a composite surface for per-operation knobs; ComponentInfo becomes the lock-signature shape (name, kind, target(s), channel kind) and the components() witness derives from vendor wiring keyed by line names; DeviceModel ABC itself survives",
+          "risk": "needs-design-thought"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\config.py",
+          "symbols": "FieldSpec re-export (54); ComponentView/DeviceModel import (55); STATE_SCHEMA=2 (67); ChangeRecord w/ component+category fields (81-107); _archive_v1 (110-123); _load_v2 v2-stamp gate (126-145); _tracked_property branching on spec.push (148-170); _recording_view_class keyed (instrument, physical) w/ requires_physical pruning (173-214); RecordingDevice (217-492): roster.category via _instrument_pair (269-271), roster.fields_of side filter (273-276), roster.pushed (278-279), one()/design() passthroughs (302-310), _category_of stamp (332-334), state key \"config\" write (426) and read (452), _push_config chain-anchor reconcile order (461-492)",
+          "change": "Store schema 3: top-level key \"config\" -> \"values\", STATE_SCHEMA -> 3, _load_v2 gate becomes the schema-3 gate; property routing switches from push-bool to role (knob = push+strict, monitor = record-only); view classes keyed by entity kind, requires_physical pruning gone (capability by channel existence — no q3_z entity exists at all); one()/design() passthroughs replaced by ref navigation + design.toml lookups; _sync_coupled simplifies (each channel owns one chain: q1_xy carries the drive twins, q1_ro the readout twins); ChangeRecord and the lock/merge/persist machinery survive; _current_operator/_now/_file_lock plumbing survives but needs a home if the module is renamed",
+          "risk": "needs-design-thought"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\physical.py",
+          "symbols": "from .config import STATE_SCHEMA, ChangeRecord, _load_v2, _now (40); PHYSICAL_FILE (43); _clean_values numeric-leaf filter (46-53); PhysicalStore._validate via roster.resolve + side=='physical' check (85-95); record() category stamp (110-128); save() merge w/ latest-timestamp-wins (138-180). NOTE: PHYSICAL_FIELDS named in the task no longer exists — retired at the v0.10 component cutover; only stale docstring refs remain (fieldmap.py:15 PUSHED_FIELDS, experiments/qubit_relaxation.py:5)",
+          "change": "Survives as the facts store: validation becomes compiled-legal-field-set membership + role=='fact' (replacing side=='physical'); keys become expanded entity names incl. channels (q1_z flux_offset/flux_per_phi0) and composites (q1_q2 zz_hz); schema stamp -> 3; must accept float[] leaves (distortion taps) which _clean_values currently drops, plus the declared paired-array equal-length check at store write; store/history/lock mechanics unchanged",
+          "risk": "needs-design-thought"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\suggestions.py",
+          "symbols": "Suggestion model: store Literal['instrument','physical'] (46), category stamp (47-48) (39-64); pending_count/select_suggestions/decision_editor/reject_suggestions (67-157) — survive; _capture_property (160-169); _capture_view_class keyed by roster.category pair, union of both slots via roster.fields_of (172-210); SuggestionCapture: roster membership check (223-227), one() (229-232), design() (234-236), _suggest category stamp (252-264)",
+          "change": "Suggest->accept flow survives by design (section 10 'Preserved'); capture views regenerate from each entity's compiled legal-field set (per-entity, since composite operation knobs are entity-dependent), routing by field role instead of slot side; category stamp becomes kind; one()/design() passthroughs replaced by ref/design.toml equivalents; the decision/selection machinery is untouched",
+          "risk": "needs-design-thought"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\session.py",
+          "symbols": "imports RecordingDevice/_now (41), PHYSICAL_FILE/PhysicalStore (45), suggestions set (47-54); self.roster (79), RecordingDevice(backend.device, roster, ...) (97-98), PhysicalStore(..., roster=roster) (111); SuggestionCapture(self.device, self.physical, self.roster) (245); _validate_targets: target_category default 'ReadableTransmon' (387), required_operations (388), flux_component 'flux_bias'/'coupler_bias' logic + flux_component_categories ('ReadableTransmon','TransmonPair') (389-409), roster.category/operations per target (415-423) (373-430); accept staleness != comparison (500, 526); suggest() roster.category stamp (626-639); _parse_assignments roster membership + roster.resolve (661-690); set_values (692-764); _unknown_field_error via categories.field_categories (766-805, import 776); live_sources via provenance (887-901); history(store=instrument|physical) (903-913)",
+          "change": "Constructor wiring is mechanical (new roster/model object types). _validate_targets reformulates onto the kind table: targets validated by section (mode/composite) and by derived-operation existence (channel closure) instead of instrument category + declared ops; flux_component becomes 'has a flux channel / declares a flux-activated operation'. _parse_assignments implements section-7 default addressing: q1.pi_amp routes through the unique owner in q1's channel closure (backed by the cross-catalog field-name uniqueness assertion), full channel/composite names stay addressable directly. _unknown_field_error re-indexes over kind catalogs. accept/suggest/set_values/find_runs/history surfaces survive; staleness equality needs an array-aware rule for float[] fields",
+          "risk": "needs-design-thought"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\experiment.py",
+          "symbols": "target_category ClassVar 'ReadableTransmon' (43), required_operations (45), flux_component_categories ('ReadableTransmon','TransmonPair') (49), attach_readout_positions (50-55); anchor(): device.component/roster.resolve/spec.design_source/device.one/device.design chain (95-129); _POSITION_FIELDS mapping ref_pos_* -> readout_pos_g_i etc. (138-141); _attach_reference_positions reading monitor fields off the target's component view (143-173)",
+          "change": "Gating ClassVars reformulated per the kind table (required operations checked against derived + declared ops; flux-component legality by channel existence); anchor() must replace the deleted design_source with a design.toml-based fallback (mechanism unspecified — see design questions); _POSITION_FIELDS renames to pos_g_i/pos_g_q/pos_e_i/pos_e_q and re-homes from the qubit name to its readout channel (q1_ro) via default addressing",
+          "risk": "needs-design-thought"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\backend.py",
+          "symbols": "from .device import DeviceModel (14); from .fieldmap import Unrealized, VendorBinding, VendorOnly (15); field_bindings() -> {category: {field: VendorBinding}} (52-62); unrealized() per category (64-68); vendor_only() (70-77); power_context doc naming the chain twins (39-50)",
+          "change": "field_bindings/unrealized re-key from instrument categories to channel kinds (+ composite kinds for operation knob families); the bindings|unrealized == pushed invariant becomes per channel kind over role==knob fields; doctor witnesses additionally need a vendor-wiring-annotation accessor keyed by line names (new surface, unspecified); vendor_only/power_context survive",
+          "risk": "needs-design-thought"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\fieldmap.py",
+          "symbols": "VendorBinding (29-43), VENDOR_ONLY_KINDS (47), Unrealized.category field + idle_flux_v example (50-61), VendorOnly (64-90); stale docstring ref to scqo.config.PUSHED_FIELDS (15)",
+          "change": "Dataclass shapes survive; Unrealized.category becomes the channel kind; docstrings re-anchor to the kind-catalog invariant and drop PUSHED_FIELDS/idle_flux_v spellings",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\testing.py",
+          "symbols": "from .roster import Component, Roster (15); demo_roster building FixedTransmon/ReadableTransmon + Resonator/ReadoutLine/XYControl satellites + Coupling/TransmonPair pair with design values (18-51); _InMemoryComponent float(value) cast (54-74); InMemoryDevice categories dict {'q0_q1': 'TransmonPair'} (77-91); components() witness ops table ReadableTransmon/TransmonPair (93-102)",
+          "change": "demo_roster rewritten as a greenfield expanded roster (modes q0/q1 [+coupler], lines w/ readout/drive riders minting q*_ro/q*_xy/q*_res, qubit_pair composite; demo design values move to an in-memory design.toml equivalent); category labels become kinds; witness table derives from the kind table; float() cast needs a float[] branch if array knobs are exercised in tests",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\__init__.py",
+          "symbols": "re-exports CATEGORIES, CategorySpec (15), ChangeRecord, FieldSpec, RecordingDevice (16), ComponentInfo, ComponentView, DeviceModel, make_view_base (17), PhysicalStore (18), Component, Roster, RosterError, load_components (19), Suggestion (20); __all__ (28-63)",
+          "change": "Public surface re-export list swaps to the greenfield names (kind catalogs, new roster/entity types, design loader); one clean cutover, no aliases per the no-backward-compat rule",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\datastore.py",
+          "symbols": "from .config import _current_operator (51); SCHEMA_VERSION 8 'targets renamed from qubits' (53); STATE_FILE/SCQO_SUBDIR constants (58-62); persist_run device_before/device_after snapshot writes (274-294) + operator stamp (303); setup_scqo_dir (844-856), setup_backend_config_dir (859-867), setup_state_path (870-875)",
+          "change": "Nearly untouched: folder layout, file names, and snapshot mechanics are preserved by the greenfield doc (section 1); only the _current_operator import re-homes if config.py is renamed, and device snapshots transparently carry the new entity keys; run 'targets' column already carries qubit/composite names and stays valid",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\provenance.py",
+          "symbols": "record['component']/record['field'] dict keys (44-52, 63-72); docstring naming scqo_state.json/physical.json + 'config'/'values' snapshots (10-16, 31-33)",
+          "change": "Survives verbatim (pure name-agnostic dict functions; the viewer/Session feed it the new stores unchanged) — only the docstring's 'config' mention updates to 'values'; if the ChangeRecord 'component' JSON key is renamed (design question 1) the two key literals change with it",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\labconfig.py",
+          "symbols": "make_session(backend, cfg, roster, ...) passthrough (226, 252); docstring refs to setup_scqo_dir layout (8, 233)",
+          "change": "Pure passthrough — the roster argument's type changes to the greenfield model object; no logic change",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\_state_io.py",
+          "symbols": "No old-model symbols: _file_lock (42-99), history_path (102-105), read_history w/ pre-split fallback (108-146), write_history (149-163)",
+          "change": "Survives unchanged — the greenfield doc explicitly preserves the *.history.jsonl sidecar mechanics; the pre-split embedded-'history' fallback (108-146) is dead weight that the fresh-start cutover could delete",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\browse_metadata.json",
+          "symbols": "fit_trend example field spellings 'readout_freq / pi_amp' (23-24); runs_by_tag/runs_by_qubit/failed_runs select the 'qubits' column (12, 16, 20) — already stale, the column is 'targets' since SCHEMA_VERSION 8 (pre-existing bug, flagged as a separate task)",
+          "change": "Example quantity names update to the new spellings (readout_freq_hz etc. — fit keys are per-experiment output, decided in the experiments area); the stale qubits->targets column fix is independent of the cutover",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\parameters.py",
+          "symbols": "TargetSelection docstring: 'roster component names whose INSTRUMENT category matches target_category' (24-31)",
+          "change": "Docstring only — reword to 'mode or composite names validated against the kind table'; targets stay plain name lists",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\contract.py",
+          "symbols": "Docstring only: 'qubit or pair components' (4-5); target_dim='target' (54) already model-neutral",
+          "change": "No code change; docstring wording",
+          "risk": "mechanical"
+        }
+      ]
+    },
+    {
+      "area": "experiments",
+      "area_summary": "scqo/experiments/ never imports roster.py/categories.py/config.py/physical.py directly. All old-model coupling flows through exactly three surfaces: (1) ClassVars consumed by Session pre-probe validation — target_category (category name string; only pair_zz_coupler overrides the \"ReadableTransmon\" default declared in scqo/experiment.py:43), required_operations (op-name tuples \"rx\"/\"readout\"/\"flux_bias\"/\"coupler_bias\"), flux_component_categories (category-name tuple), attach_readout_positions (drives experiment.py's readout_pos_* monitor reads); (2) self.device.component(name) attribute get/set plus self.device.one(name, category) two-slot satellite lookups (\"Resonator\"/\"ZControl\"/\"ReadoutLine\"); (3) self.anchor(name, field) design-fallback reads. Complete field write inventory and new homes per the greenfield doc: KNOBS — readout_freq -> <q>_ro.readout_freq_hz (resonator_spectroscopy, resonator_spectroscopy_flux, readout_frequency, both punchouts); readout_amp -> <q>_ro.readout_amp (readout_power); readout_power_dbm -> <q>_ro.readout_power_dbm (both punchouts, boundary set/revert); drive_freq -> <q>_xy.drive_freq_hz (qubit_spectroscopy, qubit_ramsey); drive_power_dbm -> <q>_xy.drive_power_dbm (_drive_power.py boundary); pi_amp -> <q>_xy.pi_amp (qubit_power_rabi, qubit_pi_pulse_error); drag_beta -> <q>_xy.drag_beta (both DRAG experiments); idle_flux_v -> <q>_z.idle_flux (resonator_spectroscopy_flux); coupler_decouple_v -> the pair's coupler flux channel idle_flux, i.e. <coupler>_z.idle_flux (pair_zz_coupler). MONITORS — readout_fidelity is BANNED as an aggregate (doc §6 notes): must become fidelity_g/fidelity_e on <q>_ro; readout_pos_{g,e}_{i,q} -> pos_{g,e}_{i,q} on <q>_ro (single_shot_readout, plus the ref_pos attach in experiment.py). FACTS — f_01_hz/t1_s/t2_star_s/t2_echo_s/ej_sum_hz/f_q_max_hz stay on the mode (names unchanged); f_r_hz/kappa_tot_hz/f_r0_hz stay on <q>_res; g_hz RE-HOMES from ReadoutLine to <q>_res (boundary rule: the resonator owns its g); v_offset_v/v_per_phi0_v -> <q>_z.flux_offset/<q>_z.flux_per_phi0 (source-native, no _v suffix); zz_hz stays on the qubit_pair composite. Targeting-shape changes: pair_zz_coupler (composite target; its single view.coupler_decouple_v+zz_hz write splits into a channel knob on a THIRD entity resolved via the pair's coupler ref, plus a composite fact); resonator_spectroscopy_flux and qubit_spectroscopy_flux_pulse (FluxComponentParameters foreign-source assignment loses its category-based narrowing vocabulary; their update() now spans up to four entities: q, q_res, q_z, q_ro). The state_readout capability, _sim.py, qubit_sqrb, qubit_tomography, qubit_relaxation_flux and qubit_echo_flux touch no device fields (record-only / no update()) — only ClassVar validation plumbing and, for the flux pair, the FluxSweepParameters naming question.",
+      "files": [
+        {
+          "path": "D:\\github\\SCQO\\scqo\\experiments\\pair_zz_coupler.py",
+          "symbols": "target_category=\"TransmonPair\" (L68); required_operations=(\"coupler_bias\",) (L69); device.component(pair).coupler_decouple_v read (L122); update() writes view.coupler_decouple_v (L157) + view.zz_hz (L158) on ONE pair view; measure Literal[\"high\",\"low\"] roster roles (L40-42); sweep axis \"coupler_bias_v\" (L65,75); Result docstring \"TransmonPair knob / Coupling physical fact\" (L49)",
+          "change": "Target becomes a [composites.*] qubit_pair name. zz_hz stays a fact on the pair; coupler_decouple_v dies — read/write becomes the coupler flux channel's idle_flux (<coupler>_z, resolved pair -> coupler ref -> its z channel; doc §10.3). \"coupler_bias\" op has no row in the §7 table: validation must become \"pair's coupler ref has a flux channel\" (derived flux_bias on the coupler mode). high/low roles survive (design-nominal). One-view-carries-both dies: writes span composite (fact store) + channel (knob store).",
+          "risk": "needs-design-thought"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\experiments\\resonator_spectroscopy.py",
+          "symbols": "anchor(q, \"readout_freq\") (L107); update() writes component(qubit).readout_freq (L145); device.one(qubit, \"Resonator\") (L149) + res_view.f_r_hz/kappa_tot_hz (L151-153); required_operations=(\"readout\",) (L75); fit keys readout_freq/old_readout_freq (L127-135)",
+          "change": "readout_freq -> <q>_ro.readout_freq_hz (knob); f_r_hz/kappa_tot_hz stay on <q>_res (facts, names unchanged); one(qubit,\"Resonator\") becomes minted-resonator resolution (name <q>_res / ref qubit==target, honoring via). anchor design fallback must join design.toml [q1_res].f_r_hz.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\experiments\\qubit_spectroscopy.py",
+          "symbols": "anchor(q, \"drive_freq\") (L114); drive_power_boundary(self, drive_power_dbm) (L85); update() writes view.drive_freq (L152) + view.f_01_hz (L153); required_operations=(\"rx\",\"readout\") (L65); attach_readout_positions=True (L67)",
+          "change": "drive_freq -> <q>_xy.drive_freq_hz (knob); f_01_hz stays on mode q (fact). Write splits across q_xy (scqo_state) and q (physical). drive_power_dbm boundary re-targets q_xy (see _drive_power.py). attach_readout_positions now reads pos_* monitors from <q>_ro.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\experiments\\qubit_ramsey.py",
+          "symbols": "component(qubit).drive_freq read (L127); update() writes view.drive_freq (L152), view.f_01_hz (L153), view.t2_star_s (L154); required_operations (L69); attach_readout_positions=True (L71); atomicity comment L147-150",
+          "change": "drive_freq -> <q>_xy.drive_freq_hz; f_01_hz/t2_star_s stay mode-q facts. The per-qubit-atomic capture-order guarantee (vendor rejects knob => facts skipped) now spans two store entities — the suggestion-capture layer must preserve it across q_xy+q.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\experiments\\qubit_power_rabi.py",
+          "symbols": "component(qubit).pi_amp read (L109); update() writes pi_amp (L123); required_operations (L61); attach_readout_positions=True (L63)",
+          "change": "pi_amp keeps its name, re-homed to <q>_xy (drive-channel knob). Rename-free if the new view keeps q1.pi_amp default-addressing sugar; entity retarget otherwise.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\experiments\\qubit_relaxation.py",
+          "symbols": "update() writes component(qubit).t1_s (L119); required_operations (L59); attach_readout_positions=True (L61)",
+          "change": "t1_s unchanged — mode-q fact in physical.json. Only view-API plumbing.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\experiments\\qubit_echo.py",
+          "symbols": "update() writes component(qubit).t2_echo_s (L119); required_operations (L59); attach_readout_positions=True (L61)",
+          "change": "t2_echo_s unchanged — mode-q fact. Only view-API plumbing.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\experiments\\qubit_spectroscopy_flux_pulse.py",
+          "symbols": "flux_component_categories=(\"ReadableTransmon\",) (L105); required_operations=(\"rx\",\"readout\",\"flux_bias\") (L103); component(q).drive_freq reads (L143, L165); drive_power_boundary (L126); foreign_flux_source guard (L215); update() writes ej_sum_hz/f_q_max_hz on q (L221-227) + v_offset_v/v_per_phi0_v via one(qubit,\"ZControl\") (L228-231); FluxSweepParameters/FluxComponentParameters mixins (L58-59); Contract axis flux_bias_v (L101)",
+          "change": "ej_sum_hz/f_q_max_hz stay mode-q facts; v_offset_v/v_per_phi0_v -> <q>_z.flux_offset/flux_per_phi0 (source-native facts on the flux channel); one(qubit,\"ZControl\") -> resolve <q>_z. flux_component_categories must be re-expressed without categories (e.g. \"mode with own flux channel\", excluding composites); drive_freq reads -> q_xy.drive_freq_hz. Targeting shape changes via flux_component (foreign source = another entity's z channel).",
+          "risk": "needs-design-thought"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\experiments\\resonator_spectroscopy_flux.py",
+          "symbols": "required_operations=(\"readout\",\"flux_bias\") (L119); component(q).readout_freq reads (L141, L163) + drive_freq read (L142); foreign_flux_source guard (L222); update(): one(qubit,\"ZControl\") + v_offset_v/v_per_phi0_v (L233-236), q_view.idle_flux_v (L245), q_view.readout_freq (L247), one(qubit,\"Resonator\") + f_r0_hz (L250-251), one(qubit,\"ReadoutLine\") + g_hz (L253-254); FluxComponentParameters mixin (L44); f_q_max_hz input param (L52)",
+          "change": "The widest fan-out: v_offset_v/v_per_phi0_v -> <q>_z.flux_offset/flux_per_phi0 (facts); idle_flux_v -> <q>_z.idle_flux (knob — moves OFF the transmon onto the z channel, doc §10.8); readout_freq -> <q>_ro.readout_freq_hz (knob); f_r0_hz stays <q>_res; g_hz RE-HOMES ReadoutLine -> <q>_res (boundary rule; ReadoutLine category dies). update() then touches q_z, q_ro, q_res — three entities across both stores. flux_component narrowing (qubit z OR pair coupler) needs the new vocabulary.",
+          "risk": "needs-design-thought"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\experiments\\single_shot_readout.py",
+          "symbols": "required_operations=(\"readout\",) (L63); update() writes view.readout_fidelity (L164) + readout_pos_g_i/g_q/e_i/e_q (L159-167); description promises driver-proposed readout_rotation_rad/readout_threshold/readout_rus_threshold (L53-56); fit keys mean_g_i..mean_e_q, p_e_given_g, p_g_given_e (L129-137)",
+          "change": "readout_pos_* -> pos_g_i/pos_g_q/pos_e_i/pos_e_q monitors on <q>_ro. Aggregate readout_fidelity is banned (doc: derivable, no aggregate) — the write must become fidelity_g/fidelity_e on <q>_ro, i.e. derive fidelity_g=1-p_e_given_g, fidelity_e=1-p_g_given_e from the existing fit (or change what estimate() surfaces). Discriminator knob names (readout_rotation_rad/readout_threshold/readout_rus_threshold) survive unchanged on <q>_ro.",
+          "risk": "needs-design-thought"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\experiments\\readout_power.py",
+          "symbols": "component(q).readout_amp read (L96); update() writes readout_amp (L123); required_operations=(\"readout\",) (L59)",
+          "change": "readout_amp keeps its name, re-homed to <q>_ro (readout-channel knob).",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\experiments\\readout_frequency.py",
+          "symbols": "component(q).readout_freq read (L95); update() writes readout_freq (L122); required_operations (L54)",
+          "change": "readout_freq -> <q>_ro.readout_freq_hz (knob; _hz rename).",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\experiments\\resonator_spectroscopy_power_amp.py",
+          "symbols": "run() boundary: view.readout_power_dbm read/set/revert (L151-165, L184-191); backend.device.component(q).readout_amp raw read (L176); estimate reads readout_freq (L233) + readout_power_dbm (L235); update() writes readout_power_dbm + readout_freq (L310-312); required_operations (L122)",
+          "change": "readout_power_dbm/readout_amp keep names on <q>_ro; readout_freq -> <q>_ro.readout_freq_hz. Boundary set/revert + coupled drive/readout amp-dbm twin echoes are preserved doctrine (§6 twin pattern); recorded vs raw vendor-view split unchanged.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\experiments\\resonator_spectroscopy_power_chain.py",
+          "symbols": "run() boundary: view.readout_power_dbm (L151-162, L187-195); raw per-point writes raw.readout_power_dbm (L146, L170); estimate reads readout_freq (L243) + readout_power_dbm (L245); update() writes readout_power_dbm + readout_freq (L321-324); required_operations (L114)",
+          "change": "Same as the _amp sibling: all reads/writes re-home to <q>_ro; readout_freq gains _hz. The raw-vendor-view per-point chain stepping must still resolve the same channel entity on the backend's unrecorded view.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\experiments\\qubit_drag_alternating.py",
+          "symbols": "update() writes component(qubit).drag_beta (L122); required_operations (L49)",
+          "change": "drag_beta keeps its name, re-homed to <q>_xy (drive-channel knob).",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\experiments\\qubit_drag_equator.py",
+          "symbols": "update() writes component(qubit).drag_beta (L123); required_operations (L55)",
+          "change": "drag_beta -> <q>_xy.drag_beta.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\experiments\\qubit_pi_pulse_error.py",
+          "symbols": "component(qubit).pi_amp read (L134); update() writes pi_amp (L199); required_operations (L59)",
+          "change": "pi_amp -> <q>_xy.pi_amp.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\experiments\\qubit_sqrb.py",
+          "symbols": "required_operations=(\"rx\",\"readout\") (L91); StateReadoutParameters mixin (L23); no update(), no device reads",
+          "change": "No field writes. Only target validation moves to derived-op checks (rx/readout both exist in the §7 table). Description mentions gate_fidelity but it stays run-record-only.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\experiments\\qubit_tomography.py",
+          "symbols": "required_operations=(\"rx\",\"readout\") (L125); no update() override, no device access",
+          "change": "No field writes; inherits the (implicit) ReadableTransmon target default from experiment.py — that default's replacement (mode with drive+readout channels) is decided outside this area.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\experiments\\qubit_relaxation_flux.py",
+          "symbols": "required_operations=(\"rx\",\"readout\",\"flux_bias\") (L71); FluxSweepParameters mixin + min_flux_v/max_flux_v overrides (L34-44); Contract axis flux_bias_v (L63); record-only (no update)",
+          "change": "No device writes. flux_bias validation becomes <q>_z channel existence; the volt-named flux window params follow whatever _capabilities/flux.py decides under source-native flux.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\experiments\\qubit_echo_flux.py",
+          "symbols": "required_operations=(\"rx\",\"readout\",\"flux_bias\") (L70); FluxSweepParameters mixin + min_flux_v/max_flux_v overrides (L34-44); Contract axis flux_bias_v (L61-66); record-only",
+          "change": "Same as qubit_relaxation_flux.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\experiments\\_drive_power.py",
+          "symbols": "drive_power_boundary: view.drive_power_dbm read (L41), set (L52), revert (L60); docstring's coupled drive_amp echo contract (L29-32)",
+          "change": "drive_power_dbm keeps its name, re-homed to <q>_xy (drive-channel knob); the drive_amp/drive_power_dbm twin echo is the §6 settled twin pattern — the RecordingDevice echo mechanism must follow the field to the channel.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\experiments\\_capabilities\\flux.py",
+          "symbols": "FLUX_AXIS=\"flux_bias_v\" (L31); FluxSweepParameters min_flux_v/max_flux_v with hardcoded ±0.5 V DAC-rail bounds (L43-45); FluxComponentParameters.flux_component description naming roster components, z-lines, pair couplers and flux_component_categories (L51-61); foreign_flux_source (L73-77); module docstring's Session._validate_targets / flux_component_categories contract (L16-21)",
+          "change": "The capability's whole vocabulary is category-based. flux_component must resolve against the new model: a mode name (its <mode>_z channel) or a composite name (its coupler ref's z channel); the per-class narrowing ClassVar needs a kind/channel-based replacement. FLUX_AXIS embeds volts (\"_v\") and the ±0.5 bound assumes an AWG DAC rail — under source-native flux (volts OR amperes per the line's source) both are per-line facts, not universal constants. Probe-boundary axis name is a cross-repo contract (LCHQB/LCHQM probes emit it) — renaming it is a combo-release event.",
+          "risk": "needs-design-thought"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\experiments\\_capabilities\\state_readout.py",
+          "symbols": "use_state_discrimination field (L37); STATE_ALT (L31); docstring references readout_rotation_rad/readout_threshold suggestion names (L41-43); state_row/readout_vars/signal_rename helpers",
+          "change": "No old-model symbols. use_state_discrimination is an explicitly never-renamed probe-boundary field; readout_rotation_rad/readout_threshold survive verbatim in the new readout catalog. No change beyond docstring wording.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\experiments\\_capabilities\\__init__.py",
+          "symbols": "re-exports FLUX_AXIS, MIN/MAX/NUM_FLUX_DESC, FluxComponentParameters, FluxSweepParameters, flux_sweep, foreign_flux_source (L10-19)",
+          "change": "Follows whatever flux.py renames; purely re-export maintenance.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\experiments\\_sim.py",
+          "symbols": "iq_from_population, stable_seed — no device-model symbols",
+          "change": "No change.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\experiments\\__init__.py",
+          "symbols": "eager re-export of every experiment class + capability mixins (L8-81)",
+          "change": "Unchanged unless class/mixin names change; update re-exports to match.",
+          "risk": "mechanical"
+        }
+      ],
+      "design_questions": "1) Addressing sugar at Python call sites: §7 defines default addressing for `scqo set q1.pi_amp`, but not whether the ComponentView successor exposes the same closure routing to experiment code. This single decision determines whether ~30 write/read sites (component(q).pi_amp, .drive_freq, .readout_freq, ...) are field-renames-only or per-site entity retargets (component(f\\\"{q}_xy\\\")). The doc's cross-catalog field-name-uniqueness assertion makes the sugar provable — but it is not stated as a Python API. 2) Replacement for device.one(name, category): experiments resolve Resonator/ZControl/ReadoutLine satellites; the new model needs the equivalent resolution helpers (minted <q>_res via qubit ref + via; <q>_z / <q>_ro via the (target, kind) unique-channel slot). Not specified as an API. 3) pair_zz_coupler validation: no row for \\\"coupler_bias\\\" in the §7 table, and composite operations exist only when knob families key on them — but this experiment's only composite write is a FACT (zz_hz); its knob lands on the coupler's z channel. What is the declared/validated capability contract for \\\"pair whose coupler ref has a flux channel\\\", and does the probe axis \\\"coupler_bias_v\\\" rename under source-native flux? 4) single_shot_readout: with aggregate readout_fidelity banned, is the intended write fidelity_g=1-p_e_given_g / fidelity_e=1-p_g_given_e (currently deliberately run-record-only as instrument-dependent), or does the doc's monitor pair change the estimator's output contract? The old rationale (confusion entries stay run-record-only) conflicts with fidelity_g/fidelity_e being governed monitors. 5) Flux Parameters naming: are per-run Parameters (min_flux_v/max_flux_v, FLUX_AXIS=\\\"flux_bias_v\\\", the ±0.5 rail bounds, pair_zz_coupler's min/max_coupler_v) exempt from the source-native/unit-neutral rule, and where do rail bounds live when a line's source is a current supply? FLUX_AXIS is a cross-repo probe contract — rename needs the combo release. 6) flux_component narrowing: new vocabulary replacing flux_component_categories=(\\\"ReadableTransmon\\\",)/(\\\"...\\\",\\\"TransmonPair\\\") — by mode-kind, by channel existence, or by composite-role? 7) anchor() design fallbacks: readout_freq anchored on Resonator design f_r; the new knob q1_ro.readout_freq_hz is not design_ok — is the design seed defined as a cross-entity join (q1_ro <- design.toml [q1_res].f_r_hz), and same for drive_freq_hz <- [q1].f_01_hz (fixed transmon only) / f_q_max_hz? 8) Per-qubit atomic apply: qubit_ramsey/qubit_spectroscopy rely on capture-order atomicity (knob rejected => facts skipped) within one component view; writes now span q_xy + q (different entities and stores) — the suggestion-capture layer needs an explicit per-target grouping guarantee. 9) attach_readout_positions plumbing (experiment.py _POSITION_FIELDS, outside this area) reads readout_pos_* — must follow the rename to pos_* on <q>_ro in the same release, or every axial-reduction experiment silently loses its stored reference."
+    },
+    {
+      "area": "cli-viewer",
+      "area_summary": "The CLI + viewer + testing + labconfig area touches the old model through five surfaces: (1) roster loading/typing — cli/_backends.py loads scqo.roster.load_components and passes the Roster into make_session (labconfig.py), and testing.demo_roster hand-builds Component objects with two-slot categories, members, operations and inline design values; (2) category-driven rendering — cli/state.py and viewer/app.py import CATEGORIES directly to order columns, group per-category tables, and build the --fields schema view and TREND_QUANTITIES; (3) default-target derivation — _backends.default_targets keys on the \"ReadableTransmon\"/\"TransmonPair\" instrument categories via experiment.target_category and Roster.names(category); (4) store-shape reads — viewer/app.py reads scqo_state.json's top-level \"config\" key (renamed to \"values\" in schema 3) and physical.json \"values\", both with no schema gate; (5) the NAME.FIELD grammar + old field spellings — set/suggest/accept/_review parse COMPONENT.FIELD tokens (grammar survives via the greenfield addressing rule, routing moves to channel-closure resolution in Session) and docstrings/examples/demo seeds use retired spellings (readout_freq, drive_freq, idle_flux_v, coupler_decouple_v/coupler_interaction_v). Doctor's _roster_check calls the old loader; its version and vendor-config-file checks are schema-neutral; the DeviceModel.components()/ComponentInfo roster-vs-vendor witness is implemented in testing.InMemoryDevice but NOT actually consumed by doctor today — the greenfield §7 witness list (keyed by line names against a vendor wiring annotation) replaces that concept wholesale. Clean files with zero old-model dependency: cli/__init__.py, cli/__main__.py, cli/find.py (only the immutable-run targets/qubits fallback), cli/run.py, cli/tag.py, cli/user.py, viewer/__init__.py, viewer/__main__.py, viewer/templates/base.html, run.html, runs.html (all render generic component/field/store keys). New CLI obligations the doc mandates in this area: `scqo device` prints derived operations (§8 comment), `scqo device freeze` writes components.lock (§7), and doctor gains the six §7 witnesses plus design-vs-measured join.",
+      "design_questions": "1) Default-target derivation: nothing in the doc replaces experiment.target_category / Roster.names(\"ReadableTransmon\") (cli/_backends.py:51-65). How does an experiment declare which entities it can target — a predicate over derived operations (§7 table), required channel kinds, or an explicit kind list? This also decides the `--targets` help text and the all-device fallback in _engine.py.\n2) Driver fieldmap keying for `scqo state --fields`: bindings/unrealized are currently keyed by category (state.py:186-207). §10 says fieldmaps re-target in the same release but not the new key shape — channel kind, entity kind, or field name (now globally unique per the cross-catalog assertion)? A flat field-name keying would simplify _fields_payload but is a cross-repo contract.\n3) User-facing store/role vocabulary: history(store=\"physical\"/\"instrument\"), suggestion/plan \"store\" labels, and the --fields kind labels (\"pushed\"/\"record-only\") — do these become fact/knob/monitor words, and does `scqo state` keep two stores' labels as \"physical\"/\"state\" or the filenames? Affects state.py, set.py, _review.py, viewer templates.\n4) Viewer behavior on pre-cutover contexts: run pages and past-cooldown device sections resolve against that era's scqo/ folder, which will keep schema-2 files with top-level \"config\". Fresh-start policy says never read v1/v2 — does the viewer render those sections blank, keep a read-only dual reader, or is the §10 one-time old→new key map (mentioned only for trends) extended to the state panel?\n5) Doctor witnesses (§7 a-f): where does the \"vendor wiring annotation\" live and in what format, which checks run at `scqo doctor` vs roster load, and is DeviceModel.components()/ComponentInfo deleted or repurposed? What does the simulated backend/InMemoryDevice provide so the witness path is testable driver-less?\n6) Demo shape: the current demo pair q0_q1 has no coupler mode, but its two knobs re-home to a coupler flux channel's idle_flux (needs a coupler mode + flux line in the demo roster) and a per-operation composite knob. Does the demo roster grow a q0_q1_c mode + zc line to exercise minting/coupler plumbing, and is a flux-activated <op>_coupler_flux legal on a coupler-less pair at all?\n7) `scqo device freeze` and the components.lock superset check: in the cutover combo release or deferred to the production cut (§11 says the design lands during a trial phase)? Doctor's lock check depends on this.\n8) The `scqo state --rule` bench text and placement-rule tier list: §6's role router changes tiers 2-5 — is the placement rule re-derived in the design doc's terms (fact/knob/monitor + design.toml) as part of this cutover, or does TUTORIAL rewrite lag?",
+      "files": [
+        {
+          "path": "D:\\github\\SCQO\\scqo\\cli\\_backends.py",
+          "symbols": "DEMO_QUBITS L29-38 (old spellings readout_freq/drive_freq/pi_amp/readout_amp/readout_power_dbm/readout_duration_s/readout_integration_s lumped per qubit; q0_q1 coupler_decouple_v/coupler_interaction_v); DEMO_CATEGORIES L40-41 (\"TransmonPair\" witness label); default_targets L51-65 (\"ReadableTransmon\", experiment.target_category, sess.roster.names(category)); _load_roster L90-102 (scqo.roster.load_components); _demo_session L105-118 (testing.demo_roster, InMemoryDevice(DEMO_QUBITS, DEMO_CATEGORIES)); build_session L218-223 (roster -> make_session)",
+          "change": "Demo seed re-keys to channel entities (q0_xy/q0_ro/q0_z...) with _hz-suffixed knobs; coupler knobs re-home to a coupler flux channel idle_flux + per-op composite knob; _load_roster swaps to the greenfield loader (components.toml sections + rider expansion + design.toml); default_targets re-derives from channel existence / derived-operations instead of instrument category.",
+          "risk": "needs-design-thought"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\cli\\_engine.py",
+          "symbols": "--targets help L83 (\"every ReadableTransmon in the roster\"); default_targets import/use L15, L138; _parse_value L19 (shared by set/suggest, schema-neutral)",
+          "change": "Help text and the all-device fallback wording follow whatever replaces target-category derivation; no structural change here.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\cli\\_review.py",
+          "symbols": "suggestion dict keys component/field/store throughout (format_table L28-48, parse_selection L51-81 splits component.field on \".\", format_summary L84-107); example names q0/q0_res/readout_freq in docstring L8-10",
+          "change": "Grammar survives (greenfield addressing keeps NAME.FIELD, names stay dot-free); update store-label vocabulary and docstring examples to new spellings; selection matching over channel names (q1_xy.pi_amp) works as-is.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\cli\\accept.py",
+          "symbols": "docstring/examples q0.readout_freq L6, L31; --field help L81; _no_suggestions_hint L55-66 (readout_freq example); record.get(\"targets\") or record.get(\"qubits\") L114, L135 (immutable run records)",
+          "change": "Example spellings become _hz forms (q0.readout_freq_hz stays legal via addressing sugar or q0_ro.readout_freq_hz explicit); targets/qubits fallback stays (old run records are exempt).",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\cli\\set.py",
+          "symbols": "docstring examples L3-4, L16-17 (readout_freq, pi_amp, t1_s, f_r_hz; \"routed by category\"); assignments metavar/help L34-35, L46; plan item rendering component/field/store/unit L67-71, L84-87",
+          "change": "Parse/confirm/apply flow unchanged; docstring examples and the routing phrase move to role-based wording (routing itself moves to channel-closure resolution in Session.set_values); store labels follow the new vocabulary.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\cli\\suggest.py",
+          "symbols": "docstring examples L3-4, L17-18 (readout_freq, f_r_hz, kappa_tot_hz; \"routed by the component's category\"); assignments help L38, L49",
+          "change": "Text-only: new spellings + role wording; parsing and Session.suggest call unchanged.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\cli\\state.py",
+          "symbols": "from ..categories import CATEGORIES L24; _RULE static text L29-63 (roster form, interaction terms q1_ro/q1_xy/q1_z, PHYSICAL category, v_per_phi0_v, DESIGN in components.toml, p_e_given_g); history print L113-125; _print_state L138-170 (sess.roster.category(name), CATEGORIES[cat].fields column order, per-instrument-category tables, requires_physical pruning comment L156); _fields_payload L173-218 (spec.side/kind/doc/operations, fs.push/portable/unit, category-keyed backend field_bindings()/unrealized(), missing_bindings, TransmonPair capability note L179); _print_fields L221-280 (pushed/record-only labels, operations line); _catalog_field_order L283-288; _print_physical L291-315 (roster.category(n)[0] category column); _print_sources L318-351 (store labels instrument/physical)",
+          "change": "Heaviest rewrite in the area: per-category tables become per-kind tables (channel kinds + composites), column order from the new kind catalogs, --fields iterates the mode/composite/channel catalogs with role fact/knob/monitor replacing side+push, bindings re-keyed per the new driver fieldmap contract, _RULE rewritten for the role router + design.toml, category column becomes kind.",
+          "risk": "needs-design-thought"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\cli\\doctor.py",
+          "symbols": "_roster_check L111-126 (scqo.roster.load_components, COMPONENTS_FILE, trial-phase warning doctrine); version(\"scqo\") L138 + entry-point checks L140 (schema-neutral); _EXPECTED_FILES L22 + _setup_checks L26-108 (vendor config files, schema-neutral); NOTE: no components() vendor-witness call exists today despite roster.py's claim",
+          "change": "_roster_check swaps to the greenfield loader and reports expanded entities (modes/composites/lines/minted channels+resonators); gains the six S7 witnesses (line-port containment, shared-line IF distinctness, combined-line coverage, fixed-transmon-with-z error, qubit_pair roles vs design + informational live-f01, design-vs-measured key-for-key), a design.toml check, and the components.lock superset check post-freeze.",
+          "risk": "needs-design-thought"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\cli\\device.py",
+          "symbols": "docstring only: design values L20, scqo_state.json + physical.json L24; _VERBS L55 (list/add/cooldown); all existing code paths (cooldown registry, setup folders) are schema-neutral",
+          "change": "Existing verbs unchanged; per the design doc `scqo device` should print each entity's derived operations (S8) and a new `freeze` verb writes components.lock (S7 append-only cut); docstring gains design.toml in the manual-steps list.",
+          "risk": "needs-design-thought"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\cli\\find.py",
+          "symbols": "--target filter L27 (component name, name-based only); r.get(\"targets\") or r.get(\"qubits\") L63 (immutable-run fallback)",
+          "change": "No structural change: entity names are preserved by the greenfield naming rules; old-run fallback stays per the immutable-run-data exemption.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\cli\\run.py",
+          "symbols": "docstring only L1-12; delegates to _engine.run_experiment_cli L20",
+          "change": "No code change; inherits _engine/_backends behavior.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\viewer\\app.py",
+          "symbols": "from ..categories import CATEGORIES L23; _FIT_ONLY_TRENDS L36; _catalog_fields(side, push) L39-50 (spec.side, fs.push); PHYSICAL_FIELD_ORDER/INSTRUMENT_FIELD_ORDER/TREND_QUANTITIES L53-61; _instrument_sources L115-121 reads data.get(\"config\") from scqo_state.json (renamed \"values\" in schema 3, S10 item 8); _physical_sources L123-129 (physical.json \"values\", no schema gate); run_page suggestion store==\"physical\" branch L215; trends_page defaults target=\"q1\" quantity=\"t1_s\" L272; _phys_panel L286-300 (PHYSICAL_FIELD_ORDER); _state_section L302-337 (data.get(\"config\") L321, INSTRUMENT_FIELD_ORDER columns L333); device_page snapshot fallback L361-370",
+          "change": "Field-order/trend lists rebuild from the new kind catalogs with role-based filtering; both \"config\" reads become \"values\"; trend quantity names change to _hz spellings so trends either restart at the cutover epoch or ship the one-time old-to-new key map (S10 cutover economics — explicit decision); state tables now key on channel/composite entity names.",
+          "risk": "needs-design-thought"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\viewer\\templates\\device.html",
+          "symbols": "state table headers component + sec.state_fields L74-85; history/physical tables component/field columns L88-135 (generic keys, no category refs)",
+          "change": "Renders whatever app.py supplies; only cosmetic wording (component -> entity) and possibly per-kind table grouping if app.py adopts it.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\viewer\\templates\\trends.html",
+          "symbols": "quantities link list L16 (values from TREND_QUANTITIES); quantity free-text input L14",
+          "change": "No template change; the quantity vocabulary it renders changes upstream (old trend keys stop resolving unless the key map ships).",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\testing.py",
+          "symbols": "from .roster import Component, Roster L15; demo_roster L18-51 (hand-built Component set: FixedTransmon/ReadableTransmon + Resonator/ReadoutLine/XYControl satellites, members dicts, operations tuples incl. coupler_bias, inline design= values, Coupling/TransmonPair pair with high/low members); _InMemoryComponent default category \"ReadableTransmon\" L59; InMemoryDevice L77-109 (categories labels, components() witness returning ComponentInfo with ops map {ReadableTransmon: rx/readout, TransmonPair: coupler_bias/iswap} L93-102); SimulatedBackend L111-137 (target coord = entity names, schema-neutral)",
+          "change": "demo_roster becomes a greenfield declaration (modes q0/q1 [+ coupler mode], lines with readout/drive[/flux] riders that mint q*_ro/q*_xy/q*_res, qubit_pair composite with declared operations, separate demo design mapping) run through the new loader so minting is exercised; InMemoryDevice keys become channel names; the components()/ComponentInfo witness is deleted or replaced by whatever vendor-wiring-annotation stub the S7 doctor witnesses need; coupler_bias operation disappears (idle_flux on the coupler z channel).",
+          "risk": "needs-design-thought"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\labconfig.py",
+          "symbols": "make_session(backend, cfg, roster, ...) L226-263 (roster passed through to Session; setup_state_path unchanged); module docstring store-location prose L1-58 (schema-neutral)",
+          "change": "Type of the roster argument becomes the expanded greenfield roster object; no logic change (paths, state_sync, era stamping all survive).",
+          "risk": "mechanical"
+        }
+      ]
+    },
+    {
+      "area": "tests",
+      "area_summary": "tests/ — 25 test modules, 346 test functions, plus conftest.py and a vendor-config fixture dir. Bucket counts: (a) OLD-model-direct = 2 modules / 20 tests (test_roster.py, test_fieldmap.py — both rewritten wholesale in the model phases); (b) behavior-survives-but-old-fixtures = 18 modules / 296 tests (of which test_labconfig.py has only 3 of 33 tests affected); (c) untouched = 5 modules / 30 tests (test_cli_user, test_cli_device, test_estimator_method_sync, test_index_scale, conftest). The dominant fixture dependency is scqo.testing.demo_roster() (scqo/testing.py:18-51, outside this area but consumed by ~15 test modules) — regenerating it in greenfield form ([modes]/[lines]/[composites] + design.toml data) mechanically converts most of bucket (b). Shared fixture surfaces needing regeneration across (b): (1) inline `[components.*]` two-slot TOML strings (6 modules); (2) InMemoryDevice qubit dicts keyed by MODE name with old knob spellings (readout_freq/drive_freq/pi_amp/... on \"q0\"; coupler_decouple_v/coupler_interaction_v on \"q0_q1\") — re-home to channel entities q0_ro/q0_xy/q0_z with _hz spellings and idle_flux; (3) scqo_state.json fixtures with top-level \"config\" key → \"values\", schema 3; (4) physical.json homes: v_offset_v/v_per_phi0_v → flux_offset/flux_per_phi0 (entity q?_z survives), g_hz moves q0_ro → q0_res, schema stamp 2 → 3; (5) suggestion/history dicts carrying store=\"instrument\"/\"physical\" and category names (\"ReadableTransmon\", \"TransmonPair\", \"Coupling\", \"ZControl\"); (6) CLI/suggest addressing strings \"q0.readout_freq=...\" → default-addressing sugar over channel closure; (7) hand-built Roster({Component(...)}) flux rosters in test_end_to_end/_physical → flux_transmon modes + flux riders. test_component_invariants.py is explicit cutover insurance and must keep passing with only fixture swaps (fit keyed by run targets; pre-rename \"qubits\" record.json reindexable — the one no-compat data exemption).",
+      "design_questions": "1) Suggestion/history routing labels: Suggestion.store and history rows currently carry \"instrument\"/\"physical\" (the two-slot vocabulary). Under role-routing (fact/knob/monitor → store file), what string do run records, accept summaries, and `scqo state --sources` carry — the role, the store filename, or nothing? test_suggestions/test_set/test_end_to_end assert these strings ~30 times. 2) Addressing in suggest/set keys: does \"q0.pi_amp\"-style sugar remain the recorded component (mode name) with the router resolving the owning channel, or do suggestion records/history rows re-key to the channel name (q0_xy)? This decides whether history/trends written at cutover key on modes or channels — §10 says trends restart or ship a key map, but doesn't fix the going-forward key. 3) Experiment Parameters flux spellings (min_flux_v/max_flux_v, flux_component in _capabilities): the schema's source-native flux rule governs roster fields only — are per-run Parameters names also renamed (ripples into test_capabilities DESC-constant assertions and every flux experiment's schema)? 4) Doctor scope at cutover: test_cli_doctor's healthy fixture is a bare components.toml — do the §7 witness checks (vendor wiring annotation keyed by line names) become load-time requirements for a healthy simulated setup, or only warn when a vendor folder exists? Also the brittle \"21 experiment(s)\" count assertion. 5) `scqo state --fields` payload shape: re-keyed by channel kind instead of category — is the driver fieldmap declaration (field_bindings() return type, currently {\"ReadableTransmon\": {...}}) keyed by channel kind, entity kind, or (channel kind × target kind) row? test_fieldmap's rewrite depends on it. 6) InMemoryDevice/RecordingDevice test doubles: the vendor stand-in exposes component(\"q0\").readout_freq attributes — the greenfield equivalent needs a defined vendor-view surface for channel entities before any (b) module can be converted; the doc doesn't specify the neutral DeviceModel/ComponentView replacement. 7) tests/demo_instr_config/ has no in-repo consumer I could find — confirm whether driver repos reference it before deciding if its QUAM/Qblox fixtures need line-name wiring annotations.",
+      "files": [
+        {
+          "path": "D:\\github\\SCQO\\tests\\test_roster.py",
+          "symbols": "load_components/Roster/RosterError/COMPONENTS_FILE (L8); CATEGORIES/field_categories/pushed_fields (L7, L71-81); VALID/PAIR `[components.*]` TOML with physical=/instrument= slots, members=, operations=, .design sub-tables (L12-57); r.category/names/fields_of/resolve/one/pushed (L88-161); old spellings idle_flux_v (L101-112), v_offset_v (L121), coupler_decouple_v/coupler_interaction_v (L155-157); error-case parametrization over two-slot rules (L166-214)",
+          "change": "Bucket (a), 10 tests. Full rewrite as the greenfield roster-loader suite: [modes]/[composites]/[lines]/[channels] parsing, rider minting (_ro/_xy/_z/_res), via defaulting, DAG check, namespace-collision rule, compiled legal-field sets, kind x target legality table, freeze/superset check — replacing category/two-slot assertions entirely.",
+          "risk": "needs-design-thought"
+        },
+        {
+          "path": "D:\\github\\SCQO\\tests\\test_fieldmap.py",
+          "symbols": "CATEGORIES, pushed_fields(\"ReadableTransmon\") (L17, L28-30); field_bindings() keyed {\"ReadableTransmon\": ...} (L47); non-portable set enumeration incl. idle_flux_v/coupler_decouple_v/coupler_interaction_v/readout_pos_* (L78-96); _fields_payload per-category shape (L103-146); demo_roster (L20, L105/121/206); QUBITS dict with old knob spellings (L22-24); VendorBinding/VendorOnly + VENDOR_ONLY_KINDS (L18, L177-182); state --rule text incl. \"components.toml\" token (L191-194)",
+          "change": "Bucket (a), 10 tests. VendorBinding/VendorOnly shapes and --rule/--fields CLI mechanics survive (~4 tests near-unchanged); everything keyed by category or enumerating the old catalog rewrites against channel-kind field catalogs, role-based kinds (knob/monitor/fact), and the preserved portable/twin doctrine (drive_amp+drive_power_dbm pair, doctor twin warning).",
+          "risk": "needs-design-thought"
+        },
+        {
+          "path": "D:\\github\\SCQO\\tests\\test_end_to_end.py",
+          "symbols": "Component/Roster imports (L12); demo_roster throughout; _device() qubit dicts with readout_freq/drive_freq/... and q0_q1:{coupler_decouple_v,coupler_interaction_v} + categories arg {\"q0_q1\":\"TransmonPair\"} (L136-146); _flux_roster hand-built FluxTunableTransmon/ZControl Components (L149-167); store-home assertions q0_z v_offset_v/v_per_phi0_v (L437-438, L502, L525-526), idle_flux_v+readout_freq knobs (L513-523); pair routing (\"coupler_decouple_v\",\"instrument\",\"TransmonPair\") / (\"zz_hz\",\"physical\",\"Coupling\") (L874-892); \"targets TransmonPair\" refusal text (L892); flux_component param (L895-908); old field names in ~60 assertions",
+          "change": "Bucket (b), 34 tests. Lifecycle (run->suggest->accept->history) survives; regenerate _device/_flux_roster/demo_roster in greenfield form, re-home every knob assertion to channel entities with _hz spellings (readout_freq->q0_ro.readout_freq_hz, idle_flux_v->q0_z.idle_flux, coupler_decouple_v->q0_q1_c_z.idle_flux), pair test re-targets composite kind qubit_pair with role/store labels per design answer; fit-dict keys stay target names.",
+          "risk": "needs-design-thought"
+        },
+        {
+          "path": "D:\\github\\SCQO\\tests\\test_config_history.py",
+          "symbols": "demo_roster + RecordingDevice throughout (L14, L161-675); _device qubit dicts (L47-48); scqo_state.json fixtures with top-level \"config\" key (L102, L299, L325, L591, L616, L648, L679); pushed-field routing assertions pi_amp pushed / readout_fidelity not (L330-332); \"vendor wins pushed field\" pull-seed (L309, L350); component view attr writes dev.component(\"q0\").readout_freq (L418-435, L553-577); physics-key guard AttributeError match \"scqo.physical\" (L283); .v1.bak migration artifact (L688)",
+          "change": "Bucket (b), 25 tests. State-sync (pull/push), history sidecar, coupled-write, and bak-archive mechanics survive; fixtures re-key \"config\"->\"values\" schema 3, knob writes move to channel views with _hz names, pushed-set derivation becomes role=knob per channel catalog, readout_fidelity monitor -> fidelity_g/fidelity_e.",
+          "risk": "needs-design-thought"
+        },
+        {
+          "path": "D:\\github\\SCQO\\tests\\test_suggestions.py",
+          "symbols": "demo_roster (L18, L49-840); Suggestion(component=,field=,store=\"instrument\"/\"physical\") literals (L106-127, L410, L816-825); RAMSEY_FIELDS/RESONATOR_FIELDS old spellings (L56-59); parse_selection over \"q0.readout_freq\" (L138-139); staleness via device.component(\"q0\").readout_freq writes (L275, L429, L507, L526, L703); vendor-reject drive_freq doubles (L320-334, L837-852); suggest key grammar \"q0.readout_freq\" (L630-748)",
+          "change": "Bucket (b), 33 tests. Suggest/accept/reject/stale/rollback mechanics survive intact; regenerate component/field pairs to channel entities + _hz spellings, and re-decide the Suggestion.store label vocabulary (design question 1) plus addressing key grammar (question 2).",
+          "risk": "needs-design-thought"
+        },
+        {
+          "path": "D:\\github\\SCQO\\tests\\test_set.py",
+          "symbols": "demo_roster + QUBITS old-spelling dicts (L19-25); set_values({\"q0.readout_freq\": ...}) addressing (L41, L102, L121, L203-260); applied-dict shape store=\"instrument\", unit \"Hz\" (L44, L123); saved[\"config\"] state-file read (L55-56); VendorOnly realizer interplay (L168)",
+          "change": "Bucket (b), 14 tests. scqo set flow survives; addressing strings become mode-name sugar routed through channel closure (or explicit channel names), store labels per role router, saved file key \"config\"->\"values\".",
+          "risk": "needs-design-thought"
+        },
+        {
+          "path": "D:\\github\\SCQO\\tests\\test_setup_state.py",
+          "symbols": "inline [components.q0] two-slot TOML (L37-48); demo_roster (L21, L31); RecordingDevice(_vendor(), _roster()) (L164-179, L398); PhysicalStore lock/history/merge tests (L184-375); old scqo_state fixture with \"config\" key (L411); .v1.bak archive (L409-418); pi_amp/drive_freq writes (L398-402); path helpers setup_scqo_dir/setup_state_path + cooldown registry guards (L62-156) untouched",
+          "change": "Bucket (b), 25 tests. Path derivation, registry guards, file locking, history sidecars, and per-setup isolation all survive; regenerate the components.toml fixture, RecordingDevice view writes, and state-file shapes (schema 3, \"values\").",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\tests\\test_physical.py",
+          "symbols": "CATEGORIES/Component/Roster imports (L12); _flux_roster hand-built (L38-50); two-slot no-clash invariant test (L53-63); schema stamp assert data[\"schema\"]==2 (L77); store homes (\"q0_z\",\"v_offset_v\")/(\"q0_z\",\"v_per_phi0_v\") (L125-127, L135), g_hz on q0_ro (L94-98, L158), f_r0_hz on q0_res (L157); roster-validated record() rejections incl. \"INSTRUMENT field\" (L102-110)",
+          "change": "Bucket (b), 5 tests (1 is (a)): PhysicalStore round-trip/provenance/in-memory survive; test_per_name_field_routing_is_unambiguous is replaced by the cross-catalog field-name uniqueness assertion; homes move to flux_offset/flux_per_phi0 on q?_z, g_hz to q0_res; schema 3; \"INSTRUMENT field\" guard becomes role-based (knob/monitor smuggle guard).",
+          "risk": "needs-design-thought"
+        },
+        {
+          "path": "D:\\github\\SCQO\\tests\\test_datastore.py",
+          "symbols": "demo_roster (L15, L58-770); _device old-spelling dicts (L51-52); suggestion field lists [\"readout_freq\",\"f_r_hz\",\"kappa_tot_hz\"] (L109, L238, L271); fit_trend(\"q0\",\"readout_freq\") (L411-413); cooldown/setup resolution + reindex + registry tests (L452-796) untouched",
+          "change": "Bucket (b), 30 tests. Datastore/index/tags/reindex/cooldown-resolution behavior survives wholesale; regenerate roster + device fixtures and rename suggestion/trend quantity spellings (fit_trend quantity follows the new update() field names).",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\tests\\test_viewer.py",
+          "symbols": "demo_roster (L20, L71-236); _device old-spelling dicts (L45-46); physical.record(\"q0_ro\",\"g_hz\",...) (L85); state-file tamper via data[\"config\"] (L384); /trends quantity=readout_freq (L446-451); live-source row text \"readout_freq (q0)\" (L351); run-file traversal + reset-regression tests untouched",
+          "change": "Bucket (b), 28 tests. Viewer routes/templates/trends mechanics survive; fixtures regenerate; trend quantity/target spellings follow cutover (trends restart or key-map per section 10); g_hz re-homes to q0_res; \"config\"->\"values\".",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\tests\\test_provenance.py",
+          "symbols": "live_sources/live_run_map/summarize_live over values/history dicts keyed q0.readout_freq (L18-48, L78-94); demo_roster session test (L58-66)",
+          "change": "Bucket (b), 6 tests. Provenance mechanics survive; only the field spellings and entity keys in the hand-built values/history dicts regenerate (q0_ro.readout_freq_hz).",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\tests\\test_quickwins.py",
+          "symbols": "demo_roster (L22, L90, L124); old-spelling device dicts (L28-29, L58); per-qubit partial-failure writeback asserts on readout_freq (L114-133)",
+          "change": "Bucket (b), 6 tests. Outcome/partial-failure mechanics survive; fixture + spelling regeneration only.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\tests\\test_parameter_defaults.py",
+          "symbols": "demo_roster (L14, L38); old-spelling device dicts (L28-29)",
+          "change": "Bucket (b), 8 tests. Parameter-defaults overlay mechanics are model-independent; fixture regeneration only.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\tests\\test_contract.py",
+          "symbols": "old-spelling device dicts (L20-21); DatasetContract validation otherwise model-free",
+          "change": "Bucket (b), 7 tests. Contract validation untouched; device fixture spellings regenerate.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\tests\\test_capabilities.py",
+          "symbols": "demo_roster (L26, L68-69); old-spelling device dicts (L66-67, L125-126); FluxComponentParameters(flux_component=\"q2\") (L111); MIN/MAX/NUM_FLUX_DESC + min_flux_v/max_flux_v schema asserts (L87-89); EXPECTED_TAGS incl. pair_zz_coupler (L35-51)",
+          "change": "Bucket (b), 6 tests. Derived-tag mechanics are Parameters-mixin-based and survive; fixtures regenerate; flux parameter spellings (min_flux_v etc.) and flux_component semantics depend on design question 3.",
+          "risk": "needs-design-thought"
+        },
+        {
+          "path": "D:\\github\\SCQO\\tests\\test_component_invariants.py",
+          "symbols": "demo_roster + _flux_roster import from test_end_to_end (L18-22); EXPERIMENT_PARAMS run matrix (L25-39); fit-keyed-by-targets invariant (L42-60); old \"qubits\" record.json reindex exemption (L63-88)",
+          "change": "Bucket (b), 2 tests. Written as cutover insurance — both invariants must survive verbatim; only the roster fixtures regenerate. The old-format-record test is the single no-compat data exemption and must not be weakened.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\tests\\test_cli_run.py",
+          "symbols": "inline [components.*] f-string fixture (L28-36); suggestion/accept field lists readout_freq/f_r_hz/kappa_tot_hz (L110-234); suggest arg \"q0.readout_freq=5.912e9\" (L175, L199); state-file tamper data[\"config\"] (L275-280)",
+          "change": "Bucket (b), 12 tests. `scqo run/accept/suggest/find` subprocess flow survives; fixture becomes greenfield components.toml, spellings + addressing + \"values\" key regenerate.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\tests\\test_cli_backends.py",
+          "symbols": "_COMPONENTS two-slot TOML (L25-39) written by _registry (L47); resolution-chain + demo-fallback + dispatcher tests (L58-187) model-free",
+          "change": "Bucket (b), 12 tests. Backend/setup resolution untouched; only the components.toml fixture regenerates (a configured device still requires its roster).",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\tests\\test_cli_cooldown.py",
+          "symbols": "_components() writes two-slot components.toml (L44-63); lifecycle steps otherwise model-free (L73+)",
+          "change": "Bucket (b), 3 tests. Cooldown lifecycle survives; fixture regenerates.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\tests\\test_cli_doctor.py",
+          "symbols": "_COMPONENTS two-slot TOML (L33-47) required by healthy check (L58); \"21 experiment(s)\" catalog count (L66); cooldown/config/instr-config FAIL paths (L69-142) model-free",
+          "change": "Bucket (b), 7 tests. Existing checks survive; fixture regenerates; doctor gains section-7 witness/design checks in the model phases — the healthy fixture must satisfy the new load-time validation, and new doctor tests will land here (design question 4). Catalog-count assertion is brittle across the cutover.",
+          "risk": "needs-design-thought"
+        },
+        {
+          "path": "D:\\github\\SCQO\\tests\\test_labconfig.py",
+          "symbols": "demo_roster + make_session + readout_freq device dicts in 3 of 33 tests (L360-427); sess.physical.record(\"q0\",\"t1_s\",...) (L393-394); remaining 30 tests are pure config parsing",
+          "change": "Bucket (b)-partial, 33 tests (3 affected). Config loading untouched; the three make_session integration tests regenerate fixtures only.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\tests\\test_index_scale.py",
+          "symbols": "direct SQL row fixture contains fit JSON '{\"q1\": {\"readout_freq\": 6.0e9}}' (L32) — never queried by field name; schema columns model-free",
+          "change": "Bucket (c), 2 tests. Untouched; the readout_freq string in the fit blob is cosmetic and may be renamed opportunistically.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\tests\\test_cli_user.py",
+          "symbols": "none — user.toml selection CLI only (no roster/field references found)",
+          "change": "Bucket (c), 18 tests. Untouched.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\tests\\test_cli_device.py",
+          "symbols": "cooldowns.toml registry fixtures only (L37-52); device add scaffold assertions (L106-135)",
+          "change": "Bucket (c), 6 tests. Untouched by the model; note `scqo device` gains derived-operations printing (section 8) and `device add` scaffold steps may add components.toml/design.toml lines — additive assertions later, no old-model content to remove.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\tests\\test_estimator_method_sync.py",
+          "symbols": "scqat METHODS/DIP_METHODS Literal sync only (L22-45)",
+          "change": "Bucket (c), 4 tests. Untouched.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\tests\\conftest.py",
+          "symbols": "labconfig path isolation only (L23-29)",
+          "change": "Bucket (c), 0 tests. Untouched.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\SCQO\\tests\\demo_instr_config",
+          "symbols": "OPX_OPX1000/state.json (QUAM FluxTunableTransmon/FluxTunableTransmonPair classes), QBlox_Scheduler/dut_config_AS_QRC*.json (FluxTunableTransmonElement) — no reference from any tests/*.py or scqo/ source found by grep",
+          "change": "Vendor-side fixtures; vendor wiring stays outside the roster so content is unaffected, but no in-repo consumer was found — confirm driver-repo usage before deciding whether they need line-name wiring annotations for the new doctor witnesses, or deletion.",
+          "risk": "unclear"
+        },
+        {
+          "path": "D:\\github\\SCQO\\scqo\\testing.py",
+          "symbols": "demo_roster (L18-51: FixedTransmon/ReadableTransmon + Resonator/ReadoutLine/XYControl satellites, Coupling/TransmonPair pair, design= dicts); _InMemoryComponent default category \"ReadableTransmon\" (L54-60); InMemoryDevice categories arg + components() ComponentInfo/ops witness (L77-99)",
+          "change": "OUTSIDE this area but the load-bearing fixture factory for ~15 (b) modules — flagging so the tests area is not converted before it: becomes a greenfield demo roster (modes/lines/composites + design data) and a channel-entity vendor stand-in (design question 6).",
+          "risk": "needs-design-thought"
+        }
+      ]
+    },
+    {
+      "area": "drivers",
+      "area_summary": "Both drivers consume the old model through an identical four-part glue pattern: (1) a pure-data fieldmap module (VendorBinding/Unrealized/VendorOnly tables keyed by CATEGORY name \"ReadableTransmon\"/\"TransmonPair\"), (2) a backend module whose view classes subclass scqo.device.make_view_base(category) and whose DeviceModel serves .component(name)/.components()/.snapshot() keyed by QUBIT name, (3) probe wrappers that read neutral fields off backend.device.component(target) using old spellings (readout_freq, drive_freq, pi_amp, idle_flux_v, coupler_decouple_v), and (4) a test_scqo_glue.py drift test asserting bindings|unrealized == scqo.categories.pushed_fields(category) plus an inline old-schema components.toml fixture. Under the greenfield model the one-qubit-view lump splits into channel entities: on QM, q1_xy maps to QUAM q.xy (+ the f_01 dual-write), q1_ro to q.resonator, q1_z to q.z (flux_point-selected offset), the coupler flux channel q1_q2_c_z to machine.qubit_pairs[pair].coupler (QUAM has no standalone coupler qubit), and composite q1_q2 knobs to qp.coupler offsets/macros; on Qblox, q1_xy maps to the element clock \"q1.01\" (rxy + lab spec submodule; hardware_options port-clock \"q1:mw-q1.01\"), q1_ro to clock \"q1.ro\" (measure submodule; port-clock \"q1:res-q1.ro\"), and q1_z has no realization yet (today an Unrealized entry; a flux port-clock lands with the first flux chip). Config-folder conventions (QM: <cid>/<setup>/backend_config/state.json+wiring.json; Qblox: dut_config.json+hw_config.json) are preserved by design, but nothing in either folder is currently keyed by roster LINE names — wiring.json keys per-qubit rr/xy/z opx_output port refs and hw_config keys port-clock strings — so the line-name join and the doctor witnesses (a)-(d) need a new annotation artifact. State seeding (state_sync=\"pull\") flows through DeviceModel.snapshot(), whose per-qubit field lists must become per-channel-entity keys (q1_xy/q1_ro/q1_z, plus q1_q2 composite knobs on QM). Target naming: params.targets carry roster names joined verbatim to machine.qubits[name] / QuantumDevice.get_element(name) — preserved for modes, but the QM composite join (roster q1_q2 vs QUAM pair id \"q1-2\") is currently bridged ad hoc in pair_zz_coupler and must be restated.",
+      "design_questions": "1) Fieldmap successor shape: the schema fixes per-channel-kind field catalogs in core (section 6) but says nothing about the driver-declared VendorBinding/Unrealized/VendorOnly tables — do they re-key by channel KIND (drive/readout/flux/pump), by entity, or per (channel kind x target kind) row? And what replaces pushed_fields(category) as the drift-test anchor (presumably the knob column of the section 7 table)? 2) Where do composite per-operation knob bindings live — iswap_coupler_flux has no home in either fieldmap concept today, and coupler_interaction_v's realizer (qp.coupler.interaction_offset) must move under an operation-scoped binding; how is push of operation-scoped knobs declared? 3) Does make_view_base/DeviceModel.component survive with channel entities as the view unit, and is the q1.pi_amp default-addressing sugar (section 7) resolved in core — letting probes keep component(target).field reads — or must drivers serve channel-named components (component(\"q1_ro\"))? 4) Coupler-as-mode mapping: greenfield makes q1_q2_c an ordinary flux_transmon with its own q1_q2_c_z channel, but QUAM realizes the coupler only as qubit_pairs[pair].coupler — what is the sanctioned channel-to-vendor mapping, incl. a coupler serving two pairs? 5) The line-name join: what concrete artifact in each vendor config folder carries the roster-line -> vendor-port annotation the doctor witnesses key on (wiring.json port refs / hw_config port-clock keys carry no line names today)? 6) Composite naming join: must the QUAM pair id be renamed to the roster composite name (q1_q2 vs today's \"q1-2\"), or is a declared mapping allowed (the sample-owns-names rule argues rename)? 7) Does the Unrealized concept survive? Capability-by-construction removes the Qblox idle_flux_v case (no flux rider, no channel), but drag_beta/readout_rotation_rad/readout_threshold are drive/readout-catalog fields the Qblox backend still cannot realize — the schema doc never restates the declared-unrealized mechanism the drift tests depend on. 8) Seeding: is snapshot() still the pull-mode seed surface, now keyed by channel entities, and how does a vendor report absence (entity exists in roster, no vendor element) vs unset?",
+      "files": [
+        {
+          "path": "D:\\github\\LCHQBDriver\\lchqb\\backend\\fieldmap.py",
+          "symbols": "FIELD_BINDINGS[\"ReadableTransmon\"] l.21-77 (readout_freq, drive_freq, pi_amp, drive_amp, drive_power_dbm, readout_amp, readout_power_dbm, readout_duration_s, readout_integration_s); UNREALIZED[\"ReadableTransmon\"] l.82-110 (idle_flux_v l.84, drag_beta l.87, readout_rotation_rad l.93, readout_threshold l.99, readout_rus_threshold l.105); VENDOR_ONLY l.116-214 (port-clock paths '<ro-port>-<qubit>.ro' etc.)",
+          "change": "Re-key the catalog from category to channel entities/kinds: readout fields (renamed readout_freq_hz etc.) bind on the readout channel (q1_ro -> element.measure + port-clock q1:res-q1.ro), drive fields on the drive channel (q1_xy -> clock_freqs.f01/rxy/spec + q1:mw-q1.01), idle_flux_v becomes the flux channel's source-native idle_flux (still no Qblox realization); VENDOR_ONLY paths keep port-clock strings but become the raw material for the line-name wiring annotation.",
+          "risk": "needs-design-thought"
+        },
+        {
+          "path": "D:\\github\\LCHQBDriver\\lchqb\\backend\\qblox_backend.py",
+          "symbols": "from scqo.device import ComponentInfo, DeviceModel, make_view_base l.20; QbloxReadableTransmon(make_view_base(\"ReadableTransmon\")) l.92 with property pairs readout_freq l.109, drive_freq l.117, pi_amp l.125, readout_amp l.133, readout_duration_s l.142, readout_integration_s l.156, readout_power_dbm l.208, drive_amp l.229, drive_power_dbm l.243, raising stubs idle_flux_v l.269-275 / drag_beta l.285-291 / discriminator l.305-327; _port_clock l.173 / _drive_port_clock l.179 (the port-clock join); QbloxDeviceModel.component l.358, components() ComponentInfo(\"ReadableTransmon\", operations=(\"rx\",\"readout\")) l.361-366, snapshot() 9-field list l.404-417; field_bindings/unrealized/vendor_only l.476-487",
+          "change": "Split the one view into per-channel views: a readout-channel view (measure submodule + readout port-clock), a drive-channel view (clock_freqs.f01 + rxy + spec + drive port-clock), no flux view until a flux chip; component()/snapshot() re-key by channel entity (q1_xy/q1_ro), snapshot becomes the schema-3 pull-seed source; components() derived inventory becomes the vendor wiring witness for the (channel kind x target kind) doctor checks; raising Unrealized stubs follow whatever replaces the Unrealized concept.",
+          "risk": "needs-design-thought"
+        },
+        {
+          "path": "D:\\github\\LCHQBDriver\\tests\\test_scqo_glue.py",
+          "symbols": "inline old-schema components.toml fixture l.33-47 (physical=/instrument=/members= keys, FixedTransmon/ReadableTransmon/Resonator/ReadoutLine/XYControl); scqo.categories.field_categories/pushed_fields l.83-98; VENDOR_ONLY_KINDS l.103; Unrealized entry.category==\"ReadableTransmon\" assertion l.96",
+          "change": "Rewrite the fixture to greenfield sections ([modes.q0] kind=transmon + [lines.*] readout/drive riders, schema=3) and re-anchor the drift test to the new per-channel-kind catalogs (whatever replaces pushed_fields); the bindings-XOR-unrealized invariant and pure-data AST check carry over verbatim.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\LCHQBDriver\\lchqb\\scqo_backend.py",
+          "symbols": "build_backend(cfg, setup) l.21-34; canonical names dut_config.json + hw_config.json l.25; setup[\"instrument_config\"] l.24",
+          "change": "Conventions survive (vendor wiring stays outside the roster); only addition is loading/serving whatever artifact carries the roster-line -> port-clock annotation for the doctor witnesses.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\LCHQBDriver\\lchqb\\experiments\\resonator_spectroscopy.py",
+          "symbols": "backend.device.component(qubit_name).readout_freq l.31-33; params.targets l.31",
+          "change": "Read re-targets the readout channel (q1_ro.readout_freq_hz) — mechanical if core keeps target-name default addressing on views, an API change otherwise; same pattern in readout_frequency.py l.37-39, readout_power.py l.41-45 (readout_amp), resonator_spectroscopy_power_amp.py l.61-66, resonator_spectroscopy_power_chain.py l.42-44, resonator_spectroscopy_flux.py l.43-47, qubit_spectroscopy.py l.43-47 (drive_freq/drive_amp), qubit_spectroscopy_flux_pulse.py l.69-75, qubit_power_rabi.py l.28-30 (pi_amp).",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\LCHQBDriver\\tests\\test_qblox_power.py",
+          "symbols": "backend.device.component(\"q1\") views throughout l.54-374; readout_amp/readout_power_dbm/drive_amp/drive_power_dbm round-trips; snapshot()[\"q1\"][...] l.90,138",
+          "change": "Re-anchor to the new channel views (q1_ro for the readout chain solve, q1_xy for the drive twin); the dbm/amp field names themselves survive (dimensionless + _dbm carry no unit-suffix change); snapshot assertions re-key by entity.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\LCHQBDriver\\tests\\test_readout_duration.py",
+          "symbols": "QbloxReadableTransmon direct instantiation l.16, 42-91 (readout_duration_s/readout_integration_s grid + clamp contract)",
+          "change": "Retarget to the readout-channel view class; the 4-ns grid and window<=pulse contract logic is untouched.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\LCHQBDriver\\scripts\\check_real_config.py",
+          "symbols": "scqo.testing.demo_roster l.78-83; Session(SimulatedBackend, roster, ...) l.83; snapshot()[q][\"readout_freq\"] l.106; params {\"targets\": qubits} l.90",
+          "change": "Depends on the greenfield replacement for demo_roster (a modes+lines demo builder) and re-keyed snapshot comparisons (q_ro.readout_freq_hz).",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\LCHQBDriver\\scripts\\ai_loop_demo.py",
+          "symbols": "sess.device_state() consumed as {qubit: fields} l.26, 38, 49",
+          "change": "device_state() keys become channel/composite entity names; the demo's targets derivation (list(device_state)) must pick mode names, not entity names.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\LCHQBDriver\\CLAUDE.md",
+          "symbols": "make_view_base(\"ReadableTransmon\") reference l.21-22; neutral-field invariants list l.63-90",
+          "change": "Doc rewrite to the channel-entity vocabulary at cutover.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\LCHQMDriver\\customized\\scqo\\fieldmap.py",
+          "symbols": "FIELD_BINDINGS[\"ReadableTransmon\"] l.21-115 (readout_freq->q.resonator.RF_frequency l.23, drive_freq->q.f_01 l.25, pi_amp l.29, drag_beta l.31, drive_amp l.36, drive_power_dbm l.40, readout_amp l.52, readout_power_dbm l.54, readout_duration_s l.64, readout_integration_s l.73, readout_rotation_rad l.82, readout_threshold l.92, readout_rus_threshold l.100, idle_flux_v->q.z.<flux_point>_offset l.105-114); FIELD_BINDINGS[\"TransmonPair\"] l.116-128 (coupler_decouple_v->qp.coupler.decouple_offset l.117, coupler_interaction_v->qp.coupler.interaction_offset l.123); UNREALIZED={} l.135; VENDOR_ONLY l.141-264 incl. pair entries pair_detuning/pair_moving_qubit/coupler_flux_point/iswap_macro l.225-263",
+          "change": "Re-key by channel entity/kind: readout block -> q1_ro (q.resonator), drive block -> q1_xy (q.xy + f_01 dual-write), idle_flux_v -> q1_z idle_flux (source-native, flux_point-selected offset); the TransmonPair category dissolves — coupler_decouple_v becomes the coupler flux channel's idle_flux (realized by qp.coupler.decouple_offset: relitigation item 3), coupler_interaction_v becomes a per-operation composite knob (<op>_coupler_flux) with no current binding concept to live in; pair VENDOR_ONLY entries re-home under composite/wiring annotations.",
+          "risk": "needs-design-thought"
+        },
+        {
+          "path": "D:\\github\\LCHQMDriver\\customized\\scqo\\backend.py",
+          "symbols": "from scqo.device import ComponentInfo, DeviceModel, make_view_base l.23; QMReadableTransmon(make_view_base(\"ReadableTransmon\")) l.60-223 (readout_* props via quam_fields l.71-149, power twins l.156-211, idle_flux_v l.217-223); QMTransmonPair(make_view_base(\"TransmonPair\")) l.226-248 (coupler_decouple_v/coupler_interaction_v); QMDeviceModel.component l.264-270 (qubits-then-pairs lookup), components() ComponentInfo witness l.272-284, snapshot() 14-field qubit list + 2-field pair list l.292-313; field_bindings/unrealized/vendor_only l.356-368",
+          "change": "Split into channel views: q1_xy -> q.xy/f_01, q1_ro -> q.resonator, q1_z -> q.z; the pair view splits into the coupler-mode flux channel (q1_q2_c_z -> qp.coupler — QUAM has no standalone coupler object, the mapping must route through the owning pair) plus composite per-operation knobs; component()/snapshot() re-key by entity (the pull-mode seed surface); components() witness feeds the new doctor checks (fixed transmon with a vendor z element = error is witness (d)).",
+          "risk": "needs-design-thought"
+        },
+        {
+          "path": "D:\\github\\LCHQMDriver\\customized\\quam_fields.py",
+          "symbols": "get/set_readout_freq l.36-51, get/set/shift_drive_freq l.55-80 (f_01+xy.RF dual-write), readout amp l.88-96, duration/integration + weights rebuild l.140-194, discriminator trio l.202-223, get/set_idle_flux l.227-245 (flux_point dispatch), pi_amp l.249-296, saturation l.304-312, drag_beta l.316-375; module docstring's neutral-name table l.14-24",
+          "change": "Vendor mechanics survive intact behind the new channel fieldmap; renames to the _hz/_s spellings and the idle_flux_v->idle_flux rename are cosmetic but ripple into the qualibrate customized/node/LCH_*/update.py writebacks that share these helpers — QM's only executable-conversion layer, so it is the natural home of the new channel-kind conversions.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\LCHQMDriver\\customized\\scqo\\backend_factory.py",
+          "symbols": "build_backend l.22-42; state_sync==\"pull\" guard l.28-32; canonical state.json + wiring.json l.34; setup[\"instrument_config\"] l.33",
+          "change": "Conventions and the pull guard survive; section 10's cutover reseed (state_sync=pull reseeds every pushed knob) flows through this path, and the folder must additionally carry/derive the roster-line -> wiring.json port annotation for doctor witnesses.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\LCHQMDriver\\tests\\test_scqo_glue.py",
+          "symbols": "old-schema components.toml fixture l.29-44; FIELD_BINDINGS category set == {ReadableTransmon, TransmonPair} l.76; pushed_fields/field_categories drift l.71-87; VENDOR_ONLY_KINDS l.92-97",
+          "change": "Rewrite fixture to greenfield sections; the two-category assertion becomes a channel-kind (+ composite-knob) coverage assertion against the new catalogs; the 'no qblox counterpart' unique-doc convention carries over.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\LCHQMDriver\\tests\\test_qm_backend.py",
+          "symbols": "backend.device.component(\"q4\") views l.203-352; snapshot key-set assertion incl. idle_flux_v l.232-237 and pair {coupler_decouple_v, coupler_interaction_v} l.239-240; readout/drive power round-trips l.263-352; _to_canonical raw-target rename qubit/qubit_pair->target l.17-115 (unaffected)",
+          "change": "Re-anchor view tests to channel entities and rewrite the snapshot key-set assertions to the schema-3 entity/field split (q4_xy/q4_ro/q4_z + q1_q2 composite); _to_canonical tests are model-independent and survive.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\LCHQMDriver\\customized\\scqo\\experiments\\pair_zz_coupler.py",
+          "symbols": "self.device.roster + roster.members(pair_name)[measure] l.34-41 (high/low role lookup); machine.qubit_pairs[pair_name] vendor-name join l.37, l.69; inherited coupler_decouple_v/zz_hz writeback (docstring l.4)",
+          "change": "high/low come from the qubit_pair composite's kind refs (design-nominal, section 4) via whatever replaces roster.members; the decouple writeback re-targets q1_q2_c_z.idle_flux + zz_hz on the composite; the roster-composite-name == QUAM-pair-id join (today \"q1-2\" style ids exist in wiring.json) must be made an explicit contract.",
+          "risk": "needs-design-thought"
+        },
+        {
+          "path": "D:\\github\\LCHQMDriver\\customized\\scqo\\experiments\\resonator_spectroscopy_flux.py",
+          "symbols": "z_source=self.params.flux_component l.50 (probe maps: qubit name -> machine.qubits[n].z, pair name -> qubit_pairs[n].coupler in customized/probes/resonator_spectroscopy_flux.py l.41-48); same param in qubit_spectroscopy_flux_pulse.py l.59 (z_source_qubit)",
+          "change": "flux_component becomes a flux-CHANNEL name (q1_z / q1_q2_c_z); the driver must resolve channel -> vendor flux driver via the channel's target ref, incl. the coupler-mode -> qp.coupler indirection; SCQO-side validation moves from roster component check to channel-closure check.",
+          "risk": "needs-design-thought"
+        },
+        {
+          "path": "D:\\github\\LCHQMDriver\\customized\\scqo\\experiments\\single_shot_readout.py",
+          "symbols": "self.device.component(qubit) l.85; writes readout_rotation_rad/readout_threshold/readout_rus_threshold l.86-90",
+          "change": "Discriminator proposals re-target the q1_ro channel entity (fields keep their names — governed discriminator vocabulary is preserved, section 10); the fidelity/pos_* monitors land on q1_ro in scqo_state.json.",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\LCHQMDriver\\scripts\\check_real_config.py",
+          "symbols": "Session(SimulatedBackend(dm), data_root=...) WITHOUT a roster l.69 (stale vs LCHQB's demo_roster call); params key {\"qubits\": qubits} l.75 (stale spelling); snapshot()[q][\"readout_freq\"] l.92",
+          "change": "Needs the greenfield demo-roster builder + re-keyed snapshot; the missing-roster and 'qubits' params key look already-broken against current core and should be fixed in the same pass.",
+          "risk": "unclear"
+        },
+        {
+          "path": "D:\\github\\LCHQMDriver\\customized\\probes\\_lib.py",
+          "symbols": "select_qubits l.12-28 (machine.qubits[name] join), select_qubit_pairs l.31-44 (machine.qubit_pairs[name] join)",
+          "change": "Unchanged mechanically — but they are the target-naming contract: roster mode names must equal QUAM qubit names (preserved rule) and roster composite names must equal QUAM pair ids (must be restated for the q1_q2 spelling).",
+          "risk": "mechanical"
+        },
+        {
+          "path": "D:\\github\\LCHQMDriver\\quam_state\\wiring.json",
+          "symbols": "per-qubit rr/xy/z opx_output port refs (e.g. q1 l.52-61: rr->mw_outputs/con1/7/1 shared feedline, xy->7/2, z->analog_outputs/con1/2/1) and pair entries (q1-2 l.126-131 coupler port)",
+          "change": "Becomes the vendor half of the line-name join: the shared rr mw_output IS the physical feedline the roster's [lines.fl1] readout rider list describes; a roster-line -> port annotation (new, format undecided) is required for doctor witnesses (a)-(d); pair id spelling \"q1-2\" collides with roster composite naming.",
+          "risk": "needs-design-thought"
+        }
+      ]
+    }
+  ],
+  "workflowProgress": [
+    {
+      "type": "workflow_phase",
+      "index": 1,
+      "title": "Inventory"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 1,
+      "label": "inv:scqo-core",
+      "phaseIndex": 1,
+      "phaseTitle": "Inventory",
+      "agentId": "ad7854ddf7c0c852a",
+      "model": "claude-fable-5",
+      "state": "done",
+      "startedAt": 1784959999293,
+      "queuedAt": 1784959999260,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "SCQO core (scqo/ excluding experiments/, cli/, viewer/) tou…",
+      "promptPreview": "READ-ONLY inventory for a planned cutover. The SCQO stack is replacing its device-description model (old: scqo/roster.py components.toml + scqo/categories.py two-slot categories + scqo/config.py + scqo/physical.py stores) with the greenfield schema specified in D:\\github\\SCQO\\docs\\greenfield-schema.md (read its sections 1-7 and 10 first — especially section 10 and its relitigation list). Your job …",
+      "lastProgressAt": 1784960352306,
+      "tokens": 154906,
+      "toolCalls": 34,
+      "durationMs": 353013,
+      "resultPreview": "{\"area_summary\":\"SCQO core (scqo/ excluding experiments/, cli/, viewer/) touches the old model through four source modules (categories.py, roster.py, device.py, config.py+physical.py) and five consumers (session.py, suggestions.py, experiment.py, backend.py, testing.py), plus re-exports and light touchpoints. REPLACED OUTRIGHT: CATEGORIES/CategorySpec and the whole two-slot (physical, instrument) …"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 2,
+      "label": "inv:experiments",
+      "phaseIndex": 1,
+      "phaseTitle": "Inventory",
+      "agentId": "ae46d245de6664770",
+      "model": "claude-fable-5",
+      "state": "done",
+      "startedAt": 1784959999294,
+      "queuedAt": 1784959999260,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "scqo/experiments/ never imports roster.py/categories.py/con…",
+      "promptPreview": "READ-ONLY inventory for a planned cutover. The SCQO stack is replacing its device-description model (old: scqo/roster.py components.toml + scqo/categories.py two-slot categories + scqo/config.py + scqo/physical.py stores) with the greenfield schema specified in D:\\github\\SCQO\\docs\\greenfield-schema.md (read its sections 1-7 and 10 first — especially section 10 and its relitigation list). Your job …",
+      "lastProgressAt": 1784960294346,
+      "tokens": 153188,
+      "toolCalls": 33,
+      "durationMs": 295052,
+      "resultPreview": "{\"area_summary\":\"scqo/experiments/ never imports roster.py/categories.py/config.py/physical.py directly. All old-model coupling flows through exactly three surfaces: (1) ClassVars consumed by Session pre-probe validation — target_category (category name string; only pair_zz_coupler overrides the \\\"ReadableTransmon\\\" default declared in scqo/experiment.py:43), required_operations (op-name tuples \\\"…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 3,
+      "label": "inv:cli-viewer",
+      "phaseIndex": 1,
+      "phaseTitle": "Inventory",
+      "agentId": "a6de0fc8c14598409",
+      "model": "claude-fable-5",
+      "state": "done",
+      "startedAt": 1784959999295,
+      "queuedAt": 1784959999260,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "The CLI + viewer + testing + labconfig area touches the old…",
+      "promptPreview": "READ-ONLY inventory for a planned cutover. The SCQO stack is replacing its device-description model (old: scqo/roster.py components.toml + scqo/categories.py two-slot categories + scqo/config.py + scqo/physical.py stores) with the greenfield schema specified in D:\\github\\SCQO\\docs\\greenfield-schema.md (read its sections 1-7 and 10 first — especially section 10 and its relitigation list). Your job …",
+      "lastProgressAt": 1784960255213,
+      "tokens": 162968,
+      "toolCalls": 35,
+      "durationMs": 255918,
+      "resultPreview": "{\"area_summary\":\"The CLI + viewer + testing + labconfig area touches the old model through five surfaces: (1) roster loading/typing — cli/_backends.py loads scqo.roster.load_components and passes the Roster into make_session (labconfig.py), and testing.demo_roster hand-builds Component objects with two-slot categories, members, operations and inline design values; (2) category-driven rendering — c…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 4,
+      "label": "inv:tests",
+      "phaseIndex": 1,
+      "phaseTitle": "Inventory",
+      "agentId": "a7c757ddee48ace5b",
+      "model": "claude-fable-5",
+      "state": "done",
+      "startedAt": 1784959999296,
+      "queuedAt": 1784959999260,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "tests/ — 25 test modules, 346 test functions, plus conftest…",
+      "promptPreview": "READ-ONLY inventory for a planned cutover. The SCQO stack is replacing its device-description model (old: scqo/roster.py components.toml + scqo/categories.py two-slot categories + scqo/config.py + scqo/physical.py stores) with the greenfield schema specified in D:\\github\\SCQO\\docs\\greenfield-schema.md (read its sections 1-7 and 10 first — especially section 10 and its relitigation list). Your job …",
+      "lastProgressAt": 1784960314289,
+      "tokens": 129962,
+      "toolCalls": 28,
+      "durationMs": 314993,
+      "resultPreview": "{\"area_summary\":\"tests/ — 25 test modules, 346 test functions, plus conftest.py and a vendor-config fixture dir. Bucket counts: (a) OLD-model-direct = 2 modules / 20 tests (test_roster.py, test_fieldmap.py — both rewritten wholesale in the model phases); (b) behavior-survives-but-old-fixtures = 18 modules / 296 tests (of which test_labconfig.py has only 3 of 33 tests affected); (c) untouched = 5 m…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 5,
+      "label": "inv:drivers",
+      "phaseIndex": 1,
+      "phaseTitle": "Inventory",
+      "agentId": "a47615baa545fe9a7",
+      "model": "claude-fable-5",
+      "state": "done",
+      "startedAt": 1784959999297,
+      "queuedAt": 1784959999260,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "Both drivers consume the old model through an identical fou…",
+      "promptPreview": "READ-ONLY inventory for a planned cutover. The SCQO stack is replacing its device-description model (old: scqo/roster.py components.toml + scqo/categories.py two-slot categories + scqo/config.py + scqo/physical.py stores) with the greenfield schema specified in D:\\github\\SCQO\\docs\\greenfield-schema.md (read its sections 1-7 and 10 first — especially section 10 and its relitigation list). Your job …",
+      "lastProgressAt": 1784960318225,
+      "tokens": 162624,
+      "toolCalls": 37,
+      "durationMs": 318927,
+      "resultPreview": "{\"area_summary\":\"Both drivers consume the old model through an identical four-part glue pattern: (1) a pure-data fieldmap module (VendorBinding/Unrealized/VendorOnly tables keyed by CATEGORY name \\\"ReadableTransmon\\\"/\\\"TransmonPair\\\"), (2) a backend module whose view classes subclass scqo.device.make_view_base(category) and whose DeviceModel serves .component(name)/.components()/.snapshot() keyed …"
+    }
+  ],
+  "totalTokens": 763648,
+  "totalToolCalls": 167
+}

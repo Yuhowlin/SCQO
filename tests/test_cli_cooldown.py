@@ -42,23 +42,32 @@ def _cli(env: dict, tmp_path: Path, *args: str) -> subprocess.CompletedProcess:
 
 
 def _components(tmp_path: Path) -> None:
-    """A configured device needs its roster (components.toml) to build sessions."""
+    """A configured device needs its roster (components.toml) to build sessions.
+
+    Schema-3 roster: one transmon mode whose readout/drive riders mint the
+    q0_ro / q0_xy channels and the q0_res resonator. The datasheet beside it
+    (design.toml) is what the simulated vendor seed starts the readout knob
+    from — without it every run fails 'no standing value and no design
+    fallback', which would test the seed rules, not the cooldown chain.
+    """
     device_dir = tmp_path / "data" / "simdev"
     device_dir.mkdir(parents=True, exist_ok=True)
     (device_dir / "components.toml").write_text(
+        'schema = 3\n'
+        '[modes.q0]\n'
+        'kind = "transmon"\n'
+        '[lines.fl]\n'
+        'readout = ["q0"]\n'
+        '[lines.xy0]\n'
+        'drive = ["q0"]\n',
+        encoding="utf-8",
+    )
+    (device_dir / "design.toml").write_text(
         'schema = 1\n'
-        '[components.q0]\n'
-        'physical   = "FixedTransmon"\n'
-        'instrument = "ReadableTransmon"\n'
-        'operations = ["rx", "readout"]\n'
-        '[components.q0_res]\n'
-        'physical = "Resonator"\n'
-        '[components.q0_ro]\n'
-        'members  = { transmon = "q0", resonator = "q0_res" }\n'
-        'physical = "ReadoutLine"\n'
-        '[components.q0_xy]\n'
-        'physical = "XYControl"\n'
-        'members  = { transmon = "q0" }\n',
+        '[q0]\n'
+        'f_01_hz = 4.8e9\n'
+        '[q0_res]\n'
+        'f_r_hz = 7.1e9\n',
         encoding="utf-8",
     )
 

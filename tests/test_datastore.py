@@ -12,7 +12,7 @@ from pathlib import Path
 
 from scqo import Outcome, Session, register, reindex
 from scqo.experiments import QubitRamsey, ResonatorSpectroscopy
-from scqo.testing import InMemoryDevice, SimulatedBackend, demo_roster
+from scqo.testing import SimulatedBackend, demo_device
 
 
 # Concrete demo experiments (probe is a no-op under SimulatedBackend); registering under
@@ -45,18 +45,10 @@ class _BrokenResonatorSpectroscopy(ResonatorSpectroscopy):
         return data
 
 
-def _device() -> InMemoryDevice:
-    return InMemoryDevice(
-        {
-            "q0": {"readout_freq": 5.95e9, "drive_freq": 3.87e9, "pi_amp": 0.2, "readout_amp": 0.25},
-            "q1": {"readout_freq": 6.05e9, "drive_freq": 4.01e9, "pi_amp": 0.18, "readout_amp": 0.22},
-        }
-    )
-
-
 def _session(tmp_path, **kwargs) -> Session:
-    return Session(SimulatedBackend(_device()), demo_roster(), data_root=tmp_path / "data",
-               device_name="devA", **kwargs)
+    roster, design, vendor = demo_device()
+    return Session(SimulatedBackend(vendor), roster, design=design,
+                   data_root=tmp_path / "data", device_name="devA", **kwargs)
 
 
 RAMSEY_PARAMS = {"targets": ["q1"], "frequency_detuning_hz": 1.0e6, "max_idle_time_ns": 4000, "num_points": 201}
@@ -91,10 +83,11 @@ def test_run_persists_full_layout(tmp_path):
     # the applied updates carry their audit trail on the record (the truth)
     assert {s["status"] for s in record["suggestions"]} == {"accepted"}
 
-    # device_before/after snapshots bracket the (applied) writeback
+    # device_before/after snapshots bracket the (applied) writeback; the operating
+    # choice lives on the target's READOUT CHANNEL
     before = json.loads((run_dir / "device_before.json").read_text(encoding="utf-8"))
     after = json.loads((run_dir / "device_after.json").read_text(encoding="utf-8"))
-    assert after["q0"]["readout_freq"] != before["q0"]["readout_freq"]
+    assert after["q0_ro"]["readout_freq_hz"] != before["q0_ro"]["readout_freq_hz"]
 
 
 def test_default_run_stores_pending_suggestions(tmp_path):
@@ -106,7 +99,7 @@ def test_default_run_stores_pending_suggestions(tmp_path):
 
     record = json.loads((run_dir / "record.json").read_text(encoding="utf-8"))
     assert record["updated_device"] is False
-    assert [s["field"] for s in record["suggestions"]] == ["readout_freq", "f_r_hz", "kappa_tot_hz"]
+    assert [s["field"] for s in record["suggestions"]] == ["readout_freq_hz", "f_r_hz", "kappa_tot_hz"]
     assert {s["status"] for s in record["suggestions"]} == {"pending"}
 
     before = json.loads((run_dir / "device_before.json").read_text(encoding="utf-8"))
@@ -130,8 +123,8 @@ def test_update_suggestions_append_recomputes_pending(tmp_path):
 
     record = sess.load_run(run_id)["record"]
     appended = record["suggestions"] + [{
-        "component": "q0", "field": "pi_amp", "store": "instrument",
-        "before": 0.2, "after": 0.21, "status": "pending",
+        "entity": "q0_xy", "field": "pi_amp", "role": "knob",
+        "before": 0.1, "after": 0.21, "status": "pending",
         "origin": "operator", "proposed_by": "alice",
     }]
     sess.datastore.update_suggestions(run_id, appended)
@@ -235,7 +228,7 @@ def test_suggest_during_tag_window_survives(tmp_path, monkeypatch):
     record = sess_a.load_run(run_id)["record"]
     assert record["tags"] == ["thesis-fig3"] and record["note"] == "tagged mid-suggest"
     assert [s["field"] for s in record["suggestions"]] == [  # nothing clobbered
-        "readout_freq", "f_r_hz", "kappa_tot_hz", "pi_amp"]
+        "readout_freq_hz", "f_r_hz", "kappa_tot_hz", "pi_amp"]
     assert record["suggestions"][-1]["origin"] == "operator"
 
     # record.json is the truth: both writers' edits survive a full rebuild
@@ -268,7 +261,7 @@ def test_tag_during_suggest_window_survives(tmp_path):
     assert record["tags"] == ["thesis-fig3"]  # NOT reverted by the suggestion write
     assert record["note"] == "tagged mid-suggest"
     assert [s["field"] for s in record["suggestions"]] == [
-        "readout_freq", "f_r_hz", "kappa_tot_hz", "pi_amp"]
+        "readout_freq_hz", "f_r_hz", "kappa_tot_hz", "pi_amp"]
     assert [r["run_id"] for r in sess_b.find_runs(tag="thesis-fig3")] == [run_id]
 
 
@@ -326,6 +319,8 @@ def test_history_links_to_run_id(tmp_path):
     hist = sess.history()
     assert hist
     assert all(h["run_id"] == r["run_id"] for h in hist)
+    # the fit's physical half lands in the OTHER store, under the same run
+    assert all(h["run_id"] == r["run_id"] for h in sess.history(store="physical"))
 
 
 @register
@@ -385,7 +380,8 @@ def test_old_index_schema_triggers_rebuild(tmp_path):
 
 
 def test_without_data_root_behaves_as_before(tmp_path):
-    sess = Session(SimulatedBackend(_device()), demo_roster())
+    roster, design, vendor = demo_device()
+    sess = Session(SimulatedBackend(vendor), roster, design=design)
     result = sess.run("resonator_spectroscopy", {"targets": ["q0"]}, update="apply")
     assert result["outcomes"]["q0"] == Outcome.SUCCESSFUL.value
     assert "run_id" not in result and "data_path" not in result
@@ -400,7 +396,8 @@ def test_multi_device_one_index(tmp_path):
     from scqo import DataStore
 
     ra = _session(tmp_path).run("resonator_spectroscopy", {"targets": ["q0"]})  # devA
-    sess_b = Session(SimulatedBackend(_device()), demo_roster(),
+    roster, design, vendor = demo_device()
+    sess_b = Session(SimulatedBackend(vendor), roster, design=design,
                      data_root=tmp_path / "data", device_name="devB")
     rb = sess_b.run("resonator_spectroscopy", {"targets": ["q0"]})
 
@@ -408,9 +405,9 @@ def test_multi_device_one_index(tmp_path):
     assert store.distinct_devices() == ["devA", "devB"]
     assert [r["run_id"] for r in store.find_runs(device="devB")] == [rb["run_id"]]
 
-    both = store.fit_trend("q0", "readout_freq")
+    both = store.fit_trend("q0", "readout_freq_hz")
     assert {r["run_id"] for r in both} == {ra["run_id"], rb["run_id"]}
-    scoped = store.fit_trend("q0", "readout_freq", device="devB")
+    scoped = store.fit_trend("q0", "readout_freq_hz", device="devB")
     assert [r["run_id"] for r in scoped] == [rb["run_id"]]
 
 
@@ -753,12 +750,9 @@ def test_power_context_persists_and_reindexes(tmp_path):
     record without the key loads as {} — no index schema bump."""
     import json as _json
 
-    from scqo.testing import InMemoryDevice, SimulatedBackend
+    from scqo.testing import SimulatedBackend, demo_device
 
-    device = InMemoryDevice(
-        {"q0": {"readout_freq": 5.95e9, "drive_freq": 3.87e9, "pi_amp": 0.2,
-                "readout_amp": 0.25, "readout_power_dbm": -25.0}}
-    )
+    roster, design, vendor = demo_device()
 
     class _PowerBackend(SimulatedBackend):
         def power_context(self, qubits):
@@ -767,8 +761,8 @@ def test_power_context_persists_and_reindexes(tmp_path):
 
     from scqo import Session
 
-    sess = Session(_PowerBackend(device), demo_roster(), data_root=tmp_path / "data",
-                   device_name="devA")
+    sess = Session(_PowerBackend(vendor), roster, design=design,
+                   data_root=tmp_path / "data", device_name="devA")
     result = sess.run("resonator_spectroscopy", {"targets": ["q0"]}, update="none")
     run_id = result["run_id"]
 

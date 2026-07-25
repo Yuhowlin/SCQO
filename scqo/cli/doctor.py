@@ -108,22 +108,51 @@ def _setup_checks(cfg, backends: dict) -> list[tuple[str, str, str]]:
     return out
 
 
-def _roster_check(cfg) -> tuple[str, str, str]:
-    """The device's component roster (components.toml) — REQUIRED to run; the
-    trial-phase rule keeps every consistency issue a WARNING, never a failure."""
-    from scqo.roster import COMPONENTS_FILE, load_components
+def _roster_checks(cfg) -> list[tuple[str, str, str]]:
+    """The device's roster + datasheet + production-cut lock, through the
+    model's own witnesses (:mod:`scqo.checks`) — structure, fitness, design
+    coverage, and lock drift. The trial-phase rule keeps consistency issues
+    WARNINGs; a missing/broken roster or a broken lock is a failure."""
+    from scqo.checks import design_checks, lock_checks, roster_checks
+    from scqo.design import load_design
+    from scqo.roster import load_components
 
     device_dir = Path(cfg.data_root) / cfg.device
     try:
         roster = load_components(device_dir)
-    except FileNotFoundError:
-        return (FAIL, "roster", f"{device_dir / COMPONENTS_FILE} missing — required "
-                                f"since the component cutover; scqo state --rule + "
-                                f"TUTORIAL section 9 show the template")
+    except (FileNotFoundError, ValueError) as err:
+        return [(FAIL, "roster", str(err))]
+    out = [tuple(c) for c in roster_checks(roster)]
+    try:
+        design = load_design(device_dir, roster)
     except ValueError as err:
-        return (FAIL, "roster", str(err))
-    names = ", ".join(sorted(roster.components))
-    return (OK, "roster", f"{len(roster.components)} component(s): {names}")
+        out.append((FAIL, "design", str(err)))
+    else:
+        physical = _physical_values(cfg, roster)
+        out += [tuple(c) for c in design_checks(roster, design, physical)]
+    out += [tuple(c) for c in lock_checks(roster, device_dir)]
+    return out
+
+
+def _physical_values(cfg, roster) -> dict:
+    """The ACTIVE context's measured facts, for the design-vs-measured
+    column. Read-only and best-effort — doctor must render regardless."""
+    from scqo.datastore import active_cooldown, load_cooldowns, setup_scqo_dir
+    from scqo.stores import physical_store
+
+    try:
+        active = active_cooldown(load_cooldowns(cfg.data_root, cfg.device))
+        if not active:
+            return {}
+        cid, cycle = active
+        for name in cycle.get("setup", {}):
+            scqo_dir = setup_scqo_dir(cfg.data_root, cfg.device, cid, name)
+            values = physical_store(scqo_dir, roster).values()
+            if values:
+                return values
+    except Exception:  # a broken registry is reported by _setup_checks
+        return {}
+    return {}
 
 
 def main(argv: list[str] | None = None, prog: str | None = None) -> int:
@@ -183,7 +212,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
             checks.append((OK, "registries", f"devices.toml entries: {len(load_device_registry(cfg.data_root))}"))
             if cfg.device is not None:
                 checks.extend(_setup_checks(cfg, backends))
-                checks.append(_roster_check(cfg))
+                checks.extend(_roster_checks(cfg))
 
         try:
             from ._backends import ensure_demo_experiments

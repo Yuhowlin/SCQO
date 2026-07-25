@@ -1,7 +1,10 @@
-"""Pi-pulse amplitude error amplification experiment (qubit_pi_pulse_error).
+"""Pi-pulse amplitude error amplification (qubit_pi_pulse_error), greenfield.
 
-Sweeps drive amplitude factor (e.g. 0.90 to 1.10) across repeated odd gate counts
-(X^1, X^3, X^5, X^7, X^9, X^11...) to amplify and fit small pi-pulse rotation errors.
+Port of :mod:`scqo.experiments.qubit_pi_pulse_error`. The physics half is
+byte-for-byte; what moved is the device surface: ``pi_amp`` keeps its name
+but now lives on the target's DRIVE CHANNEL
+(``self.device.channel(t, "drive").pi_amp``), read in ``estimate()`` and
+written in ``update()``.
 """
 
 from __future__ import annotations
@@ -12,10 +15,11 @@ import numpy as np
 from pydantic import Field
 
 from ..contract import DatasetContract
-from ..experiment import Experiment
-from ..result import Outcome, Result
-from ..parameters import AveragingParameters, TargetSelection
 from ._sim import stable_seed
+from ..parameters import AveragingParameters, TargetSelection
+from ..result import Outcome, Result
+from ..experiment import Experiment
+from . import register
 
 
 class QubitPiPulseErrorParameters(TargetSelection, AveragingParameters):
@@ -34,6 +38,7 @@ class QubitPiPulseErrorResult(Result):
     """Fitted optimal pi-pulse amplitude factor."""
 
 
+@register
 class QubitPiPulseError(Experiment):
     """Calibrate pi-pulse amplitude via error amplification across repeated X180 gates."""
 
@@ -131,7 +136,7 @@ class QubitPiPulseError(Experiment):
                 # Clamp factor within sweep bounds
                 opt_factor = float(np.clip(opt_factor, amp_factors.min(), amp_factors.max()))
 
-                old_pi_amp = float(self.device.component(qubit).pi_amp)
+                old_pi_amp = float(self.device.channel(qubit, "drive").pi_amp)
                 new_pi_amp = old_pi_amp * opt_factor
 
                 result.fit[qubit] = {
@@ -196,4 +201,7 @@ class QubitPiPulseError(Experiment):
             return
         for qubit, fit in self.result.fit.items():
             if self.result.outcomes[qubit] is Outcome.SUCCESSFUL and fit.get("pi_amp") is not None:
-                self.device.component(qubit).pi_amp = fit["pi_amp"]
+                self.device.channel(qubit, "drive").pi_amp = fit["pi_amp"]
+
+    def probe(self):  # pragma: no cover - driver half
+        raise NotImplementedError("a driver backend supplies probe()")

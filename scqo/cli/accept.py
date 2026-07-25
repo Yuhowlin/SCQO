@@ -3,7 +3,7 @@
     scqo accept                                  # list runs with pending suggestions
     scqo accept RUN_ID --list                    # show the suggestion table, decide nothing
     scqo accept RUN_ID                           # terminal: pick interactively; script: apply ALL pending
-    scqo accept RUN_ID --component q0 --field readout_freq --comment "looks right"
+    scqo accept RUN_ID --entity q0 --field readout_freq --comment "looks right"
     scqo accept RUN_ID --reject --comment "fit chased a noise spike"
     scqo accept RUN_ID --force                   # bypass the cooldown-era + staleness guards
     scqo accept RUN_ID --reapply --field readout_freq --comment "rolling back to this run"
@@ -75,7 +75,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
                         help="show the run's suggestion table and exit (decides nothing)")
     parser.add_argument("--reject", action="store_true",
                         help="reject instead of apply (datastore-only, no instrument)")
-    parser.add_argument("--component", action="append", default=None,
+    parser.add_argument("--entity", action="append", default=None,
                         help="restrict to one component (repeatable)")
     parser.add_argument("--field", action="append", default=None,
                         help="restrict to one field (repeatable), e.g. readout_freq")
@@ -119,7 +119,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
 
     if args.reject:  # ------------------------------------------ datastore-only
         _load_record(store, args.run_id)  # loud unknown-run_id check first
-        summary = reject_suggestions(store, args.run_id, components=args.component,
+        summary = reject_suggestions(store, args.run_id, entities=args.entity,
                                      fields=args.field, comment=args.comment)
         print(json.dumps(summary, indent=2))
         return 0
@@ -142,7 +142,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
     from ._backends import build_session  # imports drivers: only the apply path pays
 
     sess, _ = build_session(args.config)
-    interactive = (args.component is None and args.field is None
+    interactive = (args.entity is None and args.field is None
                    and sys.stdin.isatty() and sys.stderr.isatty())
     try:
         if interactive:
@@ -150,7 +150,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
                                            force=args.force, comment=args.comment,
                                            reapply=args.reapply)
             return 0 if summary is None else (1 if summary["errors"] or summary["stale"] else 0)
-        summary = sess.accept(args.run_id, components=args.component, fields=args.field,
+        summary = sess.accept(args.run_id, entities=args.entity, fields=args.field,
                               comment=args.comment, force=args.force, reapply=args.reapply)
     # device mismatch / era guard / unknown run_id — the message says the fix; a
     # 44-character run id makes typos the COMMON case, so never show a traceback.

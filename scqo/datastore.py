@@ -48,7 +48,7 @@ from typing import Any, Iterator
 from pydantic import BaseModel, Field
 
 from ._state_io import _file_lock
-from .config import _current_operator
+from .stores import _current_operator
 
 SCHEMA_VERSION = 8  # v8: component cutover — run targets column renamed from qubits
 RECORD_FILE = "record.json"

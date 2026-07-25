@@ -6,10 +6,14 @@ Real instruments are served by DRIVER packages that register a factory under the
     [project.entry-points."scqo.backends"]
     qblox = "lchqb.scqo_backend:build_backend"
 
-A factory is ``build_backend(cfg: LabConfig, setup: dict) -> Backend`` — ``setup``
-is the device's SELECTED named setup record from its cooldown registry (``backend``,
-optional ``note``, plus the DERIVED ``instrument_config`` vendor folder injected by
-``load_cooldowns`` — ``<device>/<cooldown>/<setup>/backend_config``, never typed).
+A factory is ``build_backend(cfg: LabConfig, setup: dict, roster: Roster) ->
+Backend`` — ``setup`` is the device's SELECTED named setup record from its cooldown
+registry (``backend``, optional ``note``, plus the DERIVED ``instrument_config``
+vendor folder injected by ``load_cooldowns`` —
+``<device>/<cooldown>/<setup>/backend_config``, never typed), and ``roster`` is the
+device's authority on which entities exist: a driver serves views BY ENTITY NAME
+(``q1_xy`` -> its drive view over the vendor's q1 element), so it must resolve
+each channel's target and kind through the roster rather than parsing names.
 ``simulated`` (demo qubits, synthetic data) is built in here, so query commands,
 practice runs and CI need no driver at all.
 """
@@ -22,24 +26,6 @@ from pathlib import Path
 from scqo import LabConfig, Session, load_lab_config, make_session
 from scqo.backend import Backend
 
-#: Demo device for the built-in simulated backend (unified across the lab — the QM
-#: repo's old q1/q2 demo names were retired with the CLI consolidation). The demo
-#: ROSTER (scqo.testing.demo_roster) adds the satellite components (q*_res, q*_ro,
-#: q*_xy) so every code path exercises the component model.
-DEMO_QUBITS = {
-    "q0": {"readout_freq": 5.95e9, "drive_freq": 3.87e9, "pi_amp": 0.20, "drag_beta": 0.0,
-           "readout_amp": 0.25, "readout_power_dbm": -25.0, "readout_duration_s": 2.0e-6,
-           "readout_integration_s": 2.0e-6},
-    "q1": {"readout_freq": 6.05e9, "drive_freq": 4.01e9, "pi_amp": 0.18, "drag_beta": 0.0,
-           "readout_amp": 0.22, "readout_power_dbm": -27.0, "readout_duration_s": 2.0e-6,
-           "readout_integration_s": 2.0e-6},
-    # the demo QCQ pair (roster: demo_roster's q0_q1 Coupling/TransmonPair)
-    "q0_q1": {"coupler_decouple_v": 0.08, "coupler_interaction_v": -0.12},
-}
-
-#: non-ReadableTransmon demo entries (InMemoryDevice's derived-witness labels)
-DEMO_CATEGORIES = {"q0_q1": "TransmonPair"}
-
 #: backend family -> (what provides it, which venv on the lab machines)
 SERVED_BY = {
     "qblox": ("LCHQBDriver", ".venv-qblox"),
@@ -49,73 +35,81 @@ SERVED_BY = {
 
 
 def default_targets(sess: Session, experiment: str | None = None) -> list[str]:
-    """Measurable components for 'run on everything' defaults: every roster name
-    whose INSTRUMENT category matches the experiment's ``target_category``
-    (ReadableTransmon for single-qubit experiments, TransmonPair for pair ones;
-    ReadableTransmon when no experiment is named). Pass --targets to override."""
-    category = "ReadableTransmon"
+    """Entities for 'run on everything' defaults: every roster entity whose
+    KIND the experiment targets (qubit-like modes for single-qubit
+    experiments, composite kinds for pair ones; qubit-like when no
+    experiment is named). Pass --targets to override."""
+    from scqo.catalog import QUBIT_LIKE
+
+    kinds = set(QUBIT_LIKE)
     if experiment is not None:
-        from scqo.registry import get as _get_experiment
+        from scqo.experiments import get as _get_experiment
 
         try:
-            category = getattr(_get_experiment(experiment), "target_category",
-                               "ReadableTransmon")
+            kinds = set(_get_experiment(experiment).target_kinds)
         except KeyError:
             pass  # unknown name fails later with the catalog's own message
-    return sess.roster.names(category)
+    return [name for name, e in sess.roster.entities.items()
+            if e.kind in kinds and not e.retired]
 
 
 def ensure_demo_experiments() -> None:
     """Make the simulated backend usable with NO driver installed.
 
-    scqo core registers nothing (its experiment classes are abstract — no probe);
-    the catalog normally fills via the drivers' ``scqo.experiments`` entry points.
-    For pure-simulated use (the view venv, SCQO CI) this registers a probe-less
-    subclass for every core experiment — but only for names still ABSENT from the
-    catalog, so a driver's registration is never shadowed.
+    Since the model cutover the core experiments register THEMSELVES at
+    import (their ``probe()`` raises; the simulated backend never calls it),
+    so this only has to trigger the import — driver entry points still win
+    for their own names. Kept as the named seam the CLI and doctor call.
     """
-    from scqo import catalog, register
-    from scqo import experiments as _exp
-    from scqo.experiment import Experiment
+    from scqo import catalog
 
-    registered = {entry["name"] for entry in catalog()}  # triggers entry-point discovery
-    for attr in _exp.__all__:
-        cls = getattr(_exp, attr)
-        if isinstance(cls, type) and issubclass(cls, Experiment) and getattr(cls, "name", None):
-            if cls.name not in registered:
-                register(type(f"Sim{cls.__name__}", (cls,), {"probe": lambda self: None,
-                                                             "__doc__": cls.__doc__}))
+    catalog()  # imports the core package + discovers driver entry points
 
 
-def _load_roster(cfg: LabConfig):
-    """The selected device's roster (components.toml, REQUIRED post-cutover).
+def _load_device(cfg: LabConfig):
+    """The selected device's roster + datasheet (components.toml is REQUIRED;
+    design.toml is optional — a missing datasheet is an empty one).
 
-    A missing file fails loudly with the minimal template — writing it is the
-    one-time step that brings a device into the component model."""
+    A missing/invalid roster fails loudly with the minimal template — writing
+    it is the one-time step that brings a device into the model."""
+    from scqo.design import load_design
     from scqo.roster import load_components
 
+    device_dir = Path(cfg.data_root) / cfg.device
     try:
-        return load_components(Path(cfg.data_root) / cfg.device)
+        roster = load_components(device_dir)
+        design = load_design(device_dir, roster)
     except FileNotFoundError as err:
         raise SystemExit(str(err)) from None
-    except ValueError as err:  # RosterError: a wrong roster must never half-load
+    except ValueError as err:  # a wrong roster/datasheet must never half-load
         raise SystemExit(str(err)) from None
+    return roster, design
 
 
 def _demo_session(cfg: LabConfig, setup_name: str = "",
                   cooldown_id: str = "") -> tuple[Session, LabConfig]:
-    from scqo.testing import InMemoryDevice, SimulatedBackend, demo_roster
+    from scqo.testing import (
+        InMemoryDevice,
+        SimulatedBackend,
+        demo_components,
+        demo_design,
+        demo_vendor_state,
+    )
 
     ensure_demo_experiments()
-    backend: Backend = SimulatedBackend(InMemoryDevice(DEMO_QUBITS, DEMO_CATEGORIES))
-    # Device-less demo: the built-in roster. A CONFIGURED device on a simulated
-    # setup still uses its own components.toml (the chipT prototyping path).
+    # Device-less demo: the built-in roster. A CONFIGURED device on a
+    # simulated setup still uses its own components.toml (the chipT
+    # prototyping path).
     if cfg.device is not None and cfg.data_root is not None:
-        roster = _load_roster(cfg)
+        roster, design = _load_device(cfg)
     else:
-        roster = demo_roster()
+        roster = demo_components(tunable=True)
+        design = demo_design(roster)
+    backend: Backend = SimulatedBackend(
+        InMemoryDevice(roster, demo_vendor_state(roster, design)))
     return make_session(backend, cfg, roster, backend_label="simulated",
-                        setup_name=setup_name, cooldown_id=cooldown_id), cfg
+                        setup_name=setup_name, cooldown_id=cooldown_id,
+                        design=design), cfg
 
 
 def resolve_device_setup(cfg: LabConfig) -> tuple[str, str, dict] | None:
@@ -215,12 +209,14 @@ def build_session(config_path: str | None = None) -> tuple[Session, LabConfig]:
     family = setup["backend"]
     if family == "simulated":
         return _demo_session(cfg, setup_name=name, cooldown_id=cid)
-    roster = _load_roster(cfg)
+    roster, design = _load_device(cfg)
     for ep in entry_points(group="scqo.backends"):
         if ep.name == family:
-            backend = ep.load()(cfg, setup)  # a factory ImportError propagates with its traceback
+            # a factory ImportError propagates with its traceback
+            backend = ep.load()(cfg, setup, roster)
             return make_session(backend, cfg, roster, backend_label=family,
-                                setup_name=name, cooldown_id=cid), cfg
+                                setup_name=name, cooldown_id=cid,
+                                design=design), cfg
     provider, venv = SERVED_BY[family]
     raise SystemExit(
         f"device {cfg.device!r} is on backend {family!r} (cycle {cid}, setup {name!r}), "

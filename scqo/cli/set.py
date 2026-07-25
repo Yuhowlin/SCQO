@@ -66,7 +66,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
     print("will write:", file=sys.stderr)
     for item in plan["items"]:
         unit = f" {item['unit']}" if item["unit"] else ""
-        print(f"  {item['component']:10} {item['field']:18} {item['store']:10} "
+        print(f"  {item['entity']:10} {item['field']:18} {item['role']:10} "
               f"{_fmt_value(item['current']):>14} -> {_fmt_value(item['after']):>14}{unit}",
               file=sys.stderr)
 
@@ -82,8 +82,8 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
     summary = sess.set_values(assignments)
     print(json.dumps(summary, indent=2))  # stdout stays parseable (| jq safe)
     for item in summary["applied"]:
-        print(f"  applied  {item['component']}.{item['field']} "
-              f"{_fmt_value(item['before'])} -> {_fmt_value(item['after'])}  [{item['store']}]",
+        print(f"  applied  {item['entity']}.{item['field']} "
+              f"{_fmt_value(item['before'])} -> {_fmt_value(item['after'])}  [{item['role']}]",
               file=sys.stderr)
     for err in summary["errors"]:
         print(f"  ERROR    {err}", file=sys.stderr)

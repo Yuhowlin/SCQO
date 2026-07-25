@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from .._state_io import read_history
-from ..categories import CATEGORIES
+from ..catalog import CHANNELS, COMPOSITES, MODES
 from ..datastore import (
     STATE_FILE,
     DataStore,
@@ -29,34 +29,34 @@ from ..datastore import (
     load_device_registry,
     setup_scqo_dir,
 )
-from ..physical import PHYSICAL_FILE
 from ..provenance import live_run_map, live_sources, summarize_live
+from ..stores import PHYSICAL_FILE
 
 #: quantities never tracked as device state (instrument-dependent; recorded decision)
 _FIT_ONLY_TRENDS = ("p_e_given_g",)
 #: fit quantities offered as one-click trend links (free-text also accepted):
-#: measured physics first, then calibration knobs — derived from the field tables.
-def _catalog_fields(side: str, push: bool | None = None) -> list[str]:
-    """Catalog field names of one side in declaration order (dedup across categories)."""
+#: measured physics first, then calibration knobs — derived from the kind
+#: catalogs by field ROLE (facts land in physical.json; knobs and monitors in
+#: scqo_state.json).
+def _catalog_fields(*roles: str) -> list[str]:
+    """Catalog field names of the given roles, in declaration order (deduped
+    across kinds)."""
     out: list[str] = []
-    for spec in CATEGORIES.values():
-        if spec.side != side:
-            continue
-        for f, fs in spec.fields.items():
-            if push is not None and fs.push != push:
-                continue
-            if f not in out:
-                out.append(f)
+    for kinds in (MODES, COMPOSITES, CHANNELS):
+        for spec in kinds.values():
+            for f, fs in spec.fields.items():
+                if fs.role in roles and f not in out:
+                    out.append(f)
     return out
 
 
-PHYSICAL_FIELD_ORDER = _catalog_fields("physical")
-INSTRUMENT_FIELD_ORDER = _catalog_fields("instrument")
+PHYSICAL_FIELD_ORDER = _catalog_fields("fact")
+INSTRUMENT_FIELD_ORDER = _catalog_fields("knob", "monitor")
 
 TREND_QUANTITIES = (
     *PHYSICAL_FIELD_ORDER,
-    *_catalog_fields("instrument", push=False),
-    *_catalog_fields("instrument", push=True),
+    *_catalog_fields("monitor"),
+    *_catalog_fields("knob"),
     *_FIT_ONLY_TRENDS,
 )
 
@@ -118,7 +118,7 @@ def create_app(
         rule credits a run only while its recorded value still equals the live one."""
         data = (_read_json(scqo_dir / STATE_FILE) if scqo_dir else None) or {}
         history = _read_history(scqo_dir / STATE_FILE) if scqo_dir else []
-        return live_sources(data.get("config", {}), history)
+        return live_sources(data.get("values", {}), history)
 
     def _physical_sources(scqo_dir: Path | None) -> dict:
         """Live-source map over a context's ``physical.json`` ({} where absent). The
@@ -201,7 +201,7 @@ def create_app(
         for q in sorted(set(before) | set(after)):
             for field in sorted(set(before.get(q, {})) | set(after.get(q, {}))):
                 b, a = before.get(q, {}).get(field), after.get(q, {}).get(field)
-                diff.append({"component": q, "field": field, "before": b, "after": a,
+                diff.append({"entity": q, "field": field, "before": b, "after": a,
                              "changed": b != a})
         # Is each ACCEPTED value still the one the device runs? (aligned with the
         # suggestions list; None for non-accepted rows / no source info). Resolved
@@ -212,8 +212,8 @@ def create_app(
         phys_sources = _physical_sources(scqo_dir)
         on_device = []
         for s in record.get("suggestions", []):
-            sources = phys_sources if s.get("store") == "physical" else inst_sources
-            src = sources.get(s.get("component"), {}).get(s.get("field"))
+            sources = phys_sources if s.get("role") == "fact" else inst_sources
+            src = sources.get(s.get("entity"), {}).get(s.get("field"))
             if s.get("status") != "accepted" or src is None:
                 on_device.append(None)
             elif src["status"] == "run" and src["run_id"] == run_id:
@@ -293,7 +293,7 @@ def create_app(
         fields = [f for f in PHYSICAL_FIELD_ORDER if f in observed] + sorted(observed - set(PHYSICAL_FIELD_ORDER))
         sources = live_sources(values, history)
         rows = [
-            {"component": q, "field": f, "value": values[q][f],
+            {"entity": q, "field": f, "value": values[q][f],
              "source": sources.get(q, {}).get(f)}
             for q in sorted(values) for f in fields if f in values[q]
         ]
@@ -316,7 +316,7 @@ def create_app(
         history = (list(reversed(_read_history(scqo_dir / STATE_FILE)))[:200]
                    if scqo_dir else [])
         if data:
-            state = data.get("config") or {}
+            state = data.get("values") or {}
             authority = "state"
         elif own_latest:  # no state file yet: that context's last run snapshot
             state = _read_json(_run_dir(own_latest) / "device_after.json") or {}

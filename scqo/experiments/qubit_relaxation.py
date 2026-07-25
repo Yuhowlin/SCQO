@@ -1,13 +1,11 @@
-"""Qubit relaxation — excited-state lifetime T1 (backend-free half).
+"""Qubit relaxation — excited-state lifetime T1, greenfield.
 
-Excite with a pi pulse, wait a swept delay, measure; fit the exponential decay to
-extract T1. ``update()`` proposes ``t1_s`` as a PHYSICAL parameter — sample physics
-landing in ``physical.json`` on accept (see ``scqo.physical.PHYSICAL_FIELDS``; no
-instrument knob involved); the per-run value also lives in the run index
-(``fit_trend`` query).
-
-Promoted from scqo-contrib 2026-07-05 (as ``t1_relaxation``; renamed
-``qubit_relaxation`` 2026-07-06) — the first Tier-3 promotion.
+Port of :mod:`scqo.experiments.qubit_relaxation`. The physics half is
+byte-for-byte; ``t1_s`` is a mode fact whose name and home survive the
+model change, so ``update()`` still writes ``self.device.component(q).t1_s``
+— only the imports moved (capability helpers from
+``scqo.experiments._capabilities.state_readout``) and the driver stub
+``probe()`` was added.
 """
 
 from __future__ import annotations
@@ -18,12 +16,19 @@ import numpy as np
 from pydantic import Field
 
 from .._scqat import per_qubit_results
-from ._capabilities import STATE_ALT, StateReadoutParameters, readout_vars, signal_rename, state_row
-from ._sim import iq_from_population, stable_seed
 from ..contract import DatasetContract
-from ..experiment import Experiment
+from ._capabilities.state_readout import (
+    STATE_ALT,
+    StateReadoutParameters,
+    readout_vars,
+    signal_rename,
+    state_row,
+)
+from ._sim import iq_from_population, stable_seed
 from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
+from ..experiment import Experiment
+from . import register
 
 
 class QubitRelaxationParameters(TargetSelection, AveragingParameters, StateReadoutParameters):
@@ -35,10 +40,11 @@ class QubitRelaxationParameters(TargetSelection, AveragingParameters, StateReado
 
 
 class QubitRelaxationResult(Result):
-    """``fit[qubit]`` carries ``t1_s`` (plus fit amplitude/offset); proposed as a
+    """``fit[target]`` carries ``t1_s`` (plus fit amplitude/offset); proposed as a
     physical parameter by ``update()``."""
 
 
+@register
 class QubitRelaxation(Experiment):
     """Backend-agnostic T1: pi pulse -> swept wait -> measure -> exponential fit."""
 
@@ -117,3 +123,6 @@ class QubitRelaxation(Experiment):
         for qubit, fit in self.result.fit.items():
             if self.result.outcomes[qubit] is Outcome.SUCCESSFUL:
                 self.device.component(qubit).t1_s = fit["t1_s"]
+
+    def probe(self):  # pragma: no cover - driver half
+        raise NotImplementedError("a driver backend supplies probe()")
