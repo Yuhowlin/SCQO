@@ -57,6 +57,8 @@ from .roster import (  # noqa: F401
     load_components,
     parse_components,
 )
+from .checks import Check, all_checks  # noqa: F401
+from .lock import LOCK_FILE, LockError, freeze, verify  # noqa: F401
 from .session import Session  # noqa: F401
 from .stores import (  # noqa: F401
     PHYSICAL_FILE,

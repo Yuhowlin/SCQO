@@ -153,14 +153,12 @@ def load_design(path: str | Path, roster: Roster) -> Design:
                         source=str(path))
 
 
-def seed_source(roster: Roster, design: Design, channel: str,
-                field: str) -> tuple[str, str] | None:
-    """The (entity, fact) a channel knob's ``design_source`` hop resolves to
-    — with candidate facts, the first one the datasheet actually declares
-    (so drive_freq_hz seeds from f_01_hz on fixed transmons and f_q_max_hz
-    on flux-tunables). None when the knob declares no source, the hop does
-    not resolve (multi-target channel, no via), or no candidate is
-    declared."""
+def seed_anchor(roster: Roster, channel: str,
+                field: str) -> tuple[str, tuple[str, ...]] | None:
+    """STRUCTURAL half of the seed lookup: the (entity, candidate facts) a
+    channel knob's ``design_source`` hop points at, independent of any
+    datasheet — what the field catalog shows. None when the knob declares
+    no source or the hop does not resolve."""
     try:
         spec = roster.fields_of(channel).get(field)
     except RosterError as err:  # one exception surface for the seed lookup
@@ -181,8 +179,21 @@ def seed_source(roster: Roster, design: Design, channel: str,
         anchor = entity.via
     else:  # a future ref role; silent None keeps the anchor order intact
         anchor = None
-    if anchor is None:
+    return None if anchor is None else (anchor, facts)
+
+
+def seed_source(roster: Roster, design: Design, channel: str,
+                field: str) -> tuple[str, str] | None:
+    """The (entity, fact) a channel knob's ``design_source`` hop resolves to
+    — with candidate facts, the first one the datasheet actually declares
+    (so drive_freq_hz seeds from f_01_hz on fixed transmons and f_q_max_hz
+    on flux-tunables). None when the knob declares no source, the hop does
+    not resolve (multi-target channel, no via), or no candidate is
+    declared."""
+    resolved = seed_anchor(roster, channel, field)
+    if resolved is None:
         return None
+    anchor, facts = resolved
     for fact in facts:
         if design.get(anchor, fact) is not None:
             return anchor, fact
