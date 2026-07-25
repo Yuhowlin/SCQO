@@ -3,6 +3,15 @@
 # scqat at its pinned tag (scqat versions independently: its own pyproject/tag line).
 # Hand-edited at release time by the manager (see RELEASING.md).
 
+[v0-13-1]
+date = 2026-07-25
+scqo = "v0.13.1"                 # version-string fix; code identical to v0.13.0
+lchqbdriver = "v0.13.0"          # unchanged (drivers version by tag, pyproject stays 0.1.0)
+lchqmdriver = "v0.13.0"          # unchanged
+scqo-contrib = "v0.12.0"         # still NOT in the combo (see v0-13-0)
+scqat = "v0.3.0"                 # unchanged
+notes = "PATCH: v0.13.0 shipped with pyproject still declaring 0.12.0, so a correctly upgraded install REPORTED 0.12.0 — exactly the 'scqo doctor's version can lie' trap that editable installs already make easy to hit. Caught while performing the upgrade itself. Code is byte-identical to v0.13.0; only the declared version changes. The pushed v0.13.0 tag was deliberately NOT moved (standing rule). UPGRADE: checkout v0.13.1 in SCQO only, then re-run `uv pip install -e . --no-deps` in every editable env — the .dist-info metadata is frozen at install time, so without the reinstall the version keeps reporting stale no matter which tag is checked out."
+
 [v0-13-0]
 date = 2026-07-25
 scqo = "v0.13.0"                 # the greenfield device model replaces the component model
