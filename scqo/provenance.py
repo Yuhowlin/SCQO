@@ -1,6 +1,6 @@
 """Live-source provenance — which run does each CURRENT value trace to?
 
-The values in use matter more than the pending ones. For every (component, field)
+The values in use matter more than the pending ones. For every (entity, field)
 with a current value, the LAST ChangeRecord for that pair is the candidate
 source; under the STRICT-MATCH rule it is credited only while its recorded value
 still equals the live value. A drifted value (the vendor reseeded at startup,
@@ -25,13 +25,13 @@ SOURCE_STATUSES = ("run", "manual", "external", "unrecorded")
 
 
 def live_sources(values: dict, history: list[dict]) -> dict[str, dict[str, dict]]:
-    """``{component: {field: source-info}}`` for every (component, field) with a value.
+    """``{entity: {field: source-info}}`` for every (entity, field) with a value.
 
     ``values`` is the current store snapshot (``config``/``values``/
     ``device_state()``/``physical_state()``); ``history`` is the ChangeRecord
     dicts in file order (append-only == chronological). Source-info::
 
-        {"component", "field", "value",             # the CURRENT value
+        {"entity", "field", "value",             # the CURRENT value
          "status":  "run"         # last record has a run_id AND still matches
                   | "manual"      # last record was a manual write (no run) and matches
                   | "external"    # a record exists but the value drifted -> NO run credited
@@ -42,16 +42,16 @@ def live_sources(values: dict, history: list[dict]) -> dict[str, dict[str, dict]
     """
     last: dict[tuple[str, str], dict] = {}
     for record in history:  # forward pass: dict overwrite == last record wins
-        last[(record["component"], record["field"])] = record
+        last[(record["entity"], record["field"])] = record
 
     out: dict[str, dict[str, dict]] = {}
-    for component, fields in values.items():
+    for entity, fields in values.items():
         for field, value in fields.items():
             if value is None:
                 continue
-            record = last.get((component, field))
+            record = last.get((entity, field))
             info: dict[str, Any] = {
-                "component": component, "field": field, "value": value,
+                "entity": entity, "field": field, "value": value,
                 "run_id": None, "timestamp": None, "operator": None,
                 "experiment": None, "recorded": None,
             }
@@ -69,22 +69,22 @@ def live_sources(values: dict, history: list[dict]) -> dict[str, dict[str, dict]
                     info["run_id"] = record["run_id"]
                 else:
                     info["status"] = "manual"
-            out.setdefault(component, {})[field] = info
+            out.setdefault(entity, {})[field] = info
     return out
 
 
 def live_run_map(*sources: dict) -> dict[str, list[tuple[str, str]]]:
-    """Merge :func:`live_sources` results -> ``{run_id: [(component, field), ...]}``.
+    """Merge :func:`live_sources` results -> ``{run_id: [(entity, field), ...]}``.
 
     Only ``status == "run"`` entries contribute; pass the instrument and physical
     maps together to get the device's full "built from these runs" picture.
     """
     out: dict[str, list[tuple[str, str]]] = {}
     for source in sources:
-        for component, fields in source.items():
+        for entity, fields in source.items():
             for field, info in fields.items():
                 if info["status"] == "run":
-                    out.setdefault(info["run_id"], []).append((component, field))
+                    out.setdefault(info["run_id"], []).append((entity, field))
     return out
 
 
@@ -92,6 +92,6 @@ def summarize_live(pairs: list[tuple[str, str]]) -> str:
     """``[(q0, readout_freq), (q1, readout_freq), (q1, t1_s)]`` ->
     ``"readout_freq (q0,q1), t1_s (q1)"`` (field first-appearance order, names sorted)."""
     by_field: dict[str, list[str]] = {}
-    for component, field in pairs:
-        by_field.setdefault(field, []).append(component)
+    for entity, field in pairs:
+        by_field.setdefault(field, []).append(entity)
     return ", ".join(f"{field} ({','.join(sorted(names))})" for field, names in by_field.items())

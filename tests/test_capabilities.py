@@ -1,6 +1,7 @@
 """Derived capability tags + the ``_capabilities`` package contract.
 
-A tag is DERIVED from Parameters-mixin subclassing (``registry._derived_tags``) —
+A tag is DERIVED from Parameters-mixin subclassing
+(``scqo.experiments._derived_tags``) —
 never a declared string — so it cannot lie or rot as the code evolves.
 Experiments with ZERO tags are legitimate: a new experiment may not be
 classifiable yet, and no test may demand tag completeness.
@@ -22,8 +23,8 @@ from scqo.experiments._capabilities import (
     foreign_flux_source,
 )
 from scqo.parameters import Parameters
-from scqo.registry import get
-from scqo.testing import InMemoryDevice, SimulatedBackend, demo_roster
+from scqo.experiments import get
+from scqo.testing import SimulatedBackend, demo_device
 
 
 def _catalog_by_name() -> dict[str, dict]:
@@ -31,7 +32,8 @@ def _catalog_by_name() -> dict[str, dict]:
     return {entry["name"]: entry for entry in catalog()}
 
 
-#: derivation order is fixed: state_readout before flux (registry._derived_tags)
+#: derivation order is fixed: state_readout before flux
+#: (``scqo.experiments._derived_tags``)
 EXPECTED_TAGS = {
     "qubit_relaxation": ["state_readout"],
     "qubit_echo": ["state_readout"],
@@ -63,10 +65,9 @@ def test_tags_survive_session_catalog_overlay():
     """Session.catalog() passes tags through — both the verbatim path (no
     parameter_defaults) and the deepcopy overlay path."""
     ensure_demo_experiments()
-    device = InMemoryDevice({"q0": {"readout_freq": 5.95e9, "drive_freq": 3.87e9,
-                                    "pi_amp": 0.2, "readout_amp": 0.25}})
-    plain = Session(SimulatedBackend(device), demo_roster())
-    overlaid = Session(SimulatedBackend(device), demo_roster(),
+    roster, design, vendor = demo_device()
+    plain = Session(SimulatedBackend(vendor), roster, design=design)
+    overlaid = Session(SimulatedBackend(vendor), roster, design=design,
                        parameter_defaults={"qubit_relaxation": {"num_points": 21}})
     for sess in (plain, overlaid):
         entries = {entry["name"]: entry for entry in sess.catalog()}
@@ -122,9 +123,8 @@ def test_state_contract_accepted_for_newly_wired(name, params):
     of the flux pair rejected `state`)."""
     ensure_demo_experiments()
     cls = get(name)
-    device = InMemoryDevice({"q0": {"readout_freq": 5.95e9, "drive_freq": 3.87e9,
-                                    "pi_amp": 0.2, "readout_amp": 0.25}})
-    backend = SimulatedBackend(device)
+    _roster, _design, vendor = demo_device(tunable=True)  # flux carriers need z lines
+    backend = SimulatedBackend(vendor)
     for use_state in (True, False):
         exp = cls(backend, cls.Parameters(targets=["q0"], num_averages=30,
                                           use_state_discrimination=use_state, **params))

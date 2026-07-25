@@ -5,13 +5,13 @@ import json
 
 import pytest
 
-from scqo.model import Session, parse_components
-from scqo.model.checks import FAIL, OK, WARN, all_checks, roster_checks
-from scqo.model.checks import design_checks, lock_checks, vendor_checks
-from scqo.model.checks import capability_checks, wiring_checks
-from scqo.model.device import ComponentInfo
-from scqo.model.lock import LOCK_FILE, LockError, freeze, verify
-from scqo.model.report import (
+from scqo import Session, parse_components
+from scqo.checks import FAIL, OK, WARN, all_checks, roster_checks
+from scqo.checks import design_checks, lock_checks, vendor_checks
+from scqo.checks import capability_checks, wiring_checks
+from scqo.device import ComponentInfo
+from scqo.lock import LOCK_FILE, LockError, freeze, verify
+from scqo.report import (
     design_rows,
     expansion_rows,
     field_rows,
@@ -19,7 +19,7 @@ from scqo.model.report import (
     qubit_rows,
     state_rows,
 )
-from scqo.model.testing import (
+from scqo.testing import (
     InMemoryDevice,
     SimulatedBackend,
     demo_components,
@@ -148,7 +148,7 @@ def test_design_checks_report_coverage_and_gross_mismatch(session):
 
 
 def test_empty_datasheet_warns(roster):
-    from scqo.model import Design
+    from scqo import Design
     assert design_checks(roster, Design({}))[0].status == WARN
 
 

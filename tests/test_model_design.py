@@ -1,10 +1,10 @@
-"""design.toml loader contracts (scqo.model.design) — the datasheet file of
+"""design.toml loader contracts (scqo.design) — the datasheet file of
 docs/greenfield-schema.md sections 7-8, validated against the expanded
 roster."""
 
 import pytest
 
-from scqo.model import (
+from scqo import (
     Design,
     DesignError,
     load_design,
@@ -138,7 +138,7 @@ def test_empty_design_vocabulary_says_so(roster):
 
 
 def test_schema_is_a_reserved_entity_name():
-    from scqo.model import RosterError
+    from scqo import RosterError
     with pytest.raises(RosterError, match="reserved word"):
         parse_components(EXAMPLE + '\n[modes.schema]\nkind = "transmon"\n')
 

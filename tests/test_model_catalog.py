@@ -1,4 +1,4 @@
-"""Kind-catalog invariants of the greenfield model (scqo.model.catalog).
+"""Kind-catalog invariants of the greenfield model (scqo.catalog).
 
 These tests pin the schema contracts of docs/greenfield-schema.md sections 2,
 6, 7 — the catalogs themselves are data, so most protection lives in the
@@ -8,7 +8,7 @@ build) and the load-bearing lookups behave.
 
 import pytest
 
-from scqo.model.catalog import (
+from scqo.catalog import (
     CHANNELS,
     COMPOSITES,
     DERIVATION,

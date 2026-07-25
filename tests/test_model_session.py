@@ -1,15 +1,15 @@
-"""Session state-layer contracts (scqo.model.session + suggestions):
+"""Session state-layer contracts (scqo.session + suggestions):
 qubit-closure addressing, set_values, capture -> suggest -> accept/reject,
 era + staleness guards, per-qubit assembled views."""
 
 import pytest
 
-from scqo.model import (
+from scqo import (
     RosterError,
     Session,
     SuggestionCapture,
 )
-from scqo.model.testing import (
+from scqo.testing import (
     InMemoryDevice,
     SimulatedBackend,
     demo_components,
@@ -248,7 +248,7 @@ def test_accept_applies_waveform_group_even_stored_out_of_order(session):
 def flux_session(tmp_path):
     """A session over the design-doc EXAMPLE roster (has flux channels with
     the paired distortion arrays)."""
-    from scqo.model import parse_components
+    from scqo import parse_components
     from tests.test_model_roster import EXAMPLE
     roster = parse_components(EXAMPLE)
     vendor = InMemoryDevice(roster, {})
@@ -316,7 +316,7 @@ def test_qubit_state_refuses_non_modes_with_a_hint(session):
 
 
 def test_capture_composite_is_a_composite_view(session):
-    from scqo.model import CompositeView
+    from scqo import CompositeView
     capture = SuggestionCapture(session.device, session.physical,
                                 session.roster)
     view = capture.component("q0_q1")
@@ -328,7 +328,7 @@ def test_capture_composite_is_a_composite_view(session):
 
 
 def test_ambiguous_channel_addressing_names_the_candidates():
-    from scqo.model import parse_components
+    from scqo import parse_components
     from tests.test_model_roster import EXAMPLE
     r = parse_components(EXAMPLE + '\n[channels.q1_xy2]\nkind = "drive"\n'
                          'target = "q1"\nline = "xy1"\n')

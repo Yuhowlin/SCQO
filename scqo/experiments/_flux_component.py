@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from pydantic import Field
 
-from ...parameters import Parameters
+from ..parameters import Parameters
 
 
 class FluxComponentParameters(Parameters):

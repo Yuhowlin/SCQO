@@ -1,16 +1,24 @@
+"""Qubit DRAG alternating-pulse calibration, greenfield.
+
+Port of :mod:`scqo.experiments.qubit_drag_alternating`. The physics half is
+byte-for-byte; what moved is the device surface: ``drag_beta`` keeps its
+name but now lives on the target's DRIVE CHANNEL
+(``self.device.channel(t, "drive").drag_beta``), written in ``update()``.
+"""
+
 from __future__ import annotations
 
-from typing import ClassVar, Dict, Any, List
+from typing import ClassVar
 
 import numpy as np
-import xarray as xr
 from pydantic import Field
 
 from ..contract import DatasetContract
-from ..experiment import Experiment
-from ..result import Outcome, Result
-from ..parameters import AveragingParameters, TargetSelection
 from ._sim import stable_seed
+from ..parameters import AveragingParameters, TargetSelection
+from ..result import Outcome, Result
+from ..experiment import Experiment
+from . import register
 
 
 class QubitDragAlternatingParameters(TargetSelection, AveragingParameters):
@@ -27,6 +35,7 @@ class QubitDragAlternatingResult(Result):
     """Fitted optimal DRAG beta parameters."""
 
 
+@register
 class QubitDragAlternating(Experiment):
     """Calibrate DRAG parameter using the alternating pulse (180/-180) error amplification method."""
 
@@ -43,10 +52,9 @@ class QubitDragAlternating(Experiment):
         sweep_units=("", ""),
         variables=("I", "Q"),
     )
+    required_operations: ClassVar[tuple[str, ...]] = ("rx", "readout")
 
     params: QubitDragAlternatingParameters
-
-    required_operations: ClassVar[tuple[str, ...]] = ("rx", "readout")
 
     def define_sweep(self) -> dict[str, np.ndarray]:
         beta = np.linspace(
@@ -81,7 +89,7 @@ class QubitDragAlternating(Experiment):
         for k, qubit in enumerate(qubits):
             opt_beta = rng.uniform(-0.5, 0.5)
             noise = 0.015
-            
+
             for p_idx, p_count in enumerate(npi):
                 # Error scales with pulse count * offset from opt_beta
                 error_phase = p_count * (beta - opt_beta) * 0.15
@@ -119,4 +127,7 @@ class QubitDragAlternating(Experiment):
             return
         for qubit, fit in self.result.fit.items():
             if self.result.outcomes[qubit] is Outcome.SUCCESSFUL and fit.get("opt_beta") is not None:
-                self.device.component(qubit).drag_beta = fit["opt_beta"]
+                self.device.channel(qubit, "drive").drag_beta = fit["opt_beta"]
+
+    def probe(self):  # pragma: no cover - driver half
+        raise NotImplementedError("a driver backend supplies probe()")

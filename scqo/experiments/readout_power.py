@@ -1,15 +1,11 @@
-"""Readout-amplitude optimization by single-shot fidelity (backend-free half).
+"""Readout-amplitude optimization by single-shot fidelity, greenfield.
 
-Per-shot experiment: for every readout-amplitude prefactor, prepare |g> and |e>
-and record each shot's I/Q; a two-Gaussian fit per amplitude gives fidelity(amp),
-and the best amplitude (highest fidelity, outlier-fraction guarded) is written
-back to ``readout_amp``. Complements the punchout (which picks the dispersive-
-regime power from averaged S21): this one optimizes the same knob by what
-actually matters — assignment fidelity.
-
-Method note: the Qblox reference cal17 calibrates readout amplitude via the
-AC-Stark shift of the QUBIT frequency — a different (averaged) method; both
-backends here follow the QM ``readout_power`` probe's per-shot fidelity approach.
+Port of :mod:`scqo.experiments.readout_power`. The physics half is
+byte-for-byte; what moved is the device surface: the ``readout_amp``
+knob is read and written on the target's READOUT CHANNEL
+(``self.device.channel(target, "readout").readout_amp``) instead of the
+old component view. Fit keys are unchanged (``readout_amp`` keeps its
+spelling on the channel).
 """
 
 from __future__ import annotations
@@ -20,11 +16,12 @@ import numpy as np
 from pydantic import Field
 
 from .._scqat import per_qubit_results
-from ._sim import stable_seed
 from ..contract import DatasetContract
-from ..experiment import Experiment
+from ._sim import stable_seed
 from ..parameters import Parameters, TargetSelection
 from ..result import Outcome, Result
+from ..experiment import Experiment
+from . import register
 
 
 class ReadoutPowerParameters(TargetSelection, Parameters):
@@ -37,17 +34,19 @@ class ReadoutPowerParameters(TargetSelection, Parameters):
 
 
 class ReadoutPowerResult(Result):
-    """``fit[qubit]``: ``readout_amp`` (new), ``best_amp_factor``, ``best_fidelity``,
-    ``old_readout_amp``."""
+    """``fit[target]``: ``readout_amp`` (new), ``best_amp_factor``,
+    ``best_fidelity``, ``old_readout_amp``."""
 
 
+@register
 class ReadoutPower(Experiment):
     """Backend-agnostic per-shot readout-amplitude scan. Probes must not average."""
 
     name: ClassVar[str] = "readout_power"
     description: ClassVar[str] = (
         "Sweep the readout-amplitude prefactor recording every shot's I/Q for |g> and "
-        "|e>; picks the fidelity-optimal amplitude and updates readout_amp."
+        "|e>; picks the fidelity-optimal amplitude and updates the readout channel's "
+        "readout_amp."
     )
     Parameters: ClassVar[type] = ReadoutPowerParameters
     Result: ClassVar[type] = ReadoutPowerResult
@@ -93,7 +92,8 @@ class ReadoutPower(Experiment):
 
         # scqat's contract: I/Q over (amp_prefactor, prepared_state, shot_idx) — names match.
         prepared = self.dataset.transpose("target", "amp_prefactor", "prepared_state", "shot_idx")
-        old_amps = {q: float(self.device.component(q).readout_amp) for q in self.params.targets}
+        old_amps = {q: float(self.device.channel(q, "readout").readout_amp)
+                    for q in self.params.targets}
 
         results = per_qubit_results(
             prepared, ReadoutPowerFidelityEstimator(), artifact_dir=self.artifact_dir
@@ -120,4 +120,7 @@ class ReadoutPower(Experiment):
             return
         for qubit, fit in self.result.fit.items():
             if self.result.outcomes[qubit] is Outcome.SUCCESSFUL:
-                self.device.component(qubit).readout_amp = fit["readout_amp"]
+                self.device.channel(qubit, "readout").readout_amp = fit["readout_amp"]
+
+    def probe(self):  # pragma: no cover - driver half
+        raise NotImplementedError("a driver backend supplies probe()")

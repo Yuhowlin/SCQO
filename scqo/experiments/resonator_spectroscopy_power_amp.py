@@ -1,39 +1,14 @@
-"""Resonator spectroscopy vs ABSOLUTE readout power via the AMPLITUDE sweep — the
-FAST punchout (backend-free half; named ``_power_amp`` because the power is swept by
-changing the digital amplitude inside the FPGA loop — one hardware program, unlike
-the chain-stepped ``_power_chain``).
+"""Resonator spectroscopy vs absolute readout power (FAST amplitude-sweep
+punchout) — greenfield.
 
-Same inputs and outputs as the sibling: an absolute-dBm window
-(``min_power_dbm``/``max_power_dbm``) in, ``readout_power_dbm`` + ``readout_freq``
-proposals out. Only the mechanism differs. Realization (the lab's proven qualibrate
-pattern): ``run()`` solves the output chain for the WINDOW TOP once
-(``readout_power_dbm = max_power_dbm`` — the setter parks the digital amplitude at
-~0.5 of full scale), sweeps the amplitude PREFACTOR down from 1 in one program, and
-reverts the chain afterwards. Every qubit therefore hits the same absolute window
-exactly, whatever its standing power. Cost of the speed: the low end of the window
-runs at a tiny DAC amplitude (SNR degrades toward the bottom), where ``_chain``
-re-solves the chain per point and keeps amp ~0.5 everywhere.
-
-Audit trail (same discipline as ``_chain``): only the BOUNDARY writes are recorded —
-set to ``max_power_dbm`` at the start, revert at the end (2 ChangeRecords + coupled
-echoes per qubit, through the recorded device view). The swept prefactors are
-acquisition detail, tracked in the figure's amp/chain subplot. Nothing survives the
-run unless a suggestion is accepted.
-
-Acquisition loop order (both backends): amplitude (outer) -> averages (middle) ->
-frequency (INNER = the fastest loop) — each power point repeats a fast frequency
-sweep ``num_averages`` times, so the resonator only jumps power between (slow) outer
-steps. The dataset axis order therefore is ``(power_dbm, detuning_hz)`` (power outer,
-detuning fastest); the scqat estimator transposes by name, so this is invisible to
-analysis. The axis is UNIFORM in dBm on both backends (QM: geometric prefactors via
-``for_each_``; Qblox: the amplitude axis is Python-unrolled — one block per power
-point — since scheduler loop domains are linear-only).
-``resonator_relaxation_time_ns`` controls the between-readout ring-down wait
-(None = the backend's configured value).
-
-Absolute-scale honesty: QM's dBm axis is exact at the port; Qblox derives from the
-nominal +5 dBm full scale (±a few dB). A per-setup photon-number anchor (AC-Stark)
-is the Phase-3 refinement.
+Port of :mod:`scqo.experiments.resonator_spectroscopy_power_amp`. The physics
+half (sweep/simulate/estimate, the boundary-recorded set-top -> one 2D
+acquisition -> revert discipline, and the shared amp/chain provenance format)
+is byte-for-byte; what moved is the device surface: the readout knobs
+(``readout_power_dbm``, ``readout_freq_hz``, ``readout_amp``) now live on the
+target's READOUT CHANNEL (``self.device.channel(q, "readout")``), and the fit
+keys mirroring the renamed field adopt the new spelling
+(``readout_freq_hz`` / ``old_readout_freq_hz``).
 """
 
 from __future__ import annotations
@@ -45,17 +20,18 @@ import numpy as np
 from pydantic import Field, model_validator
 
 from .._scqat import per_qubit_results
-from ._sim import stable_seed
 from ..contract import DatasetContract
-from ..experiment import Experiment
+from ._sim import stable_seed
 from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
+from ..experiment import Experiment
+from . import register
 
 
 class ResonatorSpectroscopyPowerAmpParameters(TargetSelection, AveragingParameters):
     """Inputs for the fast amplitude-sweep absolute-power punchout scan."""
 
-    frequency_span_hz: float = Field(20e6, gt=0, description="Total detuning span around the current readout_freq.")
+    frequency_span_hz: float = Field(20e6, gt=0, description="Total detuning span around the current readout_freq_hz.")
     num_freq_points: int = Field(101, gt=1, description="Number of frequency points.")
     max_power_dbm: float = Field(
         -20.0,
@@ -96,10 +72,11 @@ class ResonatorSpectroscopyPowerAmpParameters(TargetSelection, AveragingParamete
 
 
 class ResonatorSpectroscopyPowerAmpResult(Result):
-    """``fit[qubit]``: ``readout_power_dbm`` (new), ``readout_freq`` (new),
+    """``fit[qubit]``: ``readout_power_dbm`` (new), ``readout_freq_hz`` (new),
     ``optimal_power_dbm``, ``frequency_shift_hz``, plus the old values."""
 
 
+@register
 class ResonatorSpectroscopyPowerAmp(Experiment):
     """Backend-agnostic FAST amplitude-sweep punchout. ``probe()`` is supplied by a
     driver and sweeps the amplitude prefactor down from the window top (``run()``
@@ -110,9 +87,10 @@ class ResonatorSpectroscopyPowerAmp(Experiment):
         "Fast punchout: solves the output chain for max_power_dbm once (recorded boundary "
         "write, reverted after), then sweeps the digital readout AMPLITUDE down from it in ONE "
         "hardware program. Same absolute-dBm window and proposals (readout_power_dbm + "
-        "readout_freq) as resonator_spectroscopy_power_chain, minutes faster; SNR is best near "
-        "the top of the window and degrades toward the bottom (the chain-stepped sibling keeps "
-        "amp ~0.5 at every point). Use for quick scans; use _chain for per-point-optimal SNR."
+        "readout_freq_hz) as resonator_spectroscopy_power_chain, minutes faster; SNR is best "
+        "near the top of the window and degrades toward the bottom (the chain-stepped sibling "
+        "keeps amp ~0.5 at every point). Use for quick scans; use _chain for per-point-optimal "
+        "SNR."
     )
     Parameters: ClassVar[type] = ResonatorSpectroscopyPowerAmpParameters
     Result: ClassVar[type] = ResonatorSpectroscopyPowerAmpResult
@@ -146,7 +124,7 @@ class ResonatorSpectroscopyPowerAmp(Experiment):
         self.sweep_axes = self.define_sweep()
         top = float(self.params.max_power_dbm)
         targets = list(self.params.targets)
-        views = {q: self.device.component(q) for q in targets}
+        views = {q: self.device.channel(q, "readout") for q in targets}
 
         previous: dict[str, float] = {}
         for q, view in views.items():
@@ -173,7 +151,14 @@ class ResonatorSpectroscopyPowerAmp(Experiment):
         self._top_amps: dict[str, float] = {}
         for q in targets:
             try:
-                self._top_amps[q] = float(self.backend.device.component(q).readout_amp)
+                # RAW vendor view: the DeviceModel ABC has no channel(), so
+                # resolve the readout-channel NAME through the roster and
+                # address the vendor tree by entity name (the power_chain
+                # idiom).
+                name = self.device.roster.default_channel(q, "readout")
+                self._top_amps[q] = float(
+                    getattr(self.backend.device.component(name),
+                            "readout_amp"))
             except Exception:  # noqa: BLE001 - provenance only
                 self._top_amps[q] = float("nan")
 
@@ -230,9 +215,13 @@ class ResonatorSpectroscopyPowerAmp(Experiment):
         # optimal-power logic is derivative-based and its `optimal_power` output is
         # already an absolute dBm value on this axis.
         targets = list(self.dataset["target"].values)
-        old_freqs = {q: float(self.device.component(q).readout_freq) for q in targets}
+        old_freqs = {
+            q: float(self.device.channel(q, "readout").readout_freq_hz) for q in targets
+        }
         # estimate() runs after the revert, so this reads the standing (pre-run) chain.
-        old_power = {q: float(self.device.component(q).readout_power_dbm) for q in targets}
+        old_power = {
+            q: float(self.device.channel(q, "readout").readout_power_dbm) for q in targets
+        }
         prepared = self.dataset.rename({"detuning_hz": "detuning", "power_dbm": "power"})
         prepared = prepared.transpose("target", "power", "detuning")
         detuning = prepared["detuning"].values
@@ -253,10 +242,10 @@ class ResonatorSpectroscopyPowerAmp(Experiment):
             result.fit[qubit] = {
                 "readout_power_dbm": optimal_dbm,
                 "optimal_power_dbm": optimal_dbm,
-                "readout_freq": old_freqs[qubit] + shift,
+                "readout_freq_hz": old_freqs[qubit] + shift,
                 "frequency_shift_hz": shift,
                 "old_readout_power_dbm": old_power[qubit],
-                "old_readout_freq": old_freqs[qubit],
+                "old_readout_freq_hz": old_freqs[qubit],
             }
             ok = bool(r["optimal_success"]) and np.isfinite(optimal_dbm) and np.isfinite(shift)
             result.outcomes[qubit] = Outcome.SUCCESSFUL if ok else Outcome.FAILED
@@ -307,6 +296,9 @@ class ResonatorSpectroscopyPowerAmp(Experiment):
             return
         for qubit, fit in self.result.fit.items():
             if self.result.outcomes[qubit] is Outcome.SUCCESSFUL:
-                view = self.device.component(qubit)
+                view = self.device.channel(qubit, "readout")
                 view.readout_power_dbm = fit["readout_power_dbm"]
-                view.readout_freq = fit["readout_freq"]
+                view.readout_freq_hz = fit["readout_freq_hz"]
+
+    def probe(self):  # pragma: no cover - driver half
+        raise NotImplementedError("a driver backend supplies probe()")

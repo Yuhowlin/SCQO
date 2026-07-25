@@ -1,11 +1,10 @@
-"""Readout-frequency optimization by single-shot fidelity (backend-free half).
+"""Readout-frequency optimization by single-shot fidelity, greenfield.
 
-Per-shot experiment: for every readout detuning, prepare |g> and |e> and record
-each shot's I/Q; a two-Gaussian fit per frequency gives fidelity(freq), and the
-fidelity-optimal frequency is written back to ``readout_freq``. This picks the
-point of maximum dispersive contrast |alpha_g - alpha_e| — the same goal as a
-dispersive-shift (chi) scan (Qblox reference cal13), measured by the criterion
-that matters directly: assignment fidelity.
+Port of :mod:`scqo.experiments.readout_frequency`. The physics half is
+byte-for-byte; what moved is the device surface and field spelling: the
+fidelity-optimal frequency lands on the target's READOUT CHANNEL as
+``readout_freq_hz`` (was ``readout_freq`` on the component), read and
+written via ``self.device.channel(target, "readout")``.
 """
 
 from __future__ import annotations
@@ -16,11 +15,12 @@ import numpy as np
 from pydantic import Field
 
 from .._scqat import per_qubit_results
-from ._sim import stable_seed
 from ..contract import DatasetContract
-from ..experiment import Experiment
+from ._sim import stable_seed
 from ..parameters import Parameters, TargetSelection
 from ..result import Outcome, Result
+from ..experiment import Experiment
+from . import register
 
 
 class ReadoutFrequencyParameters(TargetSelection, Parameters):
@@ -32,17 +32,19 @@ class ReadoutFrequencyParameters(TargetSelection, Parameters):
 
 
 class ReadoutFrequencyResult(Result):
-    """``fit[qubit]``: ``readout_freq`` (new), ``frequency_shift_hz``, ``best_fidelity``,
-    ``old_readout_freq``."""
+    """``fit[target]``: ``readout_freq_hz`` (new), ``frequency_shift_hz``,
+    ``best_fidelity``, ``old_readout_freq_hz``."""
 
 
+@register
 class ReadoutFrequency(Experiment):
     """Backend-agnostic per-shot readout-frequency scan. Probes must not average."""
 
     name: ClassVar[str] = "readout_frequency"
     description: ClassVar[str] = (
         "Sweep the readout detuning recording every shot's I/Q for |g> and |e>; picks "
-        "the fidelity-optimal frequency and updates readout_freq."
+        "the fidelity-optimal frequency and updates the readout channel's "
+        "readout_freq_hz."
     )
     Parameters: ClassVar[type] = ReadoutFrequencyParameters
     Result: ClassVar[type] = ReadoutFrequencyResult
@@ -92,7 +94,10 @@ class ReadoutFrequency(Experiment):
         # absolute frequency differs per qubit, so the shift is applied per qubit below.
         prepared = self.dataset.rename({"detuning_hz": "frequency"})
         prepared = prepared.transpose("target", "frequency", "prepared_state", "shot_idx")
-        old_freqs = {q: float(self.device.component(q).readout_freq) for q in self.params.targets}
+        old_freqs = {
+            q: float(self.device.channel(q, "readout").readout_freq_hz)
+            for q in self.params.targets
+        }
 
         results = per_qubit_results(
             prepared, ReadoutFreqFidelityEstimator(), artifact_dir=self.artifact_dir
@@ -106,10 +111,10 @@ class ReadoutFrequency(Experiment):
             old_freq = old_freqs[qubit]
             ok = bool(r.get("success")) and best is not None and np.isfinite(best)
             result.fit[qubit] = {
-                "readout_freq": old_freq + float(best) if ok else float("nan"),
+                "readout_freq_hz": old_freq + float(best) if ok else float("nan"),
                 "frequency_shift_hz": float(best) if best is not None else float("nan"),
                 "best_fidelity": float(fidelity) if fidelity is not None else float("nan"),
-                "old_readout_freq": old_freq,
+                "old_readout_freq_hz": old_freq,
             }
             result.outcomes[qubit] = Outcome.SUCCESSFUL if ok else Outcome.FAILED
         return result
@@ -119,4 +124,8 @@ class ReadoutFrequency(Experiment):
             return
         for qubit, fit in self.result.fit.items():
             if self.result.outcomes[qubit] is Outcome.SUCCESSFUL:
-                self.device.component(qubit).readout_freq = fit["readout_freq"]
+                self.device.channel(qubit, "readout").readout_freq_hz = (
+                    fit["readout_freq_hz"])
+
+    def probe(self):  # pragma: no cover - driver half
+        raise NotImplementedError("a driver backend supplies probe()")

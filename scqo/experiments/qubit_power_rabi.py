@@ -1,12 +1,10 @@
-"""Qubit power Rabi — third worked experiment (backend-free half).
+"""Qubit power Rabi — amplitude-sweep calibration, greenfield.
 
-Completes the trio of sweep types: frequency (resonator spec) / time (Ramsey) /
-**amplitude** (here). Sweeps the drive amplitude as a factor of the qubit's current
-``pi_amp``, fits the Rabi oscillation of excited-state population, and updates ``pi_amp``.
-
-Population model: ``P = 0.5 - 0.5 * cos(pi * factor / factor_pi)`` where ``factor_pi`` is
-the amplitude factor giving a full pi rotation (== 1.0 for a perfectly calibrated pulse).
-A driver still only adds ``probe()``.
+Port of :mod:`scqo.experiments.qubit_power_rabi`. The physics half is
+byte-for-byte; what moved is the device surface: ``pi_amp`` keeps its name
+but now lives on the target's DRIVE CHANNEL
+(``self.device.channel(t, "drive").pi_amp``), read in ``estimate()`` and
+written in ``update()``.
 """
 
 from __future__ import annotations
@@ -17,12 +15,19 @@ import numpy as np
 from pydantic import Field
 
 from .._scqat import per_qubit_results
-from ._capabilities import STATE_ALT, StateReadoutParameters, readout_vars, signal_rename, state_row
-from ._sim import iq_from_population, stable_seed
 from ..contract import DatasetContract
+from ._capabilities.state_readout import (
+    STATE_ALT,
+    StateReadoutParameters,
+    readout_vars,
+    signal_rename,
+    state_row,
+)
+from ._sim import iq_from_population, stable_seed
 from ..parameters import AveragingParameters, TargetSelection
-from ..experiment import Experiment
 from ..result import Outcome, Result
+from ..experiment import Experiment
+from . import register
 
 
 class QubitPowerRabiParameters(TargetSelection, AveragingParameters, StateReadoutParameters):
@@ -36,19 +41,20 @@ class QubitPowerRabiParameters(TargetSelection, AveragingParameters, StateReadou
 class QubitPowerRabiResult(Result):
     """Output of QubitPowerRabi.
 
-    ``fit[qubit]`` carries ``pi_amp`` (new absolute), ``pi_amp_factor`` (recovered factor)
-    and ``old_pi_amp``.
+    ``fit[target]`` carries ``pi_amp`` (new absolute), ``pi_amp_factor``
+    (recovered factor) and ``old_pi_amp``.
     """
 
 
+@register
 class QubitPowerRabi(Experiment):
     """Backend-agnostic power Rabi. ``probe()`` is supplied by a driver."""
 
     name: ClassVar[str] = "qubit_power_rabi"
     description: ClassVar[str] = (
         "Sweep drive amplitude (as a factor of the current pi pulse) and fit the Rabi "
-        "oscillation to recalibrate pi_amp. use_state_discrimination returns the "
-        "FPGA-discriminated averaged state instead of I/Q (needs a calibrated "
+        "oscillation to recalibrate the drive channel's pi_amp. use_state_discrimination "
+        "returns the FPGA-discriminated averaged state instead of I/Q (needs a calibrated "
         "discriminator: run single_shot_readout and accept its readout_rotation_rad / "
         "readout_threshold suggestions first)."
     )
@@ -106,7 +112,7 @@ class QubitPowerRabi(Experiment):
         for qubit in self.params.targets:
             r = results[qubit]
             factor_pi = float(r["opt_amp_prefactor"])
-            old = float(self.device.component(qubit).pi_amp)
+            old = float(self.device.channel(qubit, "drive").pi_amp)
             result.fit[qubit] = {
                 "pi_amp": old * factor_pi,
                 "pi_amp_factor": factor_pi,
@@ -120,4 +126,7 @@ class QubitPowerRabi(Experiment):
             return
         for qubit, fit in self.result.fit.items():
             if self.result.outcomes[qubit] is Outcome.SUCCESSFUL:
-                self.device.component(qubit).pi_amp = fit["pi_amp"]
+                self.device.channel(qubit, "drive").pi_amp = fit["pi_amp"]
+
+    def probe(self):  # pragma: no cover - driver half
+        raise NotImplementedError("a driver backend supplies probe()")

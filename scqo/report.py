@@ -182,11 +182,9 @@ def catalog_rows() -> list[dict[str, Any]]:
 def live_sources(values: dict, history: list[dict]) -> dict:
     """:func:`scqo.provenance.live_sources` over model history rows.
 
-    The generic utility keys on ``component``; model rows say ``entity``
-    (one vocabulary, doc section 2). Adapted here rather than shimmed in
-    the utility — the final cutover renames the utility's key.
+    Re-exported here so the report surface is one import for callers; the
+    utility speaks the model's ``entity`` vocabulary directly.
     """
-    from ..provenance import live_sources as _live
+    from .provenance import live_sources as _live
 
-    adapted = [{**r, "component": r["entity"]} for r in history]
-    return _live(values, adapted)
+    return _live(values, history)

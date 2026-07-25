@@ -1,11 +1,11 @@
-"""Demo device + in-memory vendor + simulated backend (scqo.model.testing):
+"""Demo device + in-memory vendor + simulated backend (scqo.testing):
 the offline end-to-end substrate every later cutover test builds on."""
 
 import numpy as np
 import pytest
 
-from scqo.model import RecordingDevice, state_store
-from scqo.model.testing import (
+from scqo import RecordingDevice, state_store
+from scqo.testing import (
     InMemoryDevice,
     SimulatedBackend,
     demo_components,
@@ -24,7 +24,7 @@ def design(roster):
     return demo_design(roster)
 
 
-def test_demo_roster_shape(roster):
+def test_demo_components_shape(roster):
     assert set(roster.modes()) == {"q0", "q1", "q0_res", "q1_res"}
     assert set(roster.composites()) == {"q0_q1"}
     assert roster.entities["q0_q1"].roles["high"] == ("q1",)
@@ -36,7 +36,7 @@ def test_demo_roster_shape(roster):
 
 def test_demo_design_binds_roles_and_seeds(roster, design):
     assert design.get("q1", "f_01_hz") > design.get("q0", "f_01_hz")
-    from scqo.model import seed_value
+    from scqo import seed_value
     assert seed_value(roster, design, "q0_xy", "drive_freq_hz") == 3.8e9
     assert seed_value(roster, design, "q1_ro", "readout_freq_hz") == 6.05e9
 

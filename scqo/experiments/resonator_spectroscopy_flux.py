@@ -1,21 +1,13 @@
-"""Resonator spectroscopy vs flux — the dispersive flux map (backend-free half).
+"""Resonator spectroscopy vs flux — the dispersive flux map, greenfield.
 
-2D map: sweep the flux bias x readout detuning, track the resonator dip at every
-flux and fit its flux dependence with a selectable model (``dispersive`` — the
-full f_r(flux) = f_r0 + g^2 / (f_r0 - f_q(flux)) transmon arch — or the
-model-light ``sine``). Reports the sweet-spot flux (v_offset_v), the
-flux period (v_per_phi0_v), and, for the dispersive method, the bare resonator
-f_r0 and the coupling g — the resonator-side flux picture that pairs with
-qubit_spectroscopy_flux_pulse for Phase-3 inference. ``update()`` proposes the
-sweet-spot flux + flux period as PHYSICAL parameters on the qubit's ZControl
-component (``physical.json`` on accept), and sets up the operating point at the
-sweet spot via two pushed instrument knobs on the transmon: ``idle_flux_v`` =
-v_offset_v (park at the sweet spot) and ``readout_freq`` = the resonator dip there
-(a later resonator_spectroscopy/readout_frequency run refines it for fidelity).
-f_r0_hz (on the Resonator component) and g_hz (on the ReadoutLine component) are
-proposed only when the dispersive method ran AND ``f_q_max_hz`` was supplied — an
-unconstrained fit holds f_q_max at a placeholder assumption, and assumed values
-must not enter the measured-physics ledger.
+Port of :mod:`scqo.experiments.resonator_spectroscopy_flux`. The physics
+half is byte-for-byte; what moved is the device surface and the field
+spellings: the flux-transfer facts land on the target's FLUX CHANNEL
+under their new names (``v_offset_v`` -> ``flux_offset``,
+``v_per_phi0_v`` -> ``flux_per_phi0``), the sweet-spot operating point is
+two channel knobs (``idle_flux`` on the flux channel, ``readout_freq_hz``
+on the readout channel), and the dispersive physics (``f_r0_hz``,
+``g_hz``) goes on the attached RESONATOR mode.
 """
 
 from __future__ import annotations
@@ -26,18 +18,19 @@ import numpy as np
 from pydantic import Field
 
 from .._scqat import per_qubit_results
-from ._capabilities import (
+from ..contract import DatasetContract
+from ._capabilities.flux import (
     NUM_FLUX_DESC,
-    FluxComponentParameters,
     FluxSweepParameters,
     flux_sweep,
     foreign_flux_source,
 )
 from ._sim import stable_seed
-from ..contract import DatasetContract
-from ..experiment import Experiment
 from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
+from ..experiment import Experiment
+from . import register
+from ._flux_component import FluxComponentParameters
 
 
 class ResonatorSpectroscopyFluxParameters(
@@ -85,17 +78,19 @@ class ResonatorSpectroscopyFluxParameters(
 
 
 class ResonatorSpectroscopyFluxResult(Result):
-    """``fit[qubit]``: ``v_offset_v`` (upper sweet-spot flux), ``sweet_spot_res_hz``
+    """``fit[qubit]``: ``flux_offset`` (upper sweet-spot flux), ``sweet_spot_res_hz``
     (resonator centre freq there), ``sweet_spot_low_flux_v``/``sweet_spot_low_res_hz``
-    (the LOWER sweet spot — record-only, derivable as v_offset_v ± v_per_phi0_v/2),
-    ``v_per_phi0_v`` (flux period), plus
+    (the LOWER sweet spot — record-only, derivable as flux_offset ± flux_per_phi0/2),
+    ``flux_per_phi0`` (flux period), plus
     ``f_r0_hz``/``g_hz`` for the dispersive method only. ``update()`` proposes the
-    physical facts on the qubit's ZControl (v_offset_v/v_per_phi0_v), Resonator
-    (f_r0_hz) and ReadoutLine (g_hz) components, and two transmon operating-point
-    knobs: ``idle_flux_v`` (= v_offset_v; park at the sweet spot) and
-    ``readout_freq`` (= sweet_spot_res_hz; read out at the resonator dip there)."""
+    physical facts on the qubit's flux channel (flux_offset/flux_per_phi0) and
+    resonator mode (f_r0_hz/g_hz), and two operating-point channel knobs:
+    ``idle_flux`` on the flux channel (= flux_offset; park at the sweet spot) and
+    ``readout_freq_hz`` on the readout channel (= sweet_spot_res_hz; read out at
+    the resonator dip there)."""
 
 
+@register
 class ResonatorSpectroscopyFlux(Experiment):
     """Backend-agnostic resonator flux map. ``probe()`` is supplied by a driver."""
 
@@ -103,11 +98,12 @@ class ResonatorSpectroscopyFlux(Experiment):
     description: ClassVar[str] = (
         "2D resonator spectroscopy vs flux bias: tracks the dip at every flux and fits "
         "its flux dependence with a selectable model (analysis_method='dispersive' or "
-        "'sine'); proposes the sweet-spot flux (v_offset_v) + flux period "
-        "(v_per_phi0_v) as physical parameters on the qubit's ZControl component, and "
-        "sets the transmon operating point at the sweet spot (idle_flux_v=v_offset_v, "
-        "readout_freq=resonator dip there) — plus bare f_r0_hz (Resonator) and "
-        "coupling g_hz (ReadoutLine) "
+        "'sine'); proposes the sweet-spot flux (flux_offset) + flux period "
+        "(flux_per_phi0) as physical facts on the qubit's flux channel, and "
+        "sets the operating point at the sweet spot (the flux channel's "
+        "idle_flux = flux_offset, the readout channel's readout_freq_hz = "
+        "resonator dip there) — plus bare f_r0_hz and coupling g_hz on the "
+        "attached resonator mode "
         "when the dispersive method ran with f_q_max_hz supplied (an unconstrained fit "
         "only ASSUMES f_q_max; assumptions are not recorded as physics)."
     )
@@ -138,8 +134,8 @@ class ResonatorSpectroscopyFlux(Experiment):
         q_data = np.empty_like(i_data)
         for k, q in enumerate(targets):
             # centers generated FROM the dispersive model the estimator fits
-            readout_now = float(self.device.component(q).readout_freq)
-            f_q_max = float(self.device.component(q).drive_freq)
+            readout_now = float(self.device.channel(q, "readout").readout_freq_hz)
+            f_q_max = float(self.device.channel(q, "drive").drive_freq_hz)
             sweet = rng.uniform(0.3 * flux.min(), 0.3 * flux.max())
             period = rng.uniform(1.8, 2.6) * (flux.max() - flux.min())
             g = rng.uniform(70e6, 100e6)
@@ -160,7 +156,9 @@ class ResonatorSpectroscopyFlux(Experiment):
         from scqat.estimators.resonator_spectroscopy_flux import ResonatorSpectroscopyFluxEstimator
 
         targets = list(self.dataset["target"].values)
-        old_freqs = {q: float(self.device.component(q).readout_freq) for q in targets}
+        old_freqs = {
+            q: float(self.device.channel(q, "readout").readout_freq_hz) for q in targets
+        }
         prepared = self.dataset.rename({"flux_bias_v": "flux_bias", "detuning_hz": "detuning"})
         prepared = prepared.transpose("target", "flux_bias", "detuning")
         detuning = prepared["detuning"].values
@@ -183,13 +181,13 @@ class ResonatorSpectroscopyFlux(Experiment):
             disp = results[qubit]["dispersion"]
             vs = results[qubit]["vs_flux"]
             fit = {
-                "v_offset_v": float(disp["sweet_spot_flux"]),
+                "flux_offset": float(disp["sweet_spot_flux"]),
                 "sweet_spot_res_hz": float(disp["sweet_spot_res"]),
                 "sweet_spot_low_flux_v": float(disp["sweet_spot_low_flux"]),
                 "sweet_spot_low_res_hz": float(disp["sweet_spot_low_res"]),
-                "v_per_phi0_v": float(disp["dv_phi0"]),
+                "flux_per_phi0": float(disp["dv_phi0"]),
                 "n_good_flux": int(vs["n_good"]),
-                "old_readout_freq": old_freqs[qubit],
+                "old_readout_freq_hz": old_freqs[qubit],
             }
             # Dispersive-only physics — the sine method produces no f_r0/g/f_q_max.
             for src, dst in (("f_r0", "f_r0_hz"), ("g", "g_hz"), ("f_q_max", "f_q_max_hz")):
@@ -203,17 +201,17 @@ class ResonatorSpectroscopyFlux(Experiment):
         """Propose the flux-model quantities: physical facts + operating-point knobs.
 
         Sweet-spot flux + flux period are always proposed (robust flux-periodicity,
-        produced by every method) as ``v_offset_v``/``v_per_phi0_v`` on the qubit's
-        ZControl component (PHYSICAL facts). Two pushed instrument knobs on the
-        transmon set the operating point at the sweet spot: ``idle_flux_v`` =
-        ``v_offset_v`` (park at the upper sweet spot) and ``readout_freq`` =
-        ``sweet_spot_res_hz`` (read out at the resonator dip there — a later
-        readout_frequency run refines it for fidelity).
-        ``f_r0_hz`` (Resonator) / ``g_hz`` (ReadoutLine) are proposed only when the
-        DISPERSIVE method ran AND the caller supplied ``f_q_max_hz``: the sine
-        method yields no such physics, and without a known f_q_max the estimator
-        holds it at a placeholder guess and g is conditional on that assumption —
-        an assumed value must never enter the measured-physics ledger.
+        produced by every method) as ``flux_offset``/``flux_per_phi0`` on the
+        qubit's flux CHANNEL (PHYSICAL facts). Two pushed channel knobs set the
+        operating point at the sweet spot: the flux channel's ``idle_flux`` =
+        ``flux_offset`` (park at the upper sweet spot) and the readout channel's
+        ``readout_freq_hz`` = ``sweet_spot_res_hz`` (read out at the resonator dip
+        there — a later readout_frequency run refines it for fidelity).
+        ``f_r0_hz`` / ``g_hz`` (both on the attached resonator mode) are proposed
+        only when the DISPERSIVE method ran AND the caller supplied ``f_q_max_hz``:
+        the sine method yields no such physics, and without a known f_q_max the
+        estimator holds it at a placeholder guess and g is conditional on that
+        assumption — an assumed value must never enter the measured-physics ledger.
         ``f_q_max_hz`` itself is never proposed here (it is an INPUT of the
         dispersive fit; qubit_spectroscopy_flux_pulse measures it).
         """
@@ -230,25 +228,28 @@ class ResonatorSpectroscopyFlux(Experiment):
         for qubit, fit in self.result.fit.items():
             if self.result.outcomes[qubit] is not Outcome.SUCCESSFUL:
                 continue
-            z_view = self.device.component(self.device.one(qubit, "ZControl"))
-            for field in ("v_offset_v", "v_per_phi0_v"):
+            flux_view = self.device.channel(qubit, "flux")
+            for field in ("flux_offset", "flux_per_phi0"):
                 if field in fit:
-                    setattr(z_view, field, fit[field])
-            # Set up the operating point at the sweet spot — two pushed knobs on
-            # the transmon: park the standing idle flux at the sweet-spot voltage
-            # (idle_flux_v = v_offset_v), and read out at the resonator dip there
-            # (readout_freq = sweet_spot_res_hz). idle_flux_v exists because an
-            # own-flux run requires the flux_bias operation (the target is a
-            # FluxTunableTransmon); a later readout_frequency run refines readout_freq.
-            q_view = self.device.component(qubit)
-            if "v_offset_v" in fit:
-                q_view.idle_flux_v = fit["v_offset_v"]
+                    setattr(flux_view, field, fit[field])
+            # Set up the operating point at the sweet spot — two pushed channel
+            # knobs: park the standing idle flux at the sweet-spot bias
+            # (idle_flux = flux_offset on the flux channel), and read out at the
+            # resonator dip there (readout_freq_hz = sweet_spot_res_hz on the
+            # readout channel). The flux channel exists because an own-flux run
+            # requires the flux_bias operation (the target is flux-tunable); a
+            # later readout_frequency run refines readout_freq_hz.
+            if "flux_offset" in fit:
+                flux_view.idle_flux = fit["flux_offset"]
             if "sweet_spot_res_hz" in fit:
-                q_view.readout_freq = fit["sweet_spot_res_hz"]
+                self.device.channel(qubit, "readout").readout_freq_hz = (
+                    fit["sweet_spot_res_hz"])
             if constrained:
+                res_view = self.device.component(self.device.resonator_of(qubit))
                 if "f_r0_hz" in fit:
-                    res_view = self.device.component(self.device.one(qubit, "Resonator"))
                     res_view.f_r0_hz = fit["f_r0_hz"]
                 if "g_hz" in fit:
-                    ro_view = self.device.component(self.device.one(qubit, "ReadoutLine"))
-                    ro_view.g_hz = fit["g_hz"]
+                    res_view.g_hz = fit["g_hz"]
+
+    def probe(self):  # pragma: no cover - driver half
+        raise NotImplementedError("a driver backend supplies probe()")

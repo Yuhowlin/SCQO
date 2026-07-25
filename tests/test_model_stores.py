@@ -1,4 +1,4 @@
-"""Schema-3 store contracts (scqo.model.stores) — docs/greenfield-schema.md
+"""Schema-3 store contracts (scqo.stores) — docs/greenfield-schema.md
 sections 1, 6, 10: one shape, two role sets, fresh-start archiving, array
 relations enforced at write time."""
 
@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from scqo.model import (
+from scqo import (
     StoreError,
     parse_components,
     physical_store,
@@ -237,7 +237,7 @@ def test_future_row_keys_are_tolerated(tmp_path, roster):
 
 def test_same_key_latest_timestamp_wins_regardless_of_save_order(
         tmp_path, roster, monkeypatch):
-    import scqo.model.stores as stores_mod
+    import scqo.stores as stores_mod
     clock = iter(["2026-07-25T10:00:01+08:00", "2026-07-25T10:00:02+08:00"])
     monkeypatch.setattr(stores_mod, "_now", lambda: next(clock))
     older = state_store(tmp_path, roster)

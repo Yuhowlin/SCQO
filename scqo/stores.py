@@ -52,7 +52,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .._state_io import _file_lock, history_path, read_history, write_history
+from ._state_io import _file_lock, history_path, read_history, write_history
 from .catalog import FieldSpec
 from .roster import Roster
 

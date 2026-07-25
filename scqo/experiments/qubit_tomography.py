@@ -1,24 +1,28 @@
-"""Qubit Tomography (backend-free half).
+"""Qubit tomography — greenfield port.
 
-Performs state tomography by applying init states, target gates, and sweeping
-basis rotations to measure populations and gate error trajectory.
+Port of :mod:`scqo.experiments.qubit_tomography`. The physics half
+(custom tomography contract, define_sweep/simulate/estimate) is
+byte-for-byte; this module touches no device fields (no anchors, no
+update()), so only the registry surface moved: kind-based gating via the
+default qubit-like ``target_kinds``, ``@register`` into the greenfield
+registry, and the driver-supplied ``probe()`` stub.
 """
 
 from __future__ import annotations
 
-import json
-from typing import ClassVar, Dict, Any
+from typing import Any, ClassVar
 
 import numpy as np
 from pydantic import Field, field_validator
 import xarray as xr
 
 from .._scqat import per_qubit_results
-from ..contract import DatasetContract, ContractError
-from ..parameters import AveragingParameters, TargetSelection
-from ..experiment import Experiment
-from ..result import Outcome, Result
+from ..contract import ContractError, DatasetContract
 from ._sim import stable_seed
+from ..parameters import AveragingParameters, TargetSelection
+from ..result import Outcome, Result
+from ..experiment import Experiment
+from . import register
 
 
 class TomographyContract(DatasetContract):
@@ -32,25 +36,25 @@ class TomographyContract(DatasetContract):
                 problems.append(f"missing dimension {dim!r}")
             if dim not in ds.coords:
                 problems.append(f"missing coordinate {dim!r}")
-        
+
         tomo_vars = ["I_tomo", "Q_tomo"]
         train_vars = ["I_train", "Q_train"]
-        
+
         tomo_dims = {"target", "basis", "sym", "gate_count", "shot_idx"}
         train_dims = {"target", "prepared_state", "train_shot_idx"}
-        
+
         for var in tomo_vars:
             if var not in ds.data_vars:
                 problems.append(f"missing variable {var!r}")
             elif set(ds[var].dims) != tomo_dims:
                 problems.append(f"variable {var!r} has dims {tuple(ds[var].dims)}, expected {tomo_dims}")
-                
+
         for var in train_vars:
             if var not in ds.data_vars:
                 problems.append(f"missing variable {var!r}")
             elif set(ds[var].dims) != train_dims:
                 problems.append(f"variable {var!r} has dims {tuple(ds[var].dims)}, expected {train_dims}")
-                
+
         if problems:
             raise ContractError("dataset does not conform to Tomography contract: " + "; ".join(problems))
 
@@ -104,6 +108,7 @@ class QubitTomographyResult(Result):
     pass
 
 
+@register
 class QubitTomography(Experiment):
     """Backend-agnostic Qubit Tomography. ``probe()`` is supplied by a driver."""
 
@@ -137,29 +142,29 @@ class QubitTomography(Experiment):
     def simulate(self, coords: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         qubits = self.params.targets
         n_qubits = len(qubits)
-        
+
         bases = coords["basis"]
         syms = coords["sym"]
         gate_counts = coords["gate_count"]
         shot_idx = coords["shot_idx"]
         prepared_states = coords["prepared_state"]
         train_shot_idx = coords["train_shot_idx"]
-        
+
         # 1. Simulate training data
         I_train = np.empty((n_qubits, len(prepared_states), len(train_shot_idx)))
         Q_train = np.empty_like(I_train)
-        
+
         rng = np.random.default_rng(stable_seed("qubit_tomography", *qubits))
         for q_idx in range(n_qubits):
             for s_idx, state in enumerate(prepared_states):
                 center_x = 0.0 if state == 0 else 4.0
                 I_train[q_idx, s_idx] = center_x + rng.normal(0, 0.8, len(train_shot_idx))
                 Q_train[q_idx, s_idx] = rng.normal(0, 0.8, len(train_shot_idx))
-                
+
         # 2. Simulate tomography data
         I_tomo = np.empty((n_qubits, len(bases), len(syms), len(gate_counts), len(shot_idx)))
         Q_tomo = np.empty_like(I_tomo)
-        
+
         for q_idx, qubit in enumerate(qubits):
             config = self.params.qubit_configs.get(qubit, {"init_state": "0", "target_gate": "X"})
             for b_idx, basis in enumerate(bases):
@@ -171,15 +176,15 @@ class QubitTomography(Experiment):
                             p = 0.5 + 0.5 * np.exp(-gc / 10.0) * np.sin(gc * 0.1)
                         else:
                             p = 0.5 - 0.5 * np.exp(-gc / 10.0)
-                        
+
                         if sym == "inv":
                             p = 1.0 - p
-                            
+
                         actual_states = rng.binomial(1, p, len(shot_idx))
                         cx = np.where(actual_states == 1, 4.0, 0.0)
                         I_tomo[q_idx, b_idx, s_idx, g_idx] = cx + rng.normal(0, 0.8, len(shot_idx))
                         Q_tomo[q_idx, b_idx, s_idx, g_idx] = rng.normal(0, 0.8, len(shot_idx))
-                        
+
         return {
             "I_tomo": (("target", "basis", "sym", "gate_count", "shot_idx"), I_tomo),
             "Q_tomo": (("target", "basis", "sym", "gate_count", "shot_idx"), Q_tomo),
@@ -189,15 +194,18 @@ class QubitTomography(Experiment):
     def estimate(self) -> QubitTomographyResult:
         assert self.dataset is not None, "run() populates self.dataset before estimate()"
         from scqat.estimators.qubit_tomography import QubitTomographyEstimator
-        
+
         # Split along qubit dimension and analyze
         results = per_qubit_results(
             self.dataset, QubitTomographyEstimator(), artifact_dir=self.artifact_dir
         )
-        
+
         result = QubitTomographyResult()
         for qubit in self.params.targets:
             r = results.get(qubit, {})
             result.fit[qubit] = r
             result.outcomes[qubit] = Outcome.SUCCESSFUL if (r and r.get("success", False)) else Outcome.FAILED
         return result
+
+    def probe(self):  # pragma: no cover - driver half
+        raise NotImplementedError("a driver backend supplies probe()")

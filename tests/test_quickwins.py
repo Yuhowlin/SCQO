@@ -16,19 +16,15 @@ import textwrap
 
 import numpy as np
 
-import scqo.registry as registry
+import scqo.experiments as registry
 from scqo import Outcome, Session, register
 from scqo.experiments import ResonatorSpectroscopy
-from scqo.testing import InMemoryDevice, SimulatedBackend, demo_roster
+from scqo.testing import SimulatedBackend, demo_device
 
 
-def _device() -> InMemoryDevice:
-    return InMemoryDevice(
-        {
-            "q0": {"readout_freq": 5.95e9, "drive_freq": 3.87e9, "pi_amp": 0.2, "readout_amp": 0.25},
-            "q1": {"readout_freq": 6.05e9, "drive_freq": 4.01e9, "pi_amp": 0.18, "readout_amp": 0.22},
-        }
-    )
+def _session() -> Session:
+    roster, design, vendor = demo_device()
+    return Session(SimulatedBackend(vendor), roster, design=design)
 
 
 # Canonical-name demo registration so this module passes standalone (same idiom as
@@ -48,15 +44,15 @@ def test_simulator_seed_is_process_independent():
     """
     code = textwrap.dedent(
         """
-        from scqo.testing import InMemoryDevice, SimulatedBackend
+        from scqo.testing import SimulatedBackend, demo_device
         from scqo.experiments import ResonatorSpectroscopy
 
         class Demo(ResonatorSpectroscopy):
             def probe(self):
                 return None
 
-        dev = InMemoryDevice({"q0": {"readout_freq": 6e9, "drive_freq": 4e9, "pi_amp": 0.2, "readout_amp": 0.25}})
-        exp = Demo(SimulatedBackend(dev), Demo.Parameters(targets=["q0", "q1"]))
+        roster, design, vendor = demo_device()
+        exp = Demo(SimulatedBackend(vendor), Demo.Parameters(targets=["q0", "q1"]))
         out = exp.simulate(exp.define_sweep())
         print(repr(float(out["I"].sum())))
         """
@@ -87,15 +83,15 @@ class _BrokenExperiment(ResonatorSpectroscopy):
 
 
 def test_session_returns_structured_failure_on_contract_violation():
-    sess = Session(SimulatedBackend(_device()), demo_roster())
-    before = sess.device_state()["q0"]["readout_freq"]
+    sess = _session()
+    before = sess.device_state()["q0_ro"]["readout_freq_hz"]
 
     result = sess.run("broken_contract", {"targets": ["q0"]})  # must NOT raise
 
     assert result["error"], "failed run should carry a non-empty error message"
     assert result["outcomes"]["q0"] == Outcome.NO_DATA.value
     # nothing was written back on failure
-    assert sess.device_state()["q0"]["readout_freq"] == before
+    assert sess.device_state()["q0_ro"]["readout_freq_hz"] == before
 
 
 # --------------------------------------------------------------------------- A3
@@ -111,9 +107,9 @@ class _PartialExperiment(ResonatorSpectroscopy):
     def estimate(self):
         result = self.Result()
         result.fit["q0"] = {
-            "readout_freq": 7.0e9,
+            "readout_freq_hz": 7.0e9,
             "dip_detuning_hz": 0.0,
-            "old_readout_freq": float(self.device.component("q0").readout_freq),
+            "old_readout_freq_hz": self.anchor("q0", "readout_freq_hz"),
         }
         result.outcomes["q0"] = Outcome.SUCCESSFUL
         result.outcomes["q1"] = Outcome.FAILED
@@ -121,16 +117,16 @@ class _PartialExperiment(ResonatorSpectroscopy):
 
 
 def test_partial_success_writes_only_good_qubits():
-    sess = Session(SimulatedBackend(_device()), demo_roster())
-    before_q1 = sess.device_state()["q1"]["readout_freq"]
+    sess = _session()
+    before_q1 = sess.device_state()["q1_ro"]["readout_freq_hz"]
 
     result = sess.run("partial_success", {"targets": ["q0", "q1"]}, update="apply")
 
     assert result["outcomes"]["q0"] == Outcome.SUCCESSFUL.value
     assert result["outcomes"]["q1"] == Outcome.FAILED.value
     state = sess.device_state()
-    assert np.isclose(state["q0"]["readout_freq"], 7.0e9)  # good qubit written
-    assert np.isclose(state["q1"]["readout_freq"], before_q1)  # failed qubit untouched
+    assert np.isclose(state["q0_ro"]["readout_freq_hz"], 7.0e9)  # good qubit written
+    assert np.isclose(state["q1_ro"]["readout_freq_hz"], before_q1)  # failed qubit untouched
 
 
 # ---------------------------------------------------------------------------- B

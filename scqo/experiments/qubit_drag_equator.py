@@ -1,16 +1,24 @@
+"""Qubit DRAG equator — 3-line symmetric beta calibration, greenfield.
+
+Port of :mod:`scqo.experiments.qubit_drag_equator`. The physics half is
+byte-for-byte; what moved is the device surface: ``drag_beta`` keeps its
+name but now lives on the target's DRIVE CHANNEL
+(``self.device.channel(t, "drive").drag_beta``), written in ``update()``.
+"""
+
 from __future__ import annotations
 
-from typing import ClassVar, Dict, Any, List
+from typing import ClassVar
 
 import numpy as np
-import xarray as xr
 from pydantic import Field, field_validator
 
 from ..contract import DatasetContract
-from ..experiment import Experiment
-from ..result import Outcome, Result
-from ..parameters import AveragingParameters, TargetSelection
 from ._sim import stable_seed
+from ..parameters import AveragingParameters, TargetSelection
+from ..result import Outcome, Result
+from ..experiment import Experiment
+from . import register
 
 
 class QubitDragEquatorParameters(TargetSelection, AveragingParameters):
@@ -33,6 +41,7 @@ class QubitDragEquatorResult(Result):
     """Fitted optimal DRAG beta parameters."""
 
 
+@register
 class QubitDragEquator(Experiment):
     """Calibrate DRAG beta parameter using the 3-line symmetric equator method."""
 
@@ -81,12 +90,12 @@ class QubitDragEquator(Experiment):
         for k, qubit in enumerate(qubits):
             opt_beta = rng.uniform(-0.5, 0.5)
             noise = 0.015
-            
+
             # Seq 0: Rx(pi) - Ry(pi/2)
             i_data[k, 0] = 0.5 + 0.3 * np.tanh(beta - opt_beta) + rng.normal(0, noise, n_beta)
             # Seq 1: Ry(pi) - Rx(pi/2)
             i_data[k, 1] = 0.5 - 0.3 * np.tanh(beta - opt_beta) + rng.normal(0, noise, n_beta)
-            
+
             q_data[k, :] = rng.normal(0, noise, (n_seq, n_beta))
 
         return {"I": i_data, "Q": q_data}
@@ -120,4 +129,7 @@ class QubitDragEquator(Experiment):
             return
         for qubit, fit in self.result.fit.items():
             if self.result.outcomes[qubit] is Outcome.SUCCESSFUL and fit.get("opt_beta") is not None:
-                self.device.component(qubit).drag_beta = fit["opt_beta"]
+                self.device.channel(qubit, "drive").drag_beta = fit["opt_beta"]
+
+    def probe(self):  # pragma: no cover - driver half
+        raise NotImplementedError("a driver backend supplies probe()")

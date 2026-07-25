@@ -1,9 +1,9 @@
-"""Roster loader contracts (scqo.model.roster) — docs/greenfield-schema.md
+"""Roster loader contracts (scqo.roster) — docs/greenfield-schema.md
 sections 3-5, 7 + the section-8 worked example as the primary fixture."""
 
 import pytest
 
-from scqo.model import (
+from scqo import (
     Channel,
     Mode,
     Roster,
@@ -384,8 +384,8 @@ def test_minted_entity_errors_cite_provenance_not_phantom_sections():
 
 
 def test_composite_cycle_is_a_load_error():
-    from scqo.model import Composite
-    from scqo.model.roster import _check_dag
+    from scqo import Composite
+    from scqo.roster import _check_dag
     a = Composite(name="a", kind="qubit_pair", roles={"high": ("b",)})
     b = Composite(name="b", kind="qubit_pair", roles={"high": ("a",)})
     with pytest.raises(RosterError, match="cycle"):
@@ -393,7 +393,7 @@ def test_composite_cycle_is_a_load_error():
 
 
 def test_bom_is_tolerated_in_the_hand_edited_file(tmp_path):
-    from scqo.model import load_components
+    from scqo import load_components
     p = tmp_path / "components.toml"
     p.write_bytes(b"\xef\xbb\xbf" + EXAMPLE.encode())
     assert "q1" in load_components(p).entities

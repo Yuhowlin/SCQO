@@ -1,13 +1,11 @@
-"""Residual ZZ vs coupler bias — the pair's decouple-point calibration (backend-free half).
+"""Residual ZZ vs coupler bias — the pair's decouple-point calibration, greenfield.
 
-2D map per PAIR: sweep the tunable coupler's standing bias x a Hahn-echo evolution
-time on one member qubit while the OTHER member sits in |e> half the time — the
-echo fringe (under a virtual detuning) oscillates at ``detuning + zz(bias)``, so
-the signed residual ZZ is read per bias point. ``update()`` proposes the
-zero-crossing bias as the pair's ``coupler_decouple_v`` (instrument knob — this
-automates what the lab used to read off the figure and hand-edit into the vendor
-config) and records the interpolated residual ``zz_hz`` at that point on the same
-name's PHYSICAL Coupling slot (the trend shows how well each calibration nulled ZZ).
+Port of :mod:`scqo.experiments.pair_zz_coupler`. The physics half is
+byte-for-byte; what moved is the device surface: the target gate is
+``target_kinds = ("qubit_pair",)`` (the coupler's flux channel existence
+gates it — no ``coupler_bias`` operation), the decouple point lands as
+``idle_flux`` on the COUPLER mode's flux channel (``coupler_decouple_v``
+is gone), and the residual ``zz_hz`` stays a fact on the pair itself.
 """
 
 from __future__ import annotations
@@ -18,11 +16,12 @@ import numpy as np
 from pydantic import Field
 
 from .._scqat import per_qubit_results
-from ._sim import stable_seed
 from ..contract import DatasetContract
-from ..experiment import Experiment
+from ._sim import stable_seed
 from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
+from ..experiment import Experiment
+from . import register
 
 
 class PairZZCouplerParameters(TargetSelection, AveragingParameters):
@@ -45,10 +44,11 @@ class PairZZCouplerParameters(TargetSelection, AveragingParameters):
 class PairZZCouplerResult(Result):
     """``fit[pair]``: ``coupler_zero_v`` (interpolated ZZ zero crossing),
     ``zz_hz`` (residual at that point), ``zz_min_hz``/``zz_max_hz`` (map range),
-    ``old_coupler_decouple_v``. ``update()`` proposes coupler_decouple_v
-    (TransmonPair knob) + zz_hz (Coupling physical fact)."""
+    ``old_coupler_idle_flux``. ``update()`` writes the zero crossing as
+    ``idle_flux`` on the coupler's flux channel + ``zz_hz`` (pair fact)."""
 
 
+@register
 class PairZZCoupler(Experiment):
     """Backend-agnostic pair ZZ map. ``probe()`` is supplied by a driver."""
 
@@ -56,8 +56,9 @@ class PairZZCoupler(Experiment):
     description: ClassVar[str] = (
         "Residual-ZZ vs coupler standing bias (echo fringe under a virtual detuning, "
         "one pair member measured): finds the signed ZZ zero crossing and proposes it "
-        "as the pair's coupler_decouple_v (the interaction-OFF operating point); the "
-        "residual zz_hz at the new point lands on the pair's Coupling physical slot."
+        "as idle_flux on the coupler's flux channel (the interaction-OFF standing "
+        "bias); the residual zz_hz at the new point lands on the pair as a physical "
+        "fact."
     )
     Parameters: ClassVar[type] = PairZZCouplerParameters
     Result: ClassVar[type] = PairZZCouplerResult
@@ -65,8 +66,7 @@ class PairZZCoupler(Experiment):
         sweeps=("coupler_bias_v", "idle_time_ns"), sweep_units=("V", "ns"),
         variables=("signal",),
     )
-    target_category: ClassVar[str] = "TransmonPair"
-    required_operations: ClassVar[tuple[str, ...]] = ("coupler_bias",)
+    target_kinds: ClassVar[tuple[str, ...]] = ("qubit_pair",)
 
     params: PairZZCouplerParameters
 
@@ -119,7 +119,8 @@ class PairZZCoupler(Experiment):
             f_hz = np.asarray(results[pair]["f"], dtype=float)
             zz = f_hz - det  # signed residual ZZ per bias point
             try:
-                old = self.device.component(pair).coupler_decouple_v
+                coupler = self.device.roster.entities[pair].roles["coupler"][0]
+                old = self.device.channel(coupler, "flux").idle_flux
                 old = float(old) if old is not None else None
             except Exception:
                 old = None
@@ -127,7 +128,7 @@ class PairZZCoupler(Experiment):
                 "zz_min_hz": float(np.nanmin(zz)),
                 "zz_max_hz": float(np.nanmax(zz)),
                 "n_flux": int(bias.size),
-                "old_coupler_decouple_v": old,
+                "old_coupler_idle_flux": old,
             }
             crossing = _zero_crossing(bias, zz)
             if crossing is not None:
@@ -145,17 +146,44 @@ class PairZZCoupler(Experiment):
         return result
 
     def update(self) -> None:
-        """Propose the decouple point (instrument knob on the pair) + the residual
-        ZZ there (physical fact on the pair's Coupling slot). One component view
-        carries both — routing by declaring side."""
+        """Propose the decouple point (idle_flux knob on the COUPLER mode's
+        flux channel) + the residual ZZ there (physical fact on the pair).
+        Two destinations — the coupler's standing bias is its own channel's
+        knob, never a pair field."""
         if self.result is None:
             return
         for pair, fit in self.result.fit.items():
             if self.result.outcomes[pair] is not Outcome.SUCCESSFUL:
                 continue
-            view = self.device.component(pair)
-            view.coupler_decouple_v = fit["coupler_zero_v"]
-            view.zz_hz = fit["zz_hz"]
+            couplers = self.device.roster.entities[pair].roles.get(
+                "coupler", ())
+            if not couplers:  # standalone use bypasses the session gate
+                raise ValueError(
+                    f"{pair} declares no coupler role — pair_zz_coupler "
+                    f"needs a tracked coupler with a flux channel")
+            self.device.channel(couplers[0], "flux").idle_flux = (
+                fit["coupler_zero_v"])
+            self.device.component(pair).zz_hz = fit["zz_hz"]
+
+    @classmethod
+    def validate_targets(cls, roster, targets):
+        """The coupler gate the old coupler_bias operation used to provide:
+        each pair must declare a tracked coupler whose flux channel exists —
+        refused pre-probe, never mid-sweep on a coupler-less pair."""
+        problems = []
+        for pair in targets:
+            e = roster.entities.get(pair)
+            couplers = getattr(e, "roles", {}).get("coupler", ())
+            if not couplers:
+                problems.append(f"{pair}: declares no coupler role — "
+                                f"nothing to bias")
+            elif (couplers[0], "flux") not in roster.defaults:
+                problems.append(f"{pair}: coupler {couplers[0]!r} has no "
+                                f"flux channel")
+        return problems
+
+    def probe(self):  # pragma: no cover - driver half
+        raise NotImplementedError("a driver backend supplies probe()")
 
 
 def _zero_crossing(bias: np.ndarray, zz: np.ndarray) -> tuple[float, float] | None:

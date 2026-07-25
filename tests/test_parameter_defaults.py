@@ -9,9 +9,10 @@ from there) and the effective-defaults overlay in ``Session.catalog()``.
 
 from __future__ import annotations
 
-from scqo import Session, register, registry
+from scqo import Session, register
+from scqo import experiments as registry
 from scqo.experiments import ResonatorSpectroscopy
-from scqo.testing import InMemoryDevice, SimulatedBackend, demo_roster
+from scqo.testing import SimulatedBackend, demo_device
 
 
 # Concrete demo experiment (probe is a no-op under SimulatedBackend); registering under
@@ -22,20 +23,12 @@ class _PdResonatorSpectroscopy(ResonatorSpectroscopy):
         return None
 
 
-def _device() -> InMemoryDevice:
-    return InMemoryDevice(
-        {
-            "q0": {"readout_freq": 5.95e9, "drive_freq": 3.87e9, "pi_amp": 0.2, "readout_amp": 0.25},
-            "q1": {"readout_freq": 6.05e9, "drive_freq": 4.01e9, "pi_amp": 0.18, "readout_amp": 0.22},
-        }
-    )
-
-
 def _session(tmp_path=None, **kwargs) -> Session:
     if tmp_path is not None:
         kwargs.setdefault("data_root", tmp_path / "data")
         kwargs.setdefault("device_name", "devA")
-    return Session(SimulatedBackend(_device()), demo_roster(), **kwargs)
+    roster, design, vendor = demo_device()
+    return Session(SimulatedBackend(vendor), roster, design=design, **kwargs)
 
 
 # ---------------------------------------------------------------- merge precedence

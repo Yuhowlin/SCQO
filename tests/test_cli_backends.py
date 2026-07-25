@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from scqo import labconfig, registry
+from scqo import labconfig
+from scqo import experiments as registry
 from scqo.cli import _backends
 from scqo.cli.__main__ import _COMMANDS, main as cli_main
 
@@ -22,20 +23,16 @@ def _lab(tmp_path, device: str | None = "chipT") -> str:
     return _config(tmp_path, f"[lab]\n{device_line}data_root = '{data_root.as_posix()}'\n")
 
 
+#: the greenfield roster: one transmon mode, a readout rider (mints q0_res +
+#: q0_ro) and a drive rider (mints q0_xy) — operations are DERIVED from wiring.
 _COMPONENTS = """\
-schema = 1
-[components.q0]
-physical   = "FixedTransmon"
-instrument = "ReadableTransmon"
-operations = ["rx", "readout"]
-[components.q0_res]
-physical = "Resonator"
-[components.q0_ro]
-physical = "ReadoutLine"
-members  = { transmon = "q0", resonator = "q0_res" }
-[components.q0_xy]
-physical = "XYControl"
-members  = { transmon = "q0" }
+schema = 3
+[modes.q0]
+kind = "transmon"
+[lines.fl]
+readout = ["q0"]
+[lines.xy0]
+drive = ["q0"]
 """
 
 
@@ -43,7 +40,7 @@ def _registry(tmp_path, text: str) -> None:
     ddir = tmp_path / "data" / "chipT"
     ddir.mkdir(parents=True, exist_ok=True)
     (ddir / "cooldowns.toml").write_text(text, encoding="utf-8")
-    # a CONFIGURED device requires its component roster (components.toml)
+    # a CONFIGURED device requires its entity roster (components.toml)
     (ddir / "components.toml").write_text(_COMPONENTS, encoding="utf-8")
 
 
@@ -62,7 +59,8 @@ def test_no_device_falls_back_to_demo(tmp_path):
     assert sess.backend_label == "simulated"
     assert sess.setup_name == ""  # demo fallback has no setup era
     assert sess.datastore is None  # demo fallback persists nothing
-    assert "q0" in sess.device_state()
+    assert "q0" in sess.roster.entities  # the built-in demo roster
+    assert "q0_xy" in sess.device_state()  # ... realized, with seeded knobs
 
 
 def test_device_without_registry_names_the_fix(tmp_path):
@@ -135,8 +133,8 @@ def test_simulated_setup_builds_and_persists(tmp_path):
     assert sess.backend_label == "simulated"
     assert sess.setup_name == "sim_bench"  # the resolved setup NAME is era provenance
     assert sess.datastore is not None  # device + data_root = persisted
-    # per-(cooldown, setup) scqo/ folder convention
-    assert sess.state_path.replace("\\", "/").endswith("chipT/cd1/sim_bench/scqo/scqo_state.json")
+    # per-(cooldown, setup) scqo/ folder convention (both stores live there)
+    assert str(sess.scqo_dir).replace("\\", "/").endswith("chipT/cd1/sim_bench/scqo")
 
 
 def _driver_installed(family: str) -> bool:

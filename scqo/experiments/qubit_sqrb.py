@@ -1,7 +1,9 @@
-"""Qubit Single Qubit Randomized Benchmarking (SQRB).
+"""Qubit single-qubit randomized benchmarking (SQRB), greenfield.
 
-Plays random Clifford sequences of increasing depths, fitting the depolarizing
-decay curve to determine the average single-qubit gate fidelity.
+Port of :mod:`scqo.experiments.qubit_sqrb`. The physics half is
+byte-for-byte; nothing on the device surface moved — the module reads and
+writes no device fields (its fit keys are purely descriptive gate-fidelity
+quantities), so only the import paths and registration changed.
 """
 
 from __future__ import annotations
@@ -13,11 +15,17 @@ from pydantic import Field
 
 from .._scqat import per_qubit_results
 from ..contract import DatasetContract
-from ..parameters import AveragingParameters, TargetSelection
-from ..experiment import Experiment
-from ..result import Outcome, Result
-from ._capabilities import STATE_ALT, StateReadoutParameters, readout_vars, state_row
+from ._capabilities.state_readout import (
+    STATE_ALT,
+    StateReadoutParameters,
+    readout_vars,
+    state_row,
+)
 from ._sim import stable_seed
+from ..parameters import AveragingParameters, TargetSelection
+from ..result import Outcome, Result
+from ..experiment import Experiment
+from . import register
 
 
 class QubitSQRBParameters(TargetSelection, AveragingParameters, StateReadoutParameters):
@@ -70,6 +78,7 @@ class QubitSQRBResult(Result):
     pass
 
 
+@register
 class QubitSQRB(Experiment):
     """Single Qubit Randomized Benchmarking."""
 
@@ -154,3 +163,6 @@ class QubitSQRB(Experiment):
             }
             result.outcomes[qubit] = Outcome.SUCCESSFUL if r.get("success", False) else Outcome.FAILED
         return result
+
+    def probe(self):  # pragma: no cover - driver half
+        raise NotImplementedError("a driver backend supplies probe()")

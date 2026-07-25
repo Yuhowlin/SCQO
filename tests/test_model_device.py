@@ -1,10 +1,10 @@
-"""Device-layer contracts (scqo.model.device): recording semantics over a
+"""Device-layer contracts (scqo.device): recording semantics over a
 fake vendor — pull/push seeding, push-first writes, coupled echoes, monitors
 never touching the vendor, composite knob surfaces."""
 
 import pytest
 
-from scqo.model import (
+from scqo import (
     CompositeView,
     DeviceModel,
     RecordingDevice,

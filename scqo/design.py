@@ -141,10 +141,13 @@ def _design_illegal(roster: Roster, entity: str, field: str,
             f"(context-free design vocabulary: {sorted(legal)})")
 
 
-def load_design(path: str | Path, roster: Roster) -> Design:
-    """Load the datasheet beside components.toml; a missing file is an empty
-    (all-defaults) datasheet."""
-    path = Path(path)
+def load_design(device_dir: str | Path, roster: Roster) -> Design:
+    """The device's datasheet, beside its ``components.toml`` (``device_dir``
+    is the device folder; a direct path to the file itself is accepted too).
+    A missing file is an empty (all-defaults) datasheet."""
+    path = Path(device_dir)
+    if path.is_dir() or path.suffix != ".toml":
+        path = path / DESIGN_FILE
     if not path.is_file():
         return Design({})
     # utf-8-sig: PowerShell 5.1's `-Encoding utf8` writes a BOM into this

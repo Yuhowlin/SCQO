@@ -4,8 +4,8 @@ reference experiment. The offline twin of the bench workflow."""
 
 import pytest
 
-from scqo.model import Session
-from scqo.model.testing import (
+from scqo import Session
+from scqo.testing import (
     InMemoryDevice,
     SimulatedBackend,
     demo_components,

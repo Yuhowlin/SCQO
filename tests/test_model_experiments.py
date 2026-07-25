@@ -5,9 +5,9 @@ entities."""
 
 import pytest
 
-from scqo.model import Session
-from scqo.model import experiments as registry
-from scqo.model.testing import (
+from scqo import Session
+from scqo import experiments as registry
+from scqo.testing import (
     InMemoryDevice,
     SimulatedBackend,
     demo_components,
@@ -33,10 +33,16 @@ def session(tmp_path_factory):
                    cooldown_id="cd1")
 
 
-@pytest.mark.parametrize("name", [e["name"] for e in registry.catalog()])
+#: the CORE catalog, taken from the exported classes rather than the live
+#: registry — another test's @register must never widen this sweep.
+CORE = sorted(getattr(registry, n).name for n in registry.__all__
+              if n not in ("catalog", "get", "register"))
+
+
+@pytest.mark.parametrize("name", CORE)
 def test_every_experiment_runs_clean(session, name):
-    entry = next(e for e in registry.catalog() if e["name"] == name)
-    target = "q0_q1" if entry["target_kinds"] == ["qubit_pair"] else "q0"
+    cls = registry.get(name)
+    target = "q0_q1" if cls.target_kinds == ("qubit_pair",) else "q0"
     out = session.run(name, {"targets": [target]}, update="none")
     assert out.get("error") is None, out.get("error")
 

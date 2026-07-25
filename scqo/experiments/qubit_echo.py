@@ -1,12 +1,10 @@
-"""Qubit echo — Hahn-echo coherence time T2_echo (backend-free half).
+"""Qubit echo — Hahn-echo coherence time T2_echo, greenfield.
 
-X90 - tau/2 - X - tau/2 - X90, sweeping the total idle time tau: the central pi
-pulse refocuses quasi-static dephasing, so the envelope decays with T2_echo
-(T2* <= T2_echo <= 2*T1). Like T1, ``update()`` proposes ``t2_echo_s`` as a
-PHYSICAL parameter (``physical.json`` on accept); the daily value also lives in
-the run index (``fit_trend`` query).
-
-Renamed from ``t2_echo`` 2026-07-06.
+Port of :mod:`scqo.experiments.qubit_echo`. The physics half is
+preserved (cosmetically reflowed); the fitted ``t2_echo_s`` is a MODE fact and keeps its
+attribute-style landing on ``self.device.component(target)`` — what moved
+is only the import surface (capability helpers from their current
+locations) and the kind-based gating inherited from the greenfield base.
 """
 
 from __future__ import annotations
@@ -17,12 +15,19 @@ import numpy as np
 from pydantic import Field
 
 from .._scqat import per_qubit_results
-from ._capabilities import STATE_ALT, StateReadoutParameters, readout_vars, signal_rename, state_row
-from ._sim import iq_from_population, stable_seed
 from ..contract import DatasetContract
-from ..experiment import Experiment
+from ._capabilities.state_readout import (
+    STATE_ALT,
+    StateReadoutParameters,
+    readout_vars,
+    signal_rename,
+    state_row,
+)
+from ._sim import iq_from_population, stable_seed
 from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
+from ..experiment import Experiment
+from . import register
 
 
 class QubitEchoParameters(TargetSelection, AveragingParameters, StateReadoutParameters):
@@ -34,10 +39,11 @@ class QubitEchoParameters(TargetSelection, AveragingParameters, StateReadoutPara
 
 
 class QubitEchoResult(Result):
-    """``fit[qubit]`` carries ``t2_echo_s`` (plus fit amplitude/offset); proposed as a
+    """``fit[target]`` carries ``t2_echo_s`` (plus fit amplitude/offset); proposed as a
     physical parameter by ``update()``."""
 
 
+@register
 class QubitEcho(Experiment):
     """Backend-agnostic Hahn echo: X90 - tau/2 - X - tau/2 - X90 -> exponential fit."""
 
@@ -85,7 +91,7 @@ class QubitEcho(Experiment):
         return readout_vars(use_state, state, i_data, q_data)
 
     def estimate(self) -> QubitEchoResult:
-        assert self.dataset is not None, "run() populates self.dataset before estimate()"
+        assert self.dataset is not None
         from scqat.estimators.qubit_echo import QubitEchoEstimator
 
         # scqat's contract: complex IQ (`I`/`Q`) + coord `idle_time` in seconds; the
@@ -99,21 +105,24 @@ class QubitEcho(Experiment):
         results = per_qubit_results(prepared, QubitEchoEstimator(), artifact_dir=self.artifact_dir)
 
         result = QubitEchoResult()
-        for qubit in self.params.targets:
-            r = results[qubit]
-            result.fit[qubit] = {
+        for target in self.params.targets:
+            r = results[target]
+            result.fit[target] = {
                 "t2_echo_s": float(r["t2_echo"]),
                 "t2_echo_stderr_s": float(r["t2_echo_stderr"]),
                 "amplitude": float(r["amplitude"]),
                 "offset": float(r["offset"]),
             }
-            result.outcomes[qubit] = Outcome.SUCCESSFUL if bool(r["success"]) else Outcome.FAILED
+            result.outcomes[target] = Outcome.SUCCESSFUL if bool(r["success"]) else Outcome.FAILED
         return result
 
     def update(self) -> None:
         # Record T2_echo as device state (record-only field: history + config, no push).
         if self.result is None:
             return
-        for qubit, fit in self.result.fit.items():
-            if self.result.outcomes[qubit] is Outcome.SUCCESSFUL:
-                self.device.component(qubit).t2_echo_s = fit["t2_echo_s"]
+        for target, fit in self.result.fit.items():
+            if self.result.outcomes[target] is Outcome.SUCCESSFUL:
+                self.device.component(target).t2_echo_s = fit["t2_echo_s"]
+
+    def probe(self):  # pragma: no cover - driver half
+        raise NotImplementedError("a driver backend supplies probe()")
