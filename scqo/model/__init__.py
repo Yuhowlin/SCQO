@@ -34,6 +34,14 @@ from .entities import (  # noqa: F401
     Mode,
     Provenance,
 )
+from .design import (  # noqa: F401
+    DESIGN_FILE,
+    Design,
+    DesignError,
+    load_design,
+    parse_design,
+    seed_value,
+)
 from .roster import (  # noqa: F401
     COMPONENTS_FILE,
     Roster,

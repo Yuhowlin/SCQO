@@ -106,11 +106,13 @@ def _names(value, *, where: str, list_ok: bool = True) -> tuple[str, ...]:
 def _check_name(name: str, where: str) -> None:
     """Entity names feed the ``name.field`` addressing grammar and store
     keys: identifiers only, no ``__`` (reserved for the field parameter
-    grammar), no leading underscore."""
+    grammar), no leading underscore, and not ``schema`` (design.toml's flat
+    layout puts entity tables beside its schema stamp)."""
     _require(isinstance(name, str) and name.isidentifier()
-             and "__" not in name and not name.startswith("_"),
+             and "__" not in name and not name.startswith("_")
+             and name != "schema",
              f"{where}: invalid entity name {name!r} (identifier, no '__', "
-             f"no leading '_')")
+             f"no leading '_', not the reserved word 'schema')")
 
 
 def _table(section: dict, name: str, header: str) -> dict:
@@ -608,9 +610,11 @@ def parse_components(text: str, *, source: str = COMPONENTS_FILE) -> Roster:
         data = tomllib.loads(text)
     except tomllib.TOMLDecodeError as err:
         raise RosterError(f"{source}: {err}") from None
-    _require(data.get("schema") == SCHEMA,
-             f"{source}: schema = {SCHEMA} required (found "
-             f"{data.get('schema')!r}); pre-greenfield rosters are not read")
+    stamp = data.get("schema")
+    _require(isinstance(stamp, int) and not isinstance(stamp, bool)
+             and stamp == SCHEMA,
+             f"{source}: schema = {SCHEMA} required (the integer; found "
+             f"{stamp!r}); pre-greenfield rosters are not read")
     unknown = set(data) - {"schema", *_SECTIONS}
     _require(not unknown,
              f"{source}: unknown section(s) {sorted(unknown)}"
