@@ -6,10 +6,14 @@ Real instruments are served by DRIVER packages that register a factory under the
     [project.entry-points."scqo.backends"]
     qblox = "lchqb.scqo_backend:build_backend"
 
-A factory is ``build_backend(cfg: LabConfig, setup: dict) -> Backend`` — ``setup``
-is the device's SELECTED named setup record from its cooldown registry (``backend``,
-optional ``note``, plus the DERIVED ``instrument_config`` vendor folder injected by
-``load_cooldowns`` — ``<device>/<cooldown>/<setup>/backend_config``, never typed).
+A factory is ``build_backend(cfg: LabConfig, setup: dict, roster: Roster) ->
+Backend`` — ``setup`` is the device's SELECTED named setup record from its cooldown
+registry (``backend``, optional ``note``, plus the DERIVED ``instrument_config``
+vendor folder injected by ``load_cooldowns`` —
+``<device>/<cooldown>/<setup>/backend_config``, never typed), and ``roster`` is the
+device's authority on which entities exist: a driver serves views BY ENTITY NAME
+(``q1_xy`` -> its drive view over the vendor's q1 element), so it must resolve
+each channel's target and kind through the roster rather than parsing names.
 ``simulated`` (demo qubits, synthetic data) is built in here, so query commands,
 practice runs and CI need no driver at all.
 """
@@ -208,7 +212,8 @@ def build_session(config_path: str | None = None) -> tuple[Session, LabConfig]:
     roster, design = _load_device(cfg)
     for ep in entry_points(group="scqo.backends"):
         if ep.name == family:
-            backend = ep.load()(cfg, setup)  # a factory ImportError propagates with its traceback
+            # a factory ImportError propagates with its traceback
+            backend = ep.load()(cfg, setup, roster)
             return make_session(backend, cfg, roster, backend_label=family,
                                 setup_name=name, cooldown_id=cid,
                                 design=design), cfg
