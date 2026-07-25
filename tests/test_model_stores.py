@@ -71,15 +71,17 @@ def test_shape_validation_scalars_and_arrays(stores):
         physical.record("q1", "f_01_hz", True)
 
 
-def test_paired_arrays_stay_equal_length(stores):
+def test_paired_arrays_enforced_at_save_not_per_write(stores):
+    """Pair-length equality is a BATCH-END (session) and SAVE invariant, not
+    per-write — a redone fit legally changes both partners' length within
+    one batch, so individual writes may transiently diverge."""
     physical, _ = stores
     physical.record("q1_z", "distortion_tau_s", [6.0e-7, 8.0e-8])
-    with pytest.raises(StoreError, match="equal-length"):
-        physical.record("q1_z", "distortion_amp", [0.02])
+    physical.record("q1_z", "distortion_amp", [0.02])   # transient: allowed
+    with pytest.raises(StoreError, match="unequal paired lengths"):
+        physical.save()                                  # the save refuses
     physical.record("q1_z", "distortion_amp", [0.02, -0.01])
-    # ... and from the other side too
-    with pytest.raises(StoreError, match="equal-length"):
-        physical.record("q1_z", "distortion_tau_s", [1e-6])
+    physical.save()                                      # consistent: lands
 
 
 def test_waveform_requires_its_time_base_first(stores):

@@ -219,9 +219,11 @@ class Store:
     file so two same-context sessions cannot erase each other's rows.
     """
 
-    def __init__(self, path: str | Path, roster: Roster, *,
+    def __init__(self, path: str | Path | None, roster: Roster, *,
                  roles: frozenset[str], setup: str = "") -> None:
-        self._path = Path(path)
+        #: None = in-memory store (demo/notebook sessions): full validation
+        #: and history, no persistence — save() is a no-op.
+        self._path = Path(path) if path is not None else None
         self._roster = roster
         self._roles = roles
         self._setup = setup
@@ -232,6 +234,9 @@ class Store:
         #: (entity, field) keys we wrote since load/save — the only value
         #: keys ``save()`` may overwrite.
         self._dirty: set[tuple[str, str]] = set()
+        self._history: list[ChangeRecord] = []
+        if self._path is None:
+            return
         data = _load_v3(self._path)
         if data is not None:
             self._values = _clean_values(data.get("values"), roster)
@@ -239,7 +244,7 @@ class Store:
         if rows is None:  # foreign sidecar (v2 leftover / values-only reset)
             _archive_pre_v3(self._path, sidecar_only=data is not None)
             rows = []
-        self._history: list[ChangeRecord] = rows
+        self._history = rows
         self._saved = len(rows)
 
     # ------------------------------------------------------------- reading
@@ -260,13 +265,13 @@ class Store:
 
     # ------------------------------------------------------------- writing
 
-    def _validate(self, entity: str, field: str, value) -> "float | list[float]":
-        spec = self._roster.spec(entity, field)  # exact-cause on unknown
-        if spec.role not in self._roles:
-            other = (PHYSICAL_FILE if spec.role == "fact" else STATE_FILE)
-            raise StoreError(
-                f"{entity}.{field} is a {spec.role} — it belongs in {other}, "
-                f"not {self._path.name}")
+    def _name(self) -> str:
+        if self._path is not None:
+            return self._path.name
+        return PHYSICAL_FILE if "fact" in self._roles else STATE_FILE
+
+    def _coerce(self, entity: str, field: str, spec: FieldSpec,
+                value) -> "float | list[float]":
         where = f"{entity}.{field}"
         if spec.shape == "float[]":
             if not (isinstance(value, list) and value
@@ -284,27 +289,16 @@ class Store:
             value = float(value)
             if not math.isfinite(value):
                 raise StoreError(f"{where}: refusing non-finite {value!r}")
-        self._check_relations(entity, field, spec, value, self._values)
         return value
 
     def _check_relations(self, entity: str, field: str, spec: FieldSpec,
                          value, values: dict) -> None:
-        """Declared array relations (doc section 6): paired arrays stay
-        equal-length (checked from BOTH sides), and a waveform needs its
-        time base first."""
-        fields = self._roster.fields_of(entity)
-        partners = set()
-        if spec.paired_with:
-            partners.add(spec.paired_with)
-        partners.update(f for f, s in fields.items()
-                        if s.paired_with == field)
-        for partner in partners:
-            existing = values.get(entity, {}).get(partner)
-            if existing is not None and len(existing) != len(value):
-                raise StoreError(
-                    f"{entity}.{field}: length {len(value)} != paired "
-                    f"{partner} length {len(existing)} — paired arrays stay "
-                    f"equal-length")
+        """Per-write relation: a waveform needs its time base first (the one
+        prerequisite a well-ordered batch can always satisfy). Paired-array
+        LENGTH equality is deliberately NOT per-write — a redone fit changes
+        both partners' length in one batch, so it is a BATCH-END invariant
+        (the session validates it) and a SAVE invariant (:meth:`_check_merged`
+        — a direct store user meets it there at the latest)."""
         if (spec.shape == "float[]" and field.endswith("_waveform")
                 and values.get(entity, {}).get(f"{field}_dt_s") is None):
             raise StoreError(
@@ -328,19 +322,34 @@ class Store:
                         f"{len(b)}) — another session wrote a conflicting "
                         f"pair; re-record both sides together")
 
-    def check(self, entity: str, field: str, value) -> "float | list[float]":
+    def check(self, entity: str, field: str, value, *,
+              relations: bool = True) -> "float | list[float]":
         """Validate one prospective write WITHOUT recording it — the
         recording device calls this BEFORE pushing to the vendor, so a
         store-invalid value (wrong shape, NaN list element, waveform without
-        its dt, paired-length break) can never reach the instrument."""
-        return self._validate(entity, field, value)
+        its dt, paired-length break) can never reach the instrument.
+
+        ``relations=False`` skips the CURRENT-values relation checks (paired
+        lengths, waveform-dt-first) — suggestion capture uses it, because a
+        proposal's partner may itself only be proposed; relations are
+        re-checked when the accept actually records."""
+        spec = self._roster.spec(entity, field)
+        if spec.role not in self._roles:
+            other = (PHYSICAL_FILE if spec.role == "fact" else STATE_FILE)
+            raise StoreError(
+                f"{entity}.{field} is a {spec.role} — it belongs in {other}, "
+                f"not {self._name()}")
+        value = self._coerce(entity, field, spec, value)
+        if relations:
+            self._check_relations(entity, field, spec, value, self._values)
+        return value
 
     def record(self, entity: str, field: str, value, *,
                experiment: str | None = None, run_id: str | None = None,
                coupled_to: str | None = None) -> None:
         """Record one value: validate, append history, update values —
         never any vendor (push is the recording device's job)."""
-        value = self._validate(entity, field, value)
+        value = self.check(entity, field, value)
         self._history.append(ChangeRecord(
             timestamp=_now(), entity=entity, field=field,
             old=self.get(entity, field),
@@ -370,6 +379,8 @@ class Store:
         write cannot re-append rows on retry); the values file lands by
         unique-temp + atomic replace.
         """
+        if self._path is None:  # in-memory store: nothing to persist
+            return
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with _file_lock(self._path):
             data = _load_v3(self._path)  # archive side effects under the lock
@@ -409,15 +420,16 @@ class Store:
             self._dirty.clear()
 
 
-def physical_store(scqo_dir: str | Path, roster: Roster, *,
+def physical_store(scqo_dir: str | Path | None, roster: Roster, *,
                    setup: str = "") -> Store:
-    """The measured-facts store of one context directory."""
-    return Store(Path(scqo_dir) / PHYSICAL_FILE, roster,
-                 roles=frozenset({"fact"}), setup=setup)
+    """The measured-facts store of one context directory (None = in-memory)."""
+    path = Path(scqo_dir) / PHYSICAL_FILE if scqo_dir is not None else None
+    return Store(path, roster, roles=frozenset({"fact"}), setup=setup)
 
 
-def state_store(scqo_dir: str | Path, roster: Roster, *,
+def state_store(scqo_dir: str | Path | None, roster: Roster, *,
                 setup: str = "") -> Store:
-    """The operating store (knobs + monitors) of one context directory."""
-    return Store(Path(scqo_dir) / STATE_FILE, roster,
-                 roles=frozenset({"knob", "monitor"}), setup=setup)
+    """The operating store of one context directory (None = in-memory)."""
+    path = Path(scqo_dir) / STATE_FILE if scqo_dir is not None else None
+    return Store(path, roster, roles=frozenset({"knob", "monitor"}),
+                 setup=setup)

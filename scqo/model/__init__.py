@@ -57,6 +57,7 @@ from .roster import (  # noqa: F401
     load_components,
     parse_components,
 )
+from .session import Session  # noqa: F401
 from .stores import (  # noqa: F401
     PHYSICAL_FILE,
     STATE_FILE,
@@ -66,4 +67,12 @@ from .stores import (  # noqa: F401
     StoreError,
     physical_store,
     state_store,
+)
+from .suggestions import (  # noqa: F401
+    Suggestion,
+    SuggestionCapture,
+    load_suggestions,
+    pending_count,
+    reject_suggestions,
+    select_suggestions,
 )

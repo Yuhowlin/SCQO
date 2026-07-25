@@ -207,11 +207,13 @@ def _recording_channel_view(kind: str) -> type:
     return type(f"Recording{kind.capitalize()}View", (EntityView,), ns)
 
 
-class _RecordingCompositeView(EntityView):
+class _RecordingCompositeView(CompositeView):
     """Recording surface for one composite: generic by full knob name (the
-    legal set is the entity's compiled fields). Same read/write symmetry as
-    the channel views: knobs read strict, facts are refused with the
-    physical-store pointer in BOTH directions."""
+    legal set is the entity's compiled fields). Subclasses the CompositeView
+    ABC — everything that routes on ``isinstance(view, CompositeView)``
+    (session writes, capture reads) must treat it as one. Same read/write
+    symmetry as the channel views: knobs read strict, facts are refused with
+    the physical-store pointer in BOTH directions."""
 
     def __init__(self, parent: "RecordingDevice", name: str) -> None:
         object.__setattr__(self, "name", name)

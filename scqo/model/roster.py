@@ -584,6 +584,58 @@ class Roster:
             f"{name}.{field}: unknown field for this entity "
             f"(kind {e.kind!r}; legal: {sorted(self.fields_of(name))})")
 
+    def resolve_field(self, name: str, field: str) -> tuple[str, FieldSpec]:
+        """Qubit-closure addressing: route ``q1.pi_amp`` to the entity that
+        owns the field. Search order — SELF first, then the target's DEFAULT
+        channels, then the attached resonator; first hit wins (self-
+        precedence resolves the one legal overlap, n_th). Explicit entity
+        names (``q1_xy.pi_amp``) hit on self and pass straight through."""
+        _require(name in self._legal, f"unknown entity {name!r}")
+        fields = self.fields_of(name)
+        if field in fields:
+            return name, fields[field]
+        e = self.entities[name]
+        if isinstance(e, Mode):
+            for kind, chspec in CHANNELS.items():
+                ch = self.defaults.get((name, kind))
+                if ch is not None:
+                    chf = self.fields_of(ch)
+                    if field in chf:
+                        return ch, chf[field]
+                elif field in chspec.fields:
+                    # The field belongs to this kind but the target has no
+                    # DEFAULT channel of it — several declared, or none.
+                    extras = sorted(c.name for c in self.channels_of(name)
+                                    if c.kind == kind)
+                    if extras:
+                        raise RosterError(
+                            f"{name}.{field}: ambiguous — several {kind} "
+                            f"channels on {name!r}: {extras}; address one "
+                            f"explicitly")
+            hits = []
+            for res in self.entities.values():
+                if (isinstance(res, Mode) and res.kind == "resonator"
+                        and res.refs.get("qubit") == name
+                        and field in self.fields_of(res.name)):
+                    hits.append(res.name)
+            if len(hits) == 1:
+                return hits[0], self.fields_of(hits[0])[field]
+            if len(hits) > 1:
+                raise RosterError(
+                    f"{name}.{field}: ambiguous — several resonators claim "
+                    f"qubit {name!r}: {sorted(hits)}; address one explicitly")
+        # Hints cover the field AND its per-target instances on multi-target
+        # channels (q1.flux_offset on a broadcast coil -> coil.flux_offset__q1).
+        owners = sorted(f"{n}.{field}" for n in self.entities
+                        if field in self.fields_of(n))
+        owners += sorted(f"{n}.{field}__{name}" for n in self.entities
+                         if f"{field}__{name}" in self.fields_of(n))
+        hint = (f" — did you mean {' or '.join(owners[:3])}?"
+                if owners else "")
+        raise RosterError(
+            f"{name}.{field}: no entity in {name!r}'s closure carries this "
+            f"field{hint}")
+
     def default_channel(self, target: str, kind: str) -> str:
         """Default addressing: the ONE channel of this kind on this target."""
         name = self.defaults.get((target, kind))
