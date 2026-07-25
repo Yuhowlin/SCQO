@@ -49,3 +49,13 @@ from .roster import (  # noqa: F401
     load_components,
     parse_components,
 )
+from .stores import (  # noqa: F401
+    PHYSICAL_FILE,
+    STATE_FILE,
+    STATE_SCHEMA,
+    ChangeRecord,
+    Store,
+    StoreError,
+    physical_store,
+    state_store,
+)
