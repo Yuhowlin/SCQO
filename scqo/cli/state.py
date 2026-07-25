@@ -2,15 +2,15 @@
 
 State is per SETUP: the first output line names the device, the resolved setup
 and its state file, so two users of one sample know whose numbers they see.
-Components are grouped by CATEGORY (the roster decides what each name is).
+Entities are grouped by KIND (the roster decides what each name is).
 
-    scqo state                        # calibration tables per category (YOUR setup)
+    scqo state                        # calibration tables per kind (YOUR setup)
     scqo state --history              # last 20 changes (old -> new + cause + operator)
     scqo state --history 100 --entity q0
-    scqo state --physical             # the sample ledger: one row per component/field
+    scqo state --physical             # the sample ledger: one row per entity/field
     scqo state --physical --history   # ... and its change history (rows carry setup=)
     scqo state --sources              # which run set each CURRENT value (both stores)
-    scqo state --fields               # the field catalog per category + THIS backend's
+    scqo state --fields               # the field catalog per kind + THIS backend's
                                       #   vendor bindings + its vendor-only inventory
                                       #   (--json for machines)
     scqo state --rule                 # the placement rule: which store owns which
@@ -29,33 +29,35 @@ from ._backends import build_session
 _RULE = """\
 Where does a value live? (the placement rule - full version: TUTORIAL.md)
 
-A field lives on the COMPONENT whose category declares it (components.toml is
-the roster; q1 = transmon, q1_res = its resonator, q1_ro/q1_xy/q1_z = the
-interaction terms). Classify each USE of a quantity; ask in order, first match wins:
+A field lives on the ENTITY whose kind declares it (components.toml is the
+roster; q1 = the transmon mode, q1_res = its resonator, and q1_ro/q1_xy/q1_z =
+its readout/drive/flux channels, minted by the lines they ride). Classify each USE of a quantity; ask in order, first match wins:
  1. Gone when the run ends? (sweep windows, shot counts, analysis assumptions,
     Optional-None overrides)          -> per-run experiment Parameters
  2. True of the chip in the dark - no instrument SETTING realizes it?
-    (T1, f_r, EJ; setup-plane coordinates OK when declared, e.g. v_per_phi0_v)
-                                      -> the PHYSICAL category -> physical.json
+    (T1, f_r, EJ; setup-plane coordinates OK when declared, e.g. flux_per_phi0)
+                                      -> role FACT -> physical.json
                                          write: suggest -> accept, or scqo set
  3. Measured, but a vendor knob realizes the result? (time of flight)
                                       -> write the vendor knob itself: offline,
                                          in the catalog row's unit (--fields)
  4. A knob the calibration loop reads/writes vendor-neutrally - the same
-    signal on every backend?          -> the INSTRUMENT category -> scqo_state.json
+    signal on every backend?          -> role KNOB -> scqo_state.json (pushed)
       absolute at a declared plane      -> portable=True  (Hz, dBm at port, s)
       fraction of an untracked chain    -> portable=False (twin or catalogued
                                            scale); write: suggest / scqo set
  5. Measured, no knob:
       consulted as standing state before the next step?
-                                      -> instrument push=False (readout_fidelity)
+                                      -> role MONITOR (fidelity_g/fidelity_e):
+                                         stored, never pushed
       only compared across runs?      -> run record only (p_e_given_g)
  6. Everything else is the instrument's -> vendor config; catalogued when:
       [realizer]  realizes a neutral field - change THAT field via scqo set
       [candidate] shared concept awaiting promotion (the visible backlog)
       [vendor]    permanently vendor-owned (reason stated in the entry)
       [unique]    THIS backend only - experiments touching it run ONLY here
-DESIGN values (declared chip targets) live in components.toml, device-level.
+DESIGN values (declared chip targets) live in the sibling design.toml, keyed
+by entity - they seed bring-up sweeps and never mix with measured facts.
 
 The unit you type is ALWAYS the catalog row's unit, never assumed (ns vs s!).
 Chain solves are deterministic: the coarse knob is quantized, the amplitude
@@ -68,13 +70,13 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--history", nargs="?", const=20, type=int, metavar="N",
                         help="show the last N recorded changes instead (default N=20)")
-    parser.add_argument("--entity", help="restrict output to one component")
+    parser.add_argument("--entity", help="restrict output to one entity")
     parser.add_argument("--physical", action="store_true",
                         help="the sample's measured physical parameters instead of the instrument config")
     parser.add_argument("--sources", action="store_true",
                         help="where each current value came from: source run / (manual) / (externally changed)")
     parser.add_argument("--fields", action="store_true",
-                        help="the field catalog per category + this backend's "
+                        help="the field catalog per kind + this backend's "
                              "vendor bindings and vendor-only parameters")
     parser.add_argument("--rule", action="store_true",
                         help="print the placement rule (which store owns which kind of value)")
@@ -88,7 +90,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
     if args.sources and (args.history is not None or args.physical):
         parser.error("--sources always covers both stores; do not combine it with --history/--physical")
     if args.fields and (args.history is not None or args.physical or args.sources or args.entity):
-        parser.error("--fields is a schema view (no per-component values); do not combine "
+        parser.error("--fields is a schema view (no per-entity values); do not combine "
                      "it with --history/--physical/--sources/--entity")
     if args.as_json and not args.fields:
         parser.error("--json applies to --fields only")
@@ -220,7 +222,7 @@ def _fields_payload(sess, cfg) -> dict:
 
 
 def _print_fields(sess, cfg, *, as_json: bool) -> int:
-    """The field catalog view, one section per category. Values are elsewhere
+    """The field catalog view, one section per entity KIND. Values are elsewhere
     (`scqo state`); this is schema + where the SELECTED backend realizes each
     instrument field + the backend-unique untracked inventory."""
     import json
@@ -233,10 +235,10 @@ def _print_fields(sess, cfg, *, as_json: bool) -> int:
     print(f"# backend: {payload['backend']}   (bindings are declared metadata; the "
           f"executable conversion lives in the driver's views)")
     indent = 20 + 6 + 13 + 10
-    for cat in payload["categories"]:
-        ops = f"   operations: {', '.join(cat['operations'])}" if cat["operations"] else ""
-        print(f"\n# {cat['category']} ({cat['side']}/{cat['kind']}){ops}")
-        print(f"{'field':20s}{'unit':6s}{'kind':13s}{'portable':10s}"
+    for cat in payload["kinds"]:
+        roles = f"   roles: {', '.join(cat['roles'])}" if cat["roles"] else ""
+        print(f"\n# {cat['kind']} ({cat['family']}){roles}")
+        print(f"{'field':20s}{'unit':6s}{'role':13s}{'portable':10s}"
               f"vendor binding ({payload['backend']})")
         for f in cat["fields"]:
             b = f["binding"]

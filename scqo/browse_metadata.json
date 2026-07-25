@@ -20,7 +20,7 @@
           "sql": "SELECT run_id, started_at, experiment, qubits, outcome, error, path FROM runs WHERE outcome != 'successful' ORDER BY started_at DESC LIMIT 100"
         },
         "fit_trend": {
-          "title": "Fitted quantity vs time (qubit=q1, quantity=t2_star_s / readout_freq / pi_amp ...)",
+          "title": "Fitted quantity vs time (qubit=q1, quantity=t2_star_s / readout_freq_hz / pi_amp ...)",
           "sql": "SELECT started_at, run_id, experiment, json_extract(fit, '$.' || :qubit || '.' || :quantity) AS value FROM runs WHERE json_extract(fit, '$.' || :qubit || '.' || :quantity) IS NOT NULL ORDER BY started_at"
         }
       }

@@ -54,7 +54,7 @@ class Unrealized:
     The per-category successor of the bindings==pushed invariant: driver tests
     pin ``bindings(cat) | unrealized(cat) == pushed_fields(cat)``, and pushes of
     an unrealized field are skipped with the reason available to doctor and the
-    catalog view (e.g. idle_flux_v before any flux-tunable device exists)."""
+    catalog view (e.g. idle_flux before any flux-tunable device exists)."""
 
     category: str
     field: str

@@ -16,7 +16,7 @@ The word **"protocol" is retired**; use these names across all repos.
 - **model** — the physics that predicts the signal; used *forward* by a simulated probe and *inverse* by an estimator. SCQ.jl builds/simulates models; scqat fits them.
 - **Parameters / Result / Backend / Session** — input schema / extracted output / instrument adapter (QM, Qblox, Simulated) / the orchestrator entry point (`catalog()` / `run()` / `device_state()`).
 
-The scqo stack uses this vocabulary throughout — **scqat** (`estimators/`, `tools/`, `BaseEstimator`), **SCQO** (`Experiment`, `scqo.experiments`, `probe()`, `estimate()`), and **LCHQBDriver** (`probe()`-only experiments). scqat's estimator keeps its own orchestrator method `analyze()` (a different layer). LCHQMDriver still uses qualibrate's own `node` framework. (QBLOX_training documents Qblox's *own* `Experiment` ABC — a different class from this `Experiment`.)
+The scqo stack uses this vocabulary throughout — **scqat** (`estimators/`, `tools/`, `BaseEstimator`), **SCQO** (`Experiment`, `scqo.experiments`, `probe()`, `estimate()`), and the drivers **LCHQBDriver** + **LCHQMDriver** (`probe()`-only experiments). scqat's estimator keeps its own orchestrator method `analyze()` (a different layer). LCHQMDriver's qualibrate calibration nodes keep qualibrate's own `node` framework and never import scqo (its scqo surface lives in `customized/scqo/`). (QBLOX_training documents Qblox's *own* `Experiment` ABC — a different class from this `Experiment`.)
 
 ## The two source repos (reference implementations)
 
@@ -58,66 +58,127 @@ AI loop surface:
 `registry + Parameters schema (decide)` → backend adapter (run) → `structured Result (extract)` →
 device-state update + history → next decision.
 
-## Package layout (scaffolded)
+## Package layout
+
+The device model is the greenfield schema — `docs/greenfield-schema.md` is the spec
+(marked implemented). A device = MODES (quantum degrees of freedom), COMPOSITES (named
+mode groups with joint physics), LINES (physical control paths) and CHANNELS (one signal
+of one kind riding a line); a line's rider lists mint the channels. Field routing is
+per-field by ROLE: fact -> physical.json, knob -> scqo_state.json + pushed to the vendor,
+monitor -> scqo_state.json never pushed. Knobs live on CHANNELS (`q1_ro.readout_freq_hz`,
+`q1_xy.pi_amp`, `q1_xy.thermalization_time_s`, `q1_z.idle_flux`); facts live on modes and composites (`q1.f_01_hz`,
+`q1_res.f_r_hz`, `q1_q2.zz_hz`); composite per-operation knobs are full names
+(`iswap_coupler_flux`). As-designed targets live in the sibling `design.toml`.
 
 ```
 scqo/
   parameters.py   # Parameters base + TargetSelection / AveragingParameters mixins (decision surface)
   result.py       # Outcome enum + Result base (extraction surface)
-  categories.py   # the CATEGORY catalog: FieldSpec + CategorySpec per component category
-                  #   (FixedTransmon/FluxTunableTransmon/Resonator/ReadoutLine/XYControl/
-                  #   ZControl/Coupling physical; ReadableTransmon/TransmonPair instrument;
-                  #   pair roles high/low + optional coupler satellite) - the schema source
-  roster.py       # components.toml loader: per-device component roster (names, two
-                  #   category slots, members/topology, operations, DESIGN values)
-  device.py       # ComponentView + make_view_base(category) / DeviceModel ABCs
+  catalog.py      # the KIND catalogs: mode kinds (transmon/flux_transmon/fluxonium/
+                  #   cavity/resonator), composite kinds (qubit_pair, cat_system),
+                  #   channel kinds (drive/readout/flux/pump); FieldSpec {unit, doc,
+                  #   role fact|knob|monitor, portable, design_ok, shape, paired_with,
+                  #   design_source} + the frozen DERIVATION (channel kind x target
+                  #   kind) legality table - the schema source
+  entities.py     # the four frozen entity dataclasses over one base (mode/composite/
+                  #   line/channel) + signature() = the components.lock identity
+  roster.py       # components.toml (schema 3) loader: [modes]/[composites]/[lines]/
+                  #   [channels]; EXPANDS rider lists into minted channels
+                  #   (readout -> q1_ro + q1_res, drive -> q1_xy, flux -> q1_z) and
+                  #   compiles each entity's exact legal-field set
+  design.py       # design.toml loader: entity-named as-designed targets (the chip
+                  #   datasheet; bring-up sweep anchors), validated AFTER roster
+                  #   expansion; Design.compare = doctor's design-vs-measured join
+  stores.py       # the two per-context value stores, one shape
+                  #   {"schema": 3, "values": {entity: {field: ...}}}: physical.json
+                  #   (facts) + scqo_state.json (knobs + monitors); ROLE routes the write
+  _state_io.py    # shared state-file plumbing: the .lock file + the .history.jsonl
+                  #   sidecar (lock-guarded merge-on-save, torn-line tolerance)
+  device.py       # vendor views per CHANNEL KIND (make_view_base) + CompositeView
+                  #   (per-operation knobs via read_knob/write_knob) + RecordingDevice
+                  #   (every write -> ChangeRecord) + DeviceModel ABC
   fieldmap.py     # VendorBinding/VendorOnly shapes: the DRIVER-declared field catalog
                   #   (neutral field -> vendor path/unit/convert DESCRIPTION + the
                   #   backend-unique inventory) rendered by `scqo state --fields`
-  physical.py     # PHYSICAL_FIELDS + PhysicalStore: the SAMPLE's instrument-independent
-                  #   measured physics (T1/T2, arch/dispersive fits) -> the context's
-                  #   scqo/physical.json (+ physical.history.jsonl sidecar)
-  _state_io.py    # shared state-file plumbing: the .lock file + the .history.jsonl
-                  #   sidecar (read/write + pre-split embedded-history fallback)
   suggestions.py  # Suggestion + SuggestionCapture: update() writes become PENDING
-                  #   proposals on the run record; accept/reject decide them (v0.6);
-                  #   origin="operator" = human-attached via Session.suggest (v0.9)
+                  #   proposals on the run record, routed by ROLE at accept/reject;
+                  #   origin="operator" = human-attached via Session.suggest
+  provenance.py   # live-source provenance: which run each CURRENT value traces to
+                  #   (strict-match; a drifted value reports "external")
+  lock.py         # the production cut: freeze() writes components.lock, verify()
+                  #   enforces superset-by-signature (retire, never delete)
+  checks.py       # doctor witnesses over the model, renderer-free (unreachable modes,
+                  #   design coverage, lock drift, roster-vs-vendor inventory, wiring)
+  report.py       # report rows behind `scqo state` / `scqo device` - renderer-free,
+                  #   JSON-able (CLI prints, viewer + AI loop consume the same shapes)
+  contract.py     # DatasetContract per probing method: the explicit probe <-> estimator API
   backend.py      # Backend ABC: .device + .acquire(experiment) -> xarray.Dataset
-  experiment.py   # Experiment ABC: physics half (define_sweep/simulate/estimate/update) + backend half (probe)
-  registry.py     # @register / get / catalog  (AI's menu of measurements)
+  experiment.py   # Experiment ABC: physics half (define_sweep/simulate/estimate/update)
+                  #   + backend half (probe); kind-based gating (target_kinds) +
+                  #   validate_targets pre-probe hook; knobs via device.channel(t, kind)
+  _scqat.py       # the one scqat import point (lazy): per-target split + analyze() loop
   session.py      # Session: catalog() / run() / accept() / reject() / suggest() / set_values() /
-                  #   find_runs() / load_run() / device_state() / physical_state() / history()
+                  #   find_runs() / load_run() / tag_run() / device_state() / physical_state() /
+                  #   qubit_state() / history(); qubit-closure addressing (q1.pi_amp -> q1_xy)
   datastore.py    # DataStore + RunRecord: every run saved to a folder, indexed in SQLite (rebuildable)
   labconfig.py    # ~/.scqo/config.toml -> LabConfig + make_session (students never edit repos)
-  testing.py      # InMemoryDevice + SimulatedBackend (run with no instrument)
+  testing.py      # InMemoryDevice + SimulatedBackend + the demo device (REAL
+                  #   components.toml/design.toml text parsed by the real loaders)
+  browse.py       # `python -m scqo.browse` - datasette raw-SQL power tool over the index (8081)
+  viewer/         # `python -m scqo.viewer` - the daily read-only GUI (8080)
+  __main__.py     # `python -m scqo <data_root>` - rebuild the index from the run folders
   cli/            # the `scqo` command (run/find/accept/suggest/set/tag/state/user/
                   #   device/doctor): ONE engine, any-directory;
                   #   the device's SELECTED named setup picks the backend, resolved via
-                  #   the scqo.backends entry-point group; simulated is built in
-                  #   (_backends.ensure_demo_experiments fills the catalog driver-less)
-  experiments/
+                  #   the scqo.backends entry-point group; a factory is
+                  #   build_backend(cfg, setup, roster) - a driver serves a view PER
+                  #   CHANNEL ENTITY and resolves names through the roster, never by
+                  #   parsing them; simulated is built in
+  experiments/    # the registry lives in __init__.py: @register / get / catalog (the
+                  #   AI's menu; maturity core|contrib + DERIVED capability tags)
     _capabilities/  # one module per capability: the canonical Parameters mixin + contract
-                    #   fragment + sim/estimate helpers (state_readout.py, flux.py); catalog
+                    #   fragment + sim/estimate helpers (state_readout.py, flux.py,
+                    #   qubit_reset.py = reset_method + the thermal wait, resolved for
+                    #   both drivers by the ONE helper reset_wait_ns); catalog
                     #   `tags` are DERIVED from mixin subclassing — never declared strings,
                     #   zero tags legitimate (new experiments may be unclassifiable)
-    resonator_spectroscopy.py   # frequency sweep, Lorentzian dip -> updates readout_freq + f_r/kappa (physical store)
-    qubit_spectroscopy.py       # two-tone peak search -> coarse drive_freq (bring-up step 2)
-    qubit_ramsey.py             # time sweep, decaying-cosine fit -> updates drive_freq + T2*
-    qubit_power_rabi.py         # amplitude sweep, cosine fit -> updates pi_amp
-    qubit_relaxation.py         # pi + swept wait, exp-decay fit -> t1_s (physical store)
-    qubit_echo.py               # Hahn echo, exp-envelope fit -> t2_echo_s (physical store)
-    qubit_spectroscopy_flux_pulse.py  # 2D flux x detuning arch -> sweet spot / Ej_sum (physical store; Phase-3 feeder)
-    single_shot_readout.py      # per-shot IQ blobs (prepared_state x shot_idx) -> readout fidelity
-    resonator_spectroscopy_flux.py   # 2D resonator flux map -> sweet spot / dv_phi0 / f_r0 / g (physical store)
-    readout_power.py            # per-shot fidelity vs amp prefactor -> updates readout_amp
-    readout_frequency.py        # per-shot fidelity vs readout detuning -> updates readout_freq
+    _drive_power.py             # shared recorded set->revert drive_power_dbm boundary
+    _flux_component.py          # kind-agnostic foreign flux source mixin (record-only guard)
+    _sim.py                     # shared helpers for the offline simulators
+    resonator_spectroscopy.py   # frequency sweep, Lorentzian/circle fit -> readout_freq_hz
+                                #   (readout channel) + f_r_hz/kappa_tot_hz (resonator facts)
+    qubit_spectroscopy.py       # two-tone peak search -> coarse drive_freq_hz (drive channel)
+                                #   + f_01_hz (mode fact) (bring-up step 2)
+    qubit_ramsey.py             # time sweep, decaying-cosine fit -> drive_freq_hz (drive
+                                #   channel) + f_01_hz/t2_star_s (mode facts)
+    qubit_power_rabi.py         # amplitude sweep, cosine fit -> pi_amp (drive channel)
+    qubit_relaxation.py         # pi + swept wait, exp-decay fit -> t1_s (mode fact)
+    qubit_echo.py               # Hahn echo, exp-envelope fit -> t2_echo_s (mode fact)
+    qubit_spectroscopy_flux_pulse.py  # 2D flux x detuning arch -> ej_sum_hz/f_q_max_hz (mode
+                                #   facts) + flux_offset/flux_per_phi0 (flux-channel facts)
+    single_shot_readout.py      # per-shot IQ blobs (prepared_state x shot_idx) ->
+                                #   fidelity_g/fidelity_e monitors + pos_* blob centers on the
+                                #   readout channel; a discriminating driver also proposes
+                                #   readout_rotation_rad/readout_threshold/readout_rus_threshold
+    resonator_spectroscopy_flux.py   # 2D resonator flux map -> idle_flux + readout_freq_hz
+                                #   at the sweet spot; flux_offset/flux_per_phi0 (flux-channel
+                                #   facts) + f_r0_hz/g_hz (resonator facts)
+    readout_power.py            # per-shot fidelity vs amp prefactor -> readout_amp
+    readout_frequency.py        # per-shot fidelity vs readout detuning -> readout_freq_hz
     resonator_spectroscopy_power_amp.py  # FAST punchout: set-top -> one-program FPGA amplitude
-                                #   sweep down -> revert; absolute-dBm window -> readout_power_dbm + readout_freq
+                                #   sweep down -> revert; absolute-dBm window -> readout_power_dbm + readout_freq_hz
     resonator_spectroscopy_power_chain.py  # CAREFUL punchout: steps the output chain per point
-                                #   (amp ~0.5 for SNR; wide, cross-backend) -> readout_power_dbm + readout_freq
-    pair_zz_coupler.py          # residual ZZ vs coupler bias (echo fringe per bias) -> the pair's
-                                #   coupler_decouple_v (ZZ-off point) + zz_hz (Coupling physical fact)
-tests/test_end_to_end.py        # catalog -> run -> writeback, no hardware
+                                #   (amp ~0.5 for SNR; wide, cross-backend) -> readout_power_dbm + readout_freq_hz
+    qubit_pi_pulse_error.py     # pi-amplitude error amplification -> pi_amp (drive channel)
+    qubit_drag_equator.py       # 3-line symmetric DRAG calibration -> drag_beta (drive channel)
+    qubit_drag_alternating.py   # alternating-pulse DRAG calibration -> drag_beta (drive channel)
+    qubit_relaxation_flux.py    # T1 vs swept z bias - record-only diagnostic (per-flux fits in result.fit)
+    qubit_echo_flux.py          # T2_echo vs swept z bias - record-only diagnostic
+    qubit_sqrb.py               # single-qubit randomized benchmarking - record-only gate fidelities
+    qubit_tomography.py         # state tomography (custom contract) - record-only
+    pair_zz_coupler.py          # residual ZZ vs coupler bias (echo fringe per bias) -> idle_flux
+                                #   on the COUPLER's flux channel (ZZ-off point) + zz_hz (pair fact)
+tests/test_model_run.py         # catalog -> run -> suggest -> accept, no hardware
 tests/test_datastore.py         # run folders + index + tags + reindex, no hardware
 ```
 
@@ -127,7 +188,7 @@ parameters/result/record JSONs, device before/after snapshots, and the scqat art
 (metadata / plotdata / figure PNGs, per qubit) — under
 `<data_root>/<device>/<YYYY-MM-DD>/<run_id>/`. The **run folder is the truth**;
 `<data_root>/index.sqlite` is a disposable cache (`python -m scqo <data_root>`
-rebuilds it). Query with `Session.find_runs(experiment=, qubit=, tag=, since=, outcome=,...)`,
+rebuilds it). Query with `Session.find_runs(experiment=, target=, tag=, since=, outcome=,...)`,
 reload with `load_run(run_id)` / `datastore.open_dataset(run_id)`. Runs carry searchable
 **tags** (`run(..., tags=[...])`, config `default_tags`, retroactive `tag_run`). Change
 history records the `run_id` that caused each device update. State authority:
@@ -179,7 +240,7 @@ Parameters, Result, `estimate`, `simulate` and `update` are inherited unchanged.
    - [ ] `DatasetContract` declared; probe output validated against it on the real instrument.
    - [ ] `simulate()` implemented -> offline end-to-end test in `tests/`.
    - [ ] Estimator lives in scqat with metadata (+ figures) outputs.
-   - [ ] `update()` writes only neutral tracked fields (extend the field list first if needed).
+   - [ ] `update()` writes only catalogued fields (extend the kind catalog in `catalog.py` first if needed).
    - [ ] Ran repeatedly via contrib with findable data; results reviewed via `find_runs`.
    - [ ] `description` is catalog-quality (an AI reads it to decide).
    - [ ] Physics half moved to `scqo/experiments/`; driver `probe()` subclasses registered
@@ -192,11 +253,13 @@ or per-command shims.
 ### The placement rule (digest — full text: TUTORIAL §10; bench: `scqo state --rule`)
 Classify each USE of a quantity, in order, first match wins:
 (1) gone when the run ends → per-run Parameters; (2) true of the chip in the dark
-(no instrument SETTING realizes it; setup coordinates OK if declared) → PHYSICAL_FIELDS;
-(3) measured but a vendor knob realizes it (TOF) → write the vendor knob, catalog unit;
-(4) a knob the loop reads/writes vendor-neutrally → neutral FIELDS (absolute at a declared
-plane = portable; chain-fraction = non-portable, twin or catalogued scale);
-(5) measured, no knob → gate scalar = FIELDS push=False, else run-record-only;
+(no instrument SETTING realizes it; setup coordinates OK if declared) → role `fact`
+→ physical.json; (3) measured but a vendor knob realizes it (TOF) → write the vendor
+knob, catalog unit; (4) a knob the loop reads/writes vendor-neutrally → role `knob`
+on its channel/composite → scqo_state.json + pushed (absolute at a declared plane =
+portable; chain-fraction = non-portable, twin or catalogued scale);
+(5) measured, no knob → performance of the current knobs = role `monitor`
+(scqo_state.json, never pushed), else run-record-only;
 (6) rest = vendor config, catalogued with kind realizer/candidate/vendor/unique —
 unique locks experiments to that instrument.
 
@@ -206,4 +269,4 @@ unique locks experiments to that instrument.
 - `D:\github\QBLOX_training` — read-only Qblox reference docs (`docs/applications/superconducting/single_qubit_experiment_helpers/experiment.py`, `cal*.py`, `custom_elements.py`).
 
 ## Status
-Current published release: **v0.9.0** — see `RELEASES.toml` for the combo manifest and required upgrade actions. Release history lives in git tags + `RELEASES.toml`, not here.
+Current published release: **v0.13.1** — see `RELEASES.toml` for the combo manifest and required upgrade actions. Release history lives in git tags + `RELEASES.toml`, not here.

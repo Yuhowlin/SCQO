@@ -13,7 +13,7 @@ channels and composites, so a driver implements
   generic ``read_knob``/``write_knob`` pair instead of properties.
 
 :class:`RecordingDevice` wraps a backend's :class:`DeviceModel` with the
-schema-3 state store (:mod:`scqo.model.stores`):
+schema-3 state store (:mod:`scqo.stores`):
 
 * WRITES push to the vendor FIRST (an instrument rejection must leave no
   false history), then record into the store, then reconcile the entity's

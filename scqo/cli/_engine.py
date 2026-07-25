@@ -80,7 +80,7 @@ def run_experiment_cli(
         parser.add_argument("experiment", nargs="?", help="experiment name; omit to list the catalog")
     parser.add_argument("--params", help="parameters as a JSON file path or an inline JSON string")
     parser.add_argument("--targets", nargs="+",
-                        help="components to measure (default: every ReadableTransmon in the roster)")
+                        help="components to measure (default: every qubit-like mode in the roster)")
     parser.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
                         help="override one parameter (repeatable), e.g. --set num_points=201")
     parser.add_argument("--tag", action="append", default=[], dest="tags",

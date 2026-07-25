@@ -6,8 +6,8 @@ facing goes to **stderr** — stdout stays parseable result JSON (``| jq`` safe)
 
 Selection grammar (``parse_selection``): ``a``/``all`` — every pending item;
 ``n``/``none``/empty — nothing (the default: no update); otherwise a comma/space
-list mixing displayed row numbers (1-based), component names (``q0``, ``q0_res``),
-field names (``readout_freq``) and ``component.field`` pairs. Pure functions here are unit-tested
+list mixing displayed row numbers (1-based), entity names (``q0_ro``, ``q0_res``),
+field names (``readout_freq_hz``) and ``entity.field`` pairs. Pure functions here are unit-tested
 without a TTY.
 """
 
@@ -156,7 +156,7 @@ def review_interactively(
         return None
     while True:
         answer = _ask(
-            "apply which updates? [a]ll / [n]one (default) / rows, component, field or component.field: "
+            "apply which updates? [a]ll / [n]one (default) / rows, entity, field or entity.field: "
         )
         try:
             # Decided rows are selectable here: the confirmation below replaces

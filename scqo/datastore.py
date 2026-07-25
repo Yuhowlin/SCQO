@@ -399,7 +399,7 @@ class DataStore:
     def fit_trend(self, qubit: str, quantity: str, limit: int = 500, device: str | None = None) -> list[dict]:
         """One fitted quantity vs time for one qubit (oldest first) — drift at a glance.
 
-        ``quantity`` is a fit key (t1_s, t2_star_s, readout_freq, pi_amp, ...). The
+        ``quantity`` is a fit key (t1_s, t2_star_s, readout_freq_hz, pi_amp, ...). The
         JSON path is passed as a bound parameter, so arbitrary names are safe.
         ``device`` narrows to one sample — qubit names repeat across samples ("q1"
         exists on every chip), so multi-device data roots should always pass it.

@@ -3,10 +3,10 @@
     scqo accept                                  # list runs with pending suggestions
     scqo accept RUN_ID --list                    # show the suggestion table, decide nothing
     scqo accept RUN_ID                           # terminal: pick interactively; script: apply ALL pending
-    scqo accept RUN_ID --entity q0 --field readout_freq --comment "looks right"
+    scqo accept RUN_ID --entity q0 --field readout_freq_hz --comment "looks right"
     scqo accept RUN_ID --reject --comment "fit chased a noise spike"
     scqo accept RUN_ID --force                   # bypass the cooldown-era + staleness guards
-    scqo accept RUN_ID --reapply --field readout_freq --comment "rolling back to this run"
+    scqo accept RUN_ID --reapply --field readout_freq_hz --comment "rolling back to this run"
                                                  # re-decide ALREADY accepted/rejected items:
                                                  # deliberately overwrites the newer value
 
@@ -28,7 +28,7 @@ before/current diff. In scripts (non-TTY) nobody can answer, so the flags decide
 run.
 
 Nothing to decide? If the estimator failed but the run's figure shows the value,
-``scqo suggest RUN_ID q0.readout_freq=5.912e9`` attaches YOUR value to the run as
+``scqo suggest RUN_ID q0.readout_freq_hz=5.912e9`` attaches YOUR value to the run as
 a pending suggestion — decided right here, with the same guards.
 """
 
@@ -62,7 +62,7 @@ def _no_suggestions_hint(run_id: str, targets: list[str]) -> str:
         f"{run_id}: no suggested updates recorded - the estimator proposed none.\n"
         f"If the run's figure shows the value, attach it yourself:\n"
         f"  scqo suggest {run_id} {name}.FIELD=VALUE   "
-        f"(e.g. {name}.readout_freq=5.912e9)"
+        f"(e.g. {name}.readout_freq_hz=5.912e9)"
     )
 
 
@@ -78,7 +78,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
     parser.add_argument("--entity", action="append", default=None,
                         help="restrict to one component (repeatable)")
     parser.add_argument("--field", action="append", default=None,
-                        help="restrict to one field (repeatable), e.g. readout_freq")
+                        help="restrict to one field (repeatable), e.g. readout_freq_hz")
     parser.add_argument("--comment", default="", help="decision comment stored with each item")
     parser.add_argument("--force", action="store_true",
                         help="apply despite a cooldown-era mismatch or stale before-values "

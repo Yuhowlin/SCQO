@@ -49,8 +49,8 @@ you (script / notebook / later: GUI or AI agent)
 ## 2. Your first measurement
 
 Every command below is the **`scqo` command** — it works from ANY directory once the
-right venv is active (the old `python scripts\...` wrapper forms were retired in
-v0.7.0; the `scqo` command is the one CLI).
+right venv is active (the `scqo` command is the one CLI; there are no
+`python scripts\...` wrapper forms).
 
 First, know where your runs will land — `scqo user` answers before any instrument
 time is spent (no arguments = pure diagnosis, it changes nothing):
@@ -69,20 +69,32 @@ scqo run                                         # no arguments = show the menu
 ```
 
 ```
-qubit_echo                    Hahn echo ... records t2_echo_s (record-only).
-qubit_power_rabi              Sweep drive amplitude ... recalibrate pi_amp.
-qubit_ramsey                  Two pi/2 pulses ... correct drive_freq and report T2*.
-qubit_relaxation              Pi pulse + swept wait ... records t1_s (record-only).
-qubit_spectroscopy            Sweep a weak saturation drive ... recalibrates drive_freq.
-qubit_spectroscopy_flux_pulse       2D flux map ... proposes sweet spot / Ej_sum (physical parameters).
-readout_frequency             Per-shot fidelity vs freq ... updates readout_freq.
-readout_power                 Per-shot fidelity vs amp ... updates readout_amp.
-resonator_spectroscopy        Sweep readout frequency ... updates readout_freq; proposes f_r_hz + kappa_tot_hz (on the resonator component).
-resonator_spectroscopy_flux   2D resonator flux map ... proposes sweet spot / g (physical parameters).
-resonator_spectroscopy_power_amp    Fast punchout (FPGA amplitude sweep) ... proposes readout_power_dbm + readout_freq.
-resonator_spectroscopy_power_chain  Careful punchout (steps the output chain per point) ... proposes readout_power_dbm + readout_freq.
-single_shot_readout           IQ blobs ... records readout fidelity (record-only).
+pair_zz_coupler                  Residual ZZ vs coupler standing bias ... proposes the coupler z channel's idle_flux (ZZ-off point) + the pair's zz_hz fact.
+qubit_drag_alternating           Sweep DRAG beta over alternating x180/-x180 trains ... calibrates drag_beta.
+qubit_drag_equator               Sweep DRAG beta over three equator sequences ... calibrates drag_beta.
+qubit_echo [state_readout]       Hahn echo ... proposes t2_echo_s (a sample fact).
+qubit_echo_flux [state_readout,flux]      T2-echo vs flux map (record-only spectrum).
+qubit_pi_pulse_error             Repeated-X180 error amplification ... refines pi_amp.
+qubit_power_rabi [state_readout] Sweep drive amplitude ... recalibrates pi_amp.
+qubit_ramsey [state_readout]     Two pi/2 pulses ... corrects drive_freq_hz and reports T2*.
+qubit_relaxation [state_readout] Pi pulse + swept wait ... proposes t1_s (a sample fact).
+qubit_relaxation_flux [state_readout,flux] T1 vs flux map (record-only spectrum).
+qubit_spectroscopy               Sweep a weak saturation drive ... recalibrates drive_freq_hz.
+qubit_spectroscopy_flux_pulse [flux]      2D flux arch ... proposes flux_offset/flux_per_phi0 (z channel) + ej_sum_hz/f_q_max_hz (mode facts).
+qubit_sqrb [state_readout]       Randomized benchmarking ... average gate fidelity.
+qubit_tomography                 State tomography ... populations + gate error trajectory.
+readout_frequency                Per-shot fidelity vs freq ... updates readout_freq_hz.
+readout_power                    Per-shot fidelity vs amp ... updates readout_amp.
+resonator_spectroscopy           Sweep readout frequency ... updates readout_freq_hz; proposes f_r_hz + kappa_tot_hz on the resonator mode.
+resonator_spectroscopy_flux [flux]        2D resonator flux map ... proposes flux_offset/flux_per_phi0 and parks the operating point at the sweet spot.
+resonator_spectroscopy_power_amp Fast punchout (FPGA amplitude sweep) ... proposes readout_power_dbm + readout_freq_hz.
+resonator_spectroscopy_power_chain        Careful punchout (steps the output chain per point) ... proposes readout_power_dbm + readout_freq_hz.
+single_shot_readout              IQ blobs ... stores fidelity_g/fidelity_e (monitors) + proposes the discriminator knobs.
 ```
+
+(The `[state_readout]`/`[flux]` markers are capability tags, derived from each
+experiment's parameters — the menu prints them so you can see at a glance which
+experiments take `use_state_discrimination` or sweep a flux window.)
 
 Start with **resonator spectroscopy** — always the first measurement on a device: you
 have to find the readout resonance before any qubit experiment means anything. Tag it
@@ -97,47 +109,41 @@ You get the structured result as JSON — extracted physics, not raw traces:
 ```json
 {
   "outcomes": { "q1": "successful" },
-  "fit": { "q1": { "readout_freq": 5907471431.6,       // dip position (suggested update)
-                    "dip_detuning_hz": -1795822.3,      // how far the dip sat from the old value
-                    "old_readout_freq": 5909267253.9,
-                    "f_r_hz": 5907471431.6,             // the dip IS the dressed resonator freq
-                    "kappa_tot_hz": 1327410.5 } },      // fitted FWHM = total resonator linewidth
+  "fit": { "q1": { "readout_freq_hz": 5907471431.6,     // dip position (suggested update)
+                    "dip_detuning_hz": -1795822.3,       // how far the dip sat from the old value
+                    "old_readout_freq_hz": 5909267253.9,
+                    "f_r_hz": 5907471431.6,              // the dip IS the dressed resonator freq
+                    "kappa_tot_hz": 1327410.5 } },       // fitted FWHM = total resonator linewidth
   "error": null,
   "run_id": "20260704-225450-SQ_demo-resonator_spectroscopy-01",
   "data_path": "D:\\qpu_data\\SQ_demo\\2026-07-04\\...-01",
-  "suggestions": [ { "component": "q1", "field": "readout_freq", "store": "instrument",
+  "suggestions": [ { "entity": "q1_ro", "field": "readout_freq_hz", "role": "knob",
                      "before": 5909267253.9, "after": 5907471431.6, "status": "pending" },
-                   { "component": "q1_res", "field": "f_r_hz", "store": "physical", "..." : "..." },
-                   { "component": "q1_res", "field": "kappa_tot_hz", "store": "physical", "..." : "..." } ]
+                   { "entity": "q1_res", "field": "f_r_hz", "role": "fact", "..." : "..." },
+                   { "entity": "q1_res", "field": "kappa_tot_hz", "role": "fact", "..." : "..." } ]
 }
 ```
 
-> **Coming from v0.6.0?** Setups are NAMED now, and the commands regrouped. (1) A
-> cycle's setups are `[<cycle>.setup.<name>]` sub-tables in the registry; a run
-> refuses when the ACTIVE cycle has no setups yet, or has several and none is
-> selected — `scqo user --setup <name>` picks yours (personal, validated; a
-> single-setup cycle auto-selects). (2) The calibration view `scqo device` is now
-> `scqo state` (same flags); `scqo devices` → `scqo device list`, `scqo cooldown` →
-> `scqo device cooldown`, `scqo sample new` → `scqo device add` — no aliases.
-> (3) Every run stamps (cooldown, setup name) — filter with `scqo find --setup`.
-> Details in INSTALL §2's v0.7.0 note.
+Notice the two kinds of proposal: the *setting* lands on the readout CHANNEL
+(`q1_ro`, role `knob`), the *measurement* on the resonator MODE (`q1_res`, role
+`fact`) — section 9 explains the entities, section 10 the roles.
 
-**Nothing is applied automatically.** The fitted `readout_freq` is a *suggested
+**Nothing is applied automatically.** The fitted `readout_freq_hz` is a *suggested
 update*: after the JSON, `scqo run` shows the suggestion table and asks you —
 
 ```
 suggested updates (3 pending):
-    #  component  field              store           current ->      suggested   status
-    1  q1         readout_freq       instrument   5.90927e+09 ->   5.90747e+09 Hz   pending
-    2  q1_res     f_r_hz             physical     (unmeasured) ->   5.90747e+09 Hz   pending
-    3  q1_res     kappa_tot_hz       physical     (unmeasured) ->   1.32741e+06 Hz   pending
+    # entity     field              role              current         suggested   status
+    1 q1_ro      readout_freq_hz    knob          5.90927e+09 ->    5.90747e+09 Hz   pending
+    2 q1_res     f_r_hz             fact         (unmeasured) ->    5.90747e+09 Hz   pending
+    3 q1_res     kappa_tot_hz       fact         (unmeasured) ->    1.32741e+06 Hz   pending
 apply which updates? [a]ll / [n]one (default) / rows, component, field or component.field:
 ```
 
 Press Enter to apply **nothing** (the default) — the device state is then unchanged
 and the next experiment still runs on the OLD calibration; `a` applies everything,
-or pick a subset (`1 3`, `q1`, `readout_freq`, `q1_res.kappa_tot_hz`) — partial
-acceptance is normal. Every applied value lands in the change history linked to
+or pick a subset (`1 3`, `q1_res`, `readout_freq_hz`, `q1_res.kappa_tot_hz`) —
+partial acceptance is normal. Every applied value lands in the change history linked to
 this run. In a script or a pipe there is no prompt: the run is saved with its
 suggestions **pending**, and you decide later — by run id, even days later:
 
@@ -146,7 +152,7 @@ scqo find --pending                          # runs with undecided suggestions
 scqo accept                                  # the same list, decision-oriented
 scqo accept <run_id> --list                  # look at the table again
 scqo accept <run_id>                         # terminal: interactive picker
-scqo accept <run_id> --field readout_freq --comment "matches the punchout map"
+scqo accept <run_id> --field readout_freq_hz --comment "matches the punchout map"
 scqo accept <run_id> --reject --comment "fit chased a noise spike"
 ```
 
@@ -166,7 +172,7 @@ the era and stale questions.
 *"accept it after all?"*). In a script, pass the answer as a flag:
 
 ```bash
-scqo accept <old_run_id> --reapply --field readout_freq --comment "rolling back - the newer fit chased a spike"
+scqo accept <old_run_id> --reapply --field readout_freq_hz --comment "rolling back - the newer fit chased a spike"
 ```
 
 A rollback deliberately overwrites the current value, so re-applied rows get no
@@ -180,9 +186,12 @@ plainly visible, the fit chased a noise spike past it. Don't write the number in
 the device by hand (that loses the link to the data); attach it to the run instead:
 
 ```bash
-scqo suggest <run_id> q0.readout_freq=5.912e9 --comment "read off the dip, fit missed it"
-scqo suggest <run_id> q0.f_r_hz=5.912e9 q0.kappa_hz=1.1e6    # several at once; either store
+scqo suggest <run_id> q1.readout_freq_hz=5.912e9 --comment "read off the dip, fit missed it"
+scqo suggest <run_id> q1_res.f_r_hz=5.912e9 q1_res.kappa_tot_hz=1.1e6   # several at once; either store
 ```
+
+(Assignments are `entity.field`; the qubit name works as sugar —
+`q1.readout_freq_hz` routes to `q1_ro`, `q1.f_r_hz` to `q1_res` — see section 9.)
 
 Your value lands on that run as a pending suggestion marked `[operator: <you>]`
 (the viewer shows the same badge), and from there everything above applies
@@ -195,31 +204,35 @@ show up as `(externally changed)` — the honest label for an untraceable write.
 Once the readout is in place, the qubit experiments follow the same pattern:
 
 ```bash
-scqo run qubit_ramsey --targets q1 --set num_points=201            # drive_freq + T2*
+scqo run qubit_ramsey --targets q1 --set num_points=201            # drive_freq_hz + T2*
 scqo run qubit_power_rabi --accept                                # apply updates immediately
 scqo run resonator_spectroscopy --no-update ...                   # analyze only, nothing suggested
 scqo run qubit_ramsey --params my.json                            # parameters from a file
 ```
 
 One more distinction worth knowing: **instrument settings vs sample physics** —
-the suggestion table's `store` column says which side each value belongs to. Both
+the suggestion table's `role` column says which side each value belongs to. Both
 land in YOUR context's `<device>/<cooldown>/<setup>/scqo/` folder, so two users on
 two setups of one sample never see (or overwrite) each other's numbers.
-Calibration knobs (`readout_freq`, `pi_amp`, ...; `store: instrument`) are pushed
-to the instrument on accept and recorded in `scqo_state.json`. Measured physics —
-T1, T2*, T2echo, and the flux maps' sweet spot / Ej_sum / f_r0 / g
-(`store: physical`) — lands in `physical.json` beside it (same accept flow). Each
+Calibration knobs (`readout_freq_hz`, `pi_amp`, ... — they live on the CHANNEL
+entities `q1_ro`/`q1_xy`/`q1_z`; `role: knob`) are pushed to the instrument on
+accept and recorded in `scqo_state.json`. Measured physics — facts (`role: fact`):
+T1, T2*, T2echo on the qubit mode, the flux maps' `flux_offset`/`flux_per_phi0`
+on the z channel, `ej_sum_hz`/`f_r0_hz`/`g_hz` — lands in `physical.json` beside
+it (same accept flow). A third role, `monitor` (`fidelity_g`/`fidelity_e`, the
+blob positions), records measured performance OF the current knobs: stored in
+`scqo_state.json` but never pushed anywhere. Each
 values file keeps its full change history in an append-only sidecar
 (`scqo_state.history.jsonl` / `physical.history.jsonl`) — never edit any of them
 by hand: a hand-edit skips the instrument push and shows as `(externally
 changed)`; use `scqo suggest` instead. An estimate is only as clean as the chain it came through (a noisy drive
-line shortens the measured T2; flux volts depend on the wiring), so each context's
+line shortens the measured T2; the flux transfer function depends on the wiring), so each context's
 physics stands on its own — compare across contexts via `scqo find` / the trends
 page, never average. The setup-independent "true" sample physics is a future
 *inference* over these measurements (`sample.json`, Phase 3).
 
 ```bash
-scqo state --physical               # this context's measured physics (one row per qubit/field)
+scqo state --physical               # this context's measured physics (one row per entity/field)
 scqo state --physical --history     # who accepted what, when, from which run
 scqo state --sources                # which run set each CURRENT value (both stores)
 ```
@@ -228,7 +241,7 @@ scqo state --sources                # which run set each CURRENT value (both sto
 matter more than the pending ones. Every current value names the run that set it,
 **strictly**: a value the vendor reseeded or another tool wrote shows
 `(externally changed)` and credits no run; direct manual writes — `scqo set
-q1.readout_freq=5.912e9` or a notebook assignment — show `(manual)` with the
+q1.readout_freq_hz=5.912e9` or a notebook assignment — show `(manual)` with the
 operator's login. `scqo set` is for values you know from EXPERIENCE (no run to
 credit): it previews current -> new with units, asks once, then writes through
 the normal recorded path immediately (`--yes` in scripts).
@@ -266,26 +279,26 @@ scqo run qubit_spectroscopy     --targets q0 q1 --tag cooldown1
 scqo run qubit_power_rabi       --targets q0 q1 --tag cooldown1
 ```
 
-(The old `scqo calibrate` sequence command was removed in v0.8 — not used at this
-phase; a sequence runner returns with the AI loop, where it belongs.)
+(There is deliberately no sequence command at this phase; a sequence runner
+belongs to the AI loop and arrives with it.)
 
 And the device's calibration state / change log any time (the first output line
-names the device, YOUR resolved setup and its state file — state is per setup
-since v0.9.0, so that line says whose numbers follow):
+names the device, YOUR resolved setup and its state file — state is per setup,
+so that line says whose numbers follow):
 
 ```bash
-scqo state                      # current values per qubit (your setup)
+scqo state                      # current values, one table per entity kind (your setup)
 scqo state --history 20         # who changed what, when, in which run
 ```
 
-### Readout power — two modes (v0.8)
+### Readout power — two modes
 
 Behind the readout drive are TWO knobs, and two punchout experiments named for
 the knob each one sweeps. They take **identical parameters** (an absolute-dBm
 window: `min_power_dbm`/`max_power_dbm`, default −50…−20), report the same
 absolute axis, and propose the same fields (`readout_power_dbm` +
-`readout_freq`) — they differ only in mechanism, and each figure prints its mode
-in the title so you can never confuse the two.
+`readout_freq_hz`) — they differ only in mechanism, and each figure prints its
+mode in the title so you can never confuse the two.
 
 The knobs:
 
@@ -343,14 +356,17 @@ in record.json), so past axes stay interpretable even after the chain changes.
 scqo find                                   # latest runs, newest first
 scqo find --cooldown cd8                    # everything from this cooldown cycle
 scqo find --cooldown cd8 --setup qblox_main # ...narrowed to one of its measurement setups
-scqo find --experiment resonator_spectroscopy --component q1 --since 2026-07-01
+scqo find --experiment resonator_spectroscopy --target q1 --since 2026-07-01
 scqo find --outcome failed                  # what went wrong lately?
 scqo find --show 20260704-225450-SQ_demo-resonator_spectroscopy-01   # one run, in full
 ```
 
 ```
-20260704-225450-SQ_demo-resonator_spectroscopy-01   successful  q1   cooldown1,mytest  SQ_demo/2026-07-04/20260704-225450-SQ_demo-resonator_spectroscopy-01
+20260704-225450-SQ_demo-resonator_spectroscopy-01    successful q1           tim        cooldown1,mytest     pend:3   SQ_demo/2026-07-04/20260704-225450-SQ_demo-resonator_spectroscopy-01
 ```
+
+(One row per run: id, outcome, targets, operator login, tags, a `pend:N` marker
+when suggested updates are still undecided, and the folder path.)
 
 - Dates in filters are **local lab time** and match the folder names; a bare date in
   `--until` includes that whole day.
@@ -370,7 +386,7 @@ scqo find --show 20260704-225450-SQ_demo-resonator_spectroscopy-01   # one run, 
 ```
 <data_root>/SQ_demo/2026-07-04/20260704-225450-SQ_demo-resonator_spectroscopy-01/
     record.json          run manifest (its absence = run was incomplete/crashed)
-    dataset.nc           the raw I/Q dataset (xarray/netCDF, dims: qubit × detuning_hz)
+    dataset.nc           the raw I/Q dataset (xarray/netCDF, dims: target × detuning_hz)
     parameters.json      exactly what you asked for
     result.json          outcomes + fitted quantities + error (if any)
     device_before.json   calibration state before ...
@@ -415,8 +431,8 @@ all can run at once):
   linking the run that superseded it), and the device before → after diff. You can
   **add/remove tags and edit the note right here** — the viewer's only write,
   equivalent to `scqo tag`.
-- **Trends** — a fitted quantity vs time per qubit (`t1_s`, `t2_star_s`, `ej_sum_ghz`,
-  `readout_freq`, `pi_amp`, ...): coherence drift at a glance, every point linking
+- **Trends** — a fitted quantity vs time per qubit (`t1_s`, `t2_star_s`, `ej_sum_hz`,
+  `readout_freq_hz`, `pi_amp`, ...): coherence drift at a glance, every point linking
   to its run.
 - **Device** — the current calibration and the sample's **physical parameters**
   (`physical.json`): every value links to the run that set it (`(manual)` and
@@ -521,17 +537,17 @@ from scqo import DataStore, load_lab_config
 cfg = load_lab_config()
 store = DataStore(cfg.data_root, device_name=cfg.device)
 
-store.find_runs(experiment="resonator_spectroscopy", qubit="q1", tag="cooldown1")
+store.find_runs(experiment="resonator_spectroscopy", target="q1", tag="cooldown1")
 run = store.load_run("20260704-225450-SQ_demo-resonator_spectroscopy-01")  # record + params + figures
 ds = store.open_dataset("20260704-225450-SQ_demo-resonator_spectroscopy-01")
-ds["I"].sel(qubit="q1").plot()
+ds["I"].sel(target="q1").plot()
 store.tag_run("20260704-225450-SQ_demo-resonator_spectroscopy-01", add=["thesis-fig3"])
 ```
 
 **Running measurements** from a notebook is the same Session the commands use —
 let `build_session` do the wiring (it resolves your device → ACTIVE cycle → YOUR
-setup, exactly like `scqo run`, and binds the per-setup state file). A one-off
-known value needs no notebook: `scqo set q1.readout_freq=5.912e9` is the same
+setup, exactly like `scqo run`, and binds the per-setup state files). A one-off
+known value needs no notebook: `scqo set q1.readout_freq_hz=5.912e9` is the same
 recorded write (`sess.set_values(...)` from code), with a confirmation prompt.
 
 ```python
@@ -541,21 +557,22 @@ sess, cfg = build_session()          # your config.toml + user.toml decide every
 ```
 
 (Hand-building instead — a custom backend object — still works, but a persisted
-session needs its context: `make_session(backend, cfg, backend_label=...,
-setup_name=..., cooldown_id=...)`, or pass `state_path` to `Session` directly for a
-free-form scratch file.)
+session needs its context: `make_session(backend, cfg, roster, backend_label=...,
+setup_name=..., cooldown_id=...)`, or pass `scqo_dir` to `Session` directly for a
+free-form scratch folder.)
 
 ```python
-result = sess.run("resonator_spectroscopy", {"qubits": ["q1"]})
+result = sess.run("resonator_spectroscopy", {"targets": ["q1"]})
 result["suggestions"]                                    # the proposed updates (pending)
-sess.accept(result["run_id"], fields=["readout_freq"], comment="looks right")
+sess.accept(result["run_id"], fields=["readout_freq_hz"], comment="looks right")
 sess.reject(result["run_id"], comment="noise spike")     # decline the rest (no instrument)
 sess.run("qubit_ramsey", {...}, update="apply")          # unattended / AI loop: apply now
-sess.find_runs(experiment="resonator_spectroscopy", qubit="q1")  # list of dicts, newest first
+sess.find_runs(experiment="resonator_spectroscopy", target="q1")  # list of dicts, newest first
 sess.find_runs(pending=True)                             # undecided suggestions
 sess.load_run(result["run_id"])                          # record + params + figure paths
 
-sess.device_state()             # current calibration of every qubit (this context)
+sess.device_state()             # the operating state per entity (this context)
+sess.qubit_state("q1")          # one qubit's ASSEMBLED view: mode + its channels + resonator
 sess.physical_state()           # this context's measured physics
 sess.history()                  # every calibration change: who, what, old → new, which run
 sess.history(store="physical")  # same, for the physical-parameter ledger
@@ -582,108 +599,153 @@ with the error noted on it, so you can decide again once the cause is fixed.
    in the same datastore, so your evidence is findable.
 3. **The manager** owns the shared registries — cooldown cycles
    (`scqo device cooldown start`/`end`), the hand-added `[<cycle>.setup.<name>]`
-   blocks in each device's `cooldowns.toml`, and `devices.toml` — and promotes
+   blocks in each device's `cooldowns.toml`, each device's `components.toml`
+   roster + `design.toml` datasheet (section 9), and `devices.toml` — and promotes
    proven experiments into `scqo/experiments/` + the driver repos (checklist in
    [CLAUDE.md](CLAUDE.md)). A setup block is just `backend` (+ `note`) — folder
    locations are DERIVED from the keys: put each real setup's vendor files in
    `<cooldown>/<setup>/backend_config/`; SCQO keeps its own state + physics in
    the sibling `<cooldown>/<setup>/scqo/`, auto-created on first save.
 
-## 9. Components and the roster
+## 9. The device model — modes, lines, channels
 
-A device is a set of named COMPONENTS, declared once per device in
-`<data_root>/<device>/components.toml` (sibling of `cooldowns.toml` — a SAMPLE
-fact, one copy above all cooldowns and setups). Each name binds up to two
-CATEGORIES — a physical one ("what it is": fields land in physical.json) and an
-instrument one ("how we drive it": fields land in scqo_state.json):
+A device is declared once per sample in `<data_root>/<device>/components.toml`
+(sibling of `cooldowns.toml` — a SAMPLE fact, one copy above all cooldowns and
+setups). The file is the TOPOLOGY: which quantum degrees of freedom the chip
+has, and which physical wires reach them. Four sections; every entry says
+`kind = "<token>"`:
+
+- `[modes.*]` — quantum degrees of freedom (kinds `transmon`, `flux_transmon`,
+  `fluxonium`, `cavity`, `resonator`). Qubits AND tunable couplers are modes;
+  "coupler" is a role in a composite, not a kind.
+- `[composites.*]` — named mode groups with JOINT calibrated physics
+  (`qubit_pair`, `cat_system`).
+- `[lines.*]` — one table per physical control path reaching the sample; its
+  RIDER LISTS mint the channels.
+- `[channels.*]` — the explicit escape hatch for irregular paths (e.g. reading
+  a coupler through a neighbor's resonator, or a pump tone).
+
+```toml
+schema = 3
+
+[modes.q1]
+kind = "flux_transmon"
+[modes.q2]
+kind = "flux_transmon"
+
+[lines.fl1]
+readout = ["q1", "q2"]     # ONE feedline, two riders -> channels q1_ro + q2_ro
+                           # (+ minted resonator modes q1_res + q2_res): two
+                           # readout_freq_hz on one wire IS frequency-
+                           # multiplexed readout
+[lines.xy1]
+drive = ["q1"]             # -> channel q1_xy
+[lines.xy2]
+drive = ["q2"]
+[lines.z1]
+flux = ["q1"]              # -> channel q1_z (a flux rider naming a fixed
+[lines.z2]                 # `transmon` would be a LOAD ERROR — capability
+flux = ["q2"]              # by construction, not a pruned field)
+```
+
+You never declare `q1_res`, `q1_ro`, `q1_xy` or `q1_z` — the riders MINT them
+(`readout` → `<t>_ro` plus the `<t>_res` resonator mode, `drive` → `<t>_xy`,
+`flux` → `<t>_z`), and single-mode operations (`rx`, `readout`, `flux_bias`)
+are DERIVED from the wiring, never declared. Every value then lives on the
+entity that owns it: knobs on CHANNELS (`q1_ro.readout_freq_hz`, `q1_xy.pi_amp`,
+`q1_z.idle_flux`), facts on MODES (`q1.t1_s`, `q1.f_01_hz`, `q1_res.f_r_hz`),
+monitors on channels too (`q1_ro.fidelity_g`).
+
+Addressing is `entity.field` — `scqo set q1_z.idle_flux=0.12`,
+`scqo set q1_res.kappa_tot_hz=...` — with QUBIT sugar: `q1.pi_amp` routes to
+`q1_xy`, `q1.readout_freq_hz` to `q1_ro`, `q1.f_r_hz` to `q1_res` (first hit
+in the qubit's closure). A wrong home answers with the right one
+("`q1_ro.pi_amp`: no entity in `q1_ro`'s closure carries this field — did you
+mean `q1_xy.pi_amp`?"). One fit may legally write a knob AND a fact: resonator
+spectroscopy proposes `q1_ro.readout_freq_hz` (the setting) and `q1_res.f_r_hz`
+(the measurement) from the same dip.
+
+**Design targets** live in the sibling `design.toml` (the DATASHEET), never in
+the roster — entity-named tables of as-designed, context-free values:
 
 ```toml
 schema = 1
-[components.q1]
-physical   = "FixedTransmon"       # t1_s, t2_star_s, f_01_hz, ...
-instrument = "ReadableTransmon"    # readout_freq, drive_freq, pi_amp, ...
-operations = ["rx", "readout"]     # what experiments may require of it
-
-[components.q1.design]             # DESIGN targets from the chip layout:
-f_01_hz = 4.73e9                   # declared (not measured), physical-side
-                                   # vocabulary, SI units. Bring-up sweeps
-                                   # anchor on these when nothing is measured
-                                   # yet (runs get tagged "seeded:...").
-[components.q1_res]
-physical = "Resonator"             # f_r_hz, f_r0_hz, kappa_tot_hz
-[components.q1_ro]
-physical = "ReadoutLine"           # g_hz; members name the topology
-members  = { transmon = "q1", resonator = "q1_res" }
-[components.q1_xy]
-physical = "XYControl"             # topology-only (no measurable field yet)
-members  = { transmon = "q1" }
+[q1]
+f_q_max_hz = 4.73e9                # flux-tunables design the sweet-spot freq;
+anharmonicity_hz = -2.0e8          # a FIXED transmon designs f_01_hz instead
+[q1_res]                           # design on a MINTED entity is fine —
+f_r_hz = 5.93e9                    # validation runs after roster expansion
 ```
 
-Addressing is always `component.field` — `scqo set q1.t1_s=...`,
-`scqo set q1_res.kappa_tot_hz=...` — and a wrong home answers with the right
-one ("`f_r_hz` is a Resonator field — did you mean `q1_res.f_r_hz`?"). One fit
-may legally write a knob AND a fact: resonator spectroscopy proposes
-`q1.readout_freq` (the setting) and `q1_res.f_r_hz` (the measurement) from the
-same dip. Flux-tunable devices add `ZControl` terms (`q1_z`: the volts-to-flux
-transfer function `v_offset_v`/`v_per_phi0_v`) and get `idle_flux_v` on the
-transmon automatically.
+Bring-up sweeps anchor on these when nothing is measured yet — such runs are
+tagged `seeded:<entity>.<field>`, and a sweep with neither a standing value nor
+a design anchor refuses with the exact `scqo set` / `design.toml` fix.
 
-**Qubit pairs (QCQ tunable-coupler chips).** A pair is ONE component with both
-slots, named by its sorted members:
+**Qubit pairs (QCQ tunable-coupler chips).** The coupler is an ordinary
+flux-tunable mode with its own flux wire; the pair is a composite naming its
+members by role:
 
 ```toml
-[components.q1_q2]
-physical   = "Coupling"            # zz_hz, j_hz — the pair's measured facts
-instrument = "TransmonPair"        # coupler_decouple_v / coupler_interaction_v
-members    = { high = "q1", low = "q2" }   # idle-frequency ordering — NEVER
-                                   # control/target ("which qubit moves" is a
-                                   # per-operation vendor fact, not topology)
-operations = ["coupler_bias", "iswap"]
+[modes.q1_q2_c]
+kind = "flux_transmon"
+[composites.q1_q2]
+kind       = "qubit_pair"          # zz_hz, j_hz — the pair's measured facts
+high       = "q1"                  # design-nominal frequency ordering — NEVER
+low        = "q2"                  # control/target ("which qubit moves" is a
+coupler    = "q1_q2_c"             # per-operation vendor fact, not topology)
+operations = ["iswap"]             # declared gates mint the knob family:
+[lines.zc12]                       # iswap_coupler_flux, iswap_duration_s, ...
+flux = ["q1_q2_c"]                 # -> channel q1_q2_c_z
 ```
 
-The pair's knobs are the coupler's two standing biases; `scqo set
-q1_q2.coupler_decouple_v=0.081` replaces hand-editing the vendor config. The
-`pair_zz_coupler` experiment automates that point: it maps the signed residual
-ZZ vs coupler bias (echo fringe) and proposes the zero crossing as
-`coupler_decouple_v` plus the residual `zz_hz` on the Coupling slot. A coupler
-you want to TRACK physically gets an optional satellite (the resonator
-pattern — measured through the pair, standard transmon vocabulary):
-`members = { high=..., low=..., coupler="q1_q2_c" }` with `[components.q1_q2_c]
-physical = "FluxTunableTransmon"` (+ design values).
+The coupler's standing (decouple) bias is `idle_flux` on ITS OWN flux channel —
+`scqo set q1_q2_c_z.idle_flux=0.081` replaces hand-editing the vendor config —
+and per-gate operating points are the pair's per-operation knobs
+(`q1_q2.iswap_coupler_flux`, ...). The `pair_zz_coupler` experiment automates
+the decouple point: it maps the signed residual ZZ vs coupler bias (echo
+fringe) and proposes the zero crossing as the coupler z channel's `idle_flux`
+plus the residual `zz_hz` fact on the pair.
 
-**Assignable flux source.** The flux-map experiments take `flux_component`: a
-qubit name (its z-line) or a pair name (its tunable coupler) swept INSTEAD of
-each target's own z — `scqo run resonator_spectroscopy_flux --targets q1 --set
-flux_component=q1_q2`. Such runs are RECORD-ONLY (the fits describe crosstalk /
-coupler-induced shift, so nothing is proposed as the target's own physics), and
-with a source assigned the targets themselves no longer need `flux_bias`.
+**Assignable flux source.** The flux-map experiments take `flux_component`:
+ANY entity with a flux channel (another qubit's z, a coupler's z) swept
+INSTEAD of each target's own z — `scqo run resonator_spectroscopy_flux
+--targets q1 --set flux_component=q1_q2_c`. Such runs are RECORD-ONLY (the
+fits describe crosstalk / coupler-induced shift, so nothing is proposed as the
+target's own physics), and with a source assigned the targets themselves no
+longer need their own flux wiring.
 
-TRIAL-PHASE rule: the roster is freely editable and `scqo doctor` only WARNS
-about drift; when the component model goes production, names become append-only
-forever (add or retire, never rename — trends and history key on them).
-Experiments declare `target_category` + `required_operations`, and `scqo run`
-refuses mismatched targets BEFORE touching hardware — a flux experiment on a
-fixed-frequency chip is machine-refused, which is exactly the gate the AI loop
-plans against.
+TRIAL-PHASE rule: while a device has no `components.lock`, the roster is
+freely editable (`scqo doctor` reports the trial phase). The manager's
+production cut freezes the expanded name set into `components.lock`; from then
+on names are append-only forever — add entities or retire them
+(`retired = true`), never rename or delete, because store keys, trends and
+history key on the names — and `scqo doctor` FAILS on drift. Experiments
+declare `target_kinds` + `required_operations`, and `scqo run` refuses
+mismatched targets BEFORE touching hardware — a flux experiment on a
+fixed-frequency chip is machine-refused (its qubits carry no flux channel),
+which is exactly the gate the AI loop plans against.
 
 ## 10. Where does a value live? (the placement rule)
 
-Every number in this system has exactly one home per role. When you don't know
-where a value belongs — or why `scqo set` refuses a name — apply this checklist
-**in order; first match wins**. Bench form: `scqo state --rule`. Classify each
-*use* of a quantity, not each name: one fit may legally write a knob AND a fact
-(`resonator_spectroscopy` writes the `readout_freq` setting and the `f_r_hz`
-measurement from the same dip — two roles, two homes, on purpose).
+Every number in this system has exactly one home per role — `fact`, `knob` or
+`monitor`, declared per field in the kind catalogs, and the role routes the
+store. When you don't know where a value belongs — or why `scqo set` refuses a
+name — apply this checklist **in order; first match wins**. Bench form:
+`scqo state --rule`. Classify each *use* of a quantity, not each name: one fit
+may legally write a knob AND a fact (`resonator_spectroscopy` writes the
+`q1_ro.readout_freq_hz` setting and the `q1_res.f_r_hz` measurement from the
+same dip — two roles, two homes, on purpose).
 
 1. **Gone when the run ends?** Sweep windows, shot counts, analysis assumptions,
    `Optional=None` overrides ("keep the vendor's value") → **per-run experiment
    Parameters.** No standing value survives the run (audit records may: the
    punchout's recorded set-then-revert is the sanctioned pattern).
 2. **True of the chip in the dark?** The sample would still have it with every
-   instrument off and no pulse ever sent (T1, f_r, EJ, the flux arch) → **physical
-   property → physical.json.** "Instrument-independent" means *no instrument
-   setting realizes it* — a sample fact in setup coordinates (`dv_phi0_v`, volts
-   at the DAC) still lives here, with the plane declared in the name. One file
+   instrument off and no pulse ever sent (T1, f_r, EJ, the flux arch) →
+   **role `fact` → physical.json.** "Instrument-independent" means *no
+   instrument setting realizes it* — a sample fact in setup coordinates
+   (`q1_z.flux_per_phi0`, source units per flux quantum at the DAC) still
+   lives here, on the flux CHANNEL, in the flux source's native unit. One file
    per (cooldown, setup): each value is conditioned on trusting that instrument,
    and cross-setup disagreement is *information* (instrument systematics).
    Write: estimator suggest→accept, or `scqo set`.
@@ -692,24 +754,25 @@ measurement from the same dip — two roles, two homes, on purpose).
    catalogued vendor path, offline, **in the catalog row's unit**. Being
    calibrated by an experiment never changes ownership.
 4. **A knob the calibration loop must read/write vendor-neutrally — meaning the
-   same signal on every backend?** → **neutral field → scqo_state.json.**
-   Defined in the *experiment's frame*: each driver converts instrument ↔
-   experiment (hub-and-spoke — N converters, never N×N; instruments never
-   convert to each other). Two value conventions:
+   same signal on every backend?** → **role `knob` → scqo_state.json, on the
+   channel that emits it.** Defined in the *experiment's frame*: each driver
+   converts instrument ↔ experiment (hub-and-spoke — N converters, never N×N;
+   instruments never convert to each other). Two value conventions:
    - absolute at the closest **declared** calibratable plane (Hz; dBm at the
      instrument output port; s) → `portable=True`;
-   - dimensionless fraction of a chain scale → `portable=False`,
-     never copied across backends; it must name a portable twin
-     (`readout_amp` → `readout_power_dbm`, `drive_amp` → `drive_power_dbm`) or
-     have its chain scale catalogued (`pi_amp` → the drive-port scale entries,
-     now the tracked `drive_power_dbm` realizers; `pi_amp` itself still has no
-     power twin).
-   Scope limits: emission-side only (acquisition-IQ-frame values — thresholds,
-   demod rotation, weights — have no declarable plane, ever), and per-qubit
-   only (portable-looking setup plumbing like a TWPA pump is still vendor).
+   - dimensionless fraction of a chain scale, or an acquisition-IQ-frame
+     quantity (`readout_rotation_rad`, `readout_threshold` — no declarable
+     absolute plane) → `portable=False`, never copied across backends; a
+     chain fraction must name a portable twin (`readout_amp` →
+     `readout_power_dbm`, `drive_amp` → `drive_power_dbm`) or have its chain
+     scale catalogued (`pi_amp` → the drive-port scale entries, the tracked
+     `drive_power_dbm` realizers; `pi_amp` itself still has no power twin).
+   Scope limit: per-qubit only (portable-looking setup plumbing like a TWPA
+   pump is still vendor).
 5. **Measured, no knob?** Consulted in `scqo state` as standing state to gate
-   the next step → `FIELDS push=False` (`readout_fidelity`; a *workflow
-   declaration*, not an ontology). Only compared across runs → **run record
+   the next step → **role `monitor` → scqo_state.json, never pushed**
+   (`fidelity_g`/`fidelity_e`, the blob positions — performance OF the current
+   knobs, invalidated when they move). Only compared across runs → **run record
    only** (`p_e_given_g`, `power_context`) — compare across instruments by
    query, with backend provenance, never as state.
 6. **Everything else is the instrument's** → vendor config, vendor-native
@@ -717,7 +780,7 @@ measurement from the same dip — two roles, two homes, on purpose).
    `[realizer]` realizes a neutral field — change THAT field via `scqo set`;
    `[candidate]` shared concept awaiting promotion (the visible backlog);
    `[vendor]` permanently vendor-owned, reason stated (LO = many splits give
-   the same RF, and it is port-shared; discrimination frame = no plane);
+   the same RF, and it is port-shared);
    `[unique]` exists on THIS backend only — **any experiment touching it runs
    only on this instrument** (the lock-in corollary; `update()` cannot touch
    these by construction, so lock-in only enters through `probe()`).
@@ -761,14 +824,16 @@ every backend (extra vendor granularity is never a blocker — it becomes vendor
 fine print defaulting to the neutral value). *Trigger* = a loop experiment
 needs it — decided at release review, **never at the bench**. *Interim* = the
 fitted value goes in `Result.fit` (run record); hand-apply via vendor tools if
-needed. *Cost* = one FieldSpec + one hardware-tested QubitView setter per
-driver (conversions live only there) + the fieldmap binding + tests.
+needed. *Cost* = one FieldSpec in the kind catalog + one hardware-tested
+channel-view setter per driver (conversions live only there) + the fieldmap
+binding + tests.
 
 ## 11. Troubleshooting
 
 **First move, always: `scqo doctor`** — it checks your venv, drivers, the whole
-config chain (shared config, user overlay, parameters file), data_root, registries
-and the cooldown registry, and tells you what is wrong and how to fix it.
+config chain (shared config, user overlay, parameters file), data_root, the
+cooldown registry, and the device model (roster, design coverage, lock drift,
+roster-vs-vendor wiring), and tells you what is wrong and how to fix it.
 
 | Symptom | Cause / fix |
 |---|---|
@@ -777,6 +842,7 @@ and the cooldown registry, and tells you what is wrong and how to fix it.
 | `notepad ...` over SSH does nothing | GUI apps have no display in an SSH session (the process starts invisibly on the server) — use the §5 editing methods (here-string / scp / VS Code Remote-SSH) |
 | `device ... is on backend 'qblox' ... driver is not registered in this environment` | right command, wrong venv — the message names the venv to activate (or, if you ARE in it, the install line to re-run) |
 | `invalid cooldown registry ...` or another refusal naming `cooldowns.toml` at run start | the manager's cycle registry is broken or incomplete (it stamps runs and selects the instrument, so runs refuse BEFORE instrument time) — `scqo device cooldown` (no args) validates it; the message names the fix (INSTALL §6 has the full list) |
+| `no ...components.toml — the roster is required` | the device is not described yet — the manager writes its `components.toml` (schema 3; the message prints the smallest valid file) and, usually, a `design.toml` beside it (section 9) |
 | `cycle ... has N setups and none is selected` | the ACTIVE cycle offers several measurement setups and a run will not guess — pick yours once: `scqo user --setup <name>` (a single-setup cycle needs no selection) |
 | `setup 'x' ... does not exist in the ACTIVE cycle` | your selection went stale (typically after a new cycle started) — `scqo user --setup <name>` picks a current one, `scqo user --clear-setup` returns to auto-selection; bare `scqo user` always shows what a run would resolve to |
 | A run shows `datastore_error` | measurement succeeded; only saving failed (disk full/locked). Fix the disk, rerun |
@@ -788,12 +854,12 @@ and the cooldown registry, and tells you what is wrong and how to fix it.
 ## 12. What the system does NOT include yet
 
 Everything above is real: **both instruments are hardware-proven** through this path
-(Qblox cluster and OPX1000, since 2026-07-05), the catalog holds 12 experiments, and
+(Qblox cluster and OPX1000, since 2026-07-05), the catalog holds 21 experiments, and
 the GUI you read about in section 4 (viewer + datasette) is shipped. Still ahead:
 
 - **Device-level inference** (Phase 3): combining runs into EJ/EC, anharmonicity,
   flux response via scqat + SCQ.jl — the physical-parameter ledger (`physical.json`:
-  T1/T2, sweet spots, Ej_sum, f_r0, g) is its input.
+  T1/T2, the flux transfer function, `ej_sum_hz`, `f_r0_hz`, `g_hz`) is its input.
 - **Running measurements — and accepting updates — from the viewer**, plus a
   per-instrument run lock — until then, measuring and deciding stay on the CLI and
   one-measurement-per-instrument stays a social rule.

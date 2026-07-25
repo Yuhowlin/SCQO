@@ -5,8 +5,7 @@
     scqo run qubit_ramsey --set num_points=201
     scqo run resonator_spectroscopy --no-update     # analyze only, no writeback
 
-Works from any directory in the right venv (the old ``python scripts\\run_experiment
-.py`` form still works inside a driver repo). Parameters: code defaults <
+Works from any directory in the right venv. Parameters: code defaults <
 ~/.scqo/parameters.toml < --params/--set; see every knob with ``--help`` after the
 experiment name.
 """

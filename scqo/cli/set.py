@@ -1,6 +1,6 @@
 """Write a value directly — the runless recorded manual write for operator-known values.
 
-    scqo set q1.readout_freq=5.912e9
+    scqo set q1.readout_freq_hz=5.912e9
     scqo set q1.pi_amp=0.2 q1.readout_power_dbm=-30 --yes
 
 For values that come from EXPERIENCE, not from a measurement: there is no run to
@@ -13,8 +13,8 @@ FIRST, every change lands in the history stamped with your OS login (shown as
 
 Values are plain numbers (5.912e9, 2.5e-05) in the field's OWN unit — the
 confirmation table names it (`scqo state --fields` for the full catalog). Fields
-may be calibration knobs (q1.readout_freq, ...) or physical parameters
-(q1.t1_s, q1_res.f_r_hz, ...) — the owning store is routed by category. In scripts (no
+may be calibration knobs (q1.readout_freq_hz, ...) or physical parameters
+(q1.t1_s, q1_res.f_r_hz, ...) — the owning store is routed by the field's role. In scripts (no
 terminal) the prompt cannot be asked: pass --yes to apply.
 """
 
@@ -32,7 +32,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
     parser = argparse.ArgumentParser(prog=prog, description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("assignments", nargs="+", metavar="COMPONENT.FIELD=VALUE",
-                        help="one or more values to write, e.g. q1.readout_freq=5.912e9")
+                        help="one or more values to write, e.g. q1.readout_freq_hz=5.912e9")
     parser.add_argument("--yes", action="store_true",
                         help="write without the confirmation prompt (the script form)")
     parser.add_argument("--config", help="lab config path (default: $SCQO_CONFIG or ~/.scqo/config.toml)")
@@ -43,7 +43,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
         key, sep, raw = token.partition("=")
         if not sep or not key or not raw:
             raise SystemExit(
-                f"bad assignment {token!r} - expected COMPONENT.FIELD=VALUE (e.g. q1.readout_freq=5.912e9)"
+                f"bad assignment {token!r} - expected COMPONENT.FIELD=VALUE (e.g. q1.readout_freq_hz=5.912e9)"
             )
         assignments[key] = _parse_value(raw)
 

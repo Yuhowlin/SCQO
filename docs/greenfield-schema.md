@@ -1,13 +1,11 @@
 # Greenfield device-description schema
 
-**Status: IMPLEMENTED in `scqo/model/` on branch `greenfield`; the old model is still live on
-`main` until the namespace cutover.** Design finalized 2026-07-25.
+**Status: SHIPPED — this is the live device model of `scqo/`, and of both driver repos.**
+Design finalized 2026-07-25.
 Built in reviewed phases — catalogs, roster loader, `design.toml`, stores, device layer, testing
 substrate, session, all 21 experiments, and the operational surfaces (lock, doctor witnesses,
 report data). Each phase was gated by an adversarial review; where a review changed a design
 decision, this document was amended in the same commit, so it stays the single source of truth.
-Remaining: re-point the CLI/viewer shells in place, delete the old modules, move `scqo/model/*`
-to `scqo/*`, then the driver repos.
 **Mandate:** straightforward, clean code first; no backward compatibility (one fresh-start cutover release when implemented).
 **Provenance:** designed interactively, then hardened by three multi-agent passes — (1) three independent
 design drafts + two adversarial attacks; (2) expressiveness stress test against four published devices
@@ -253,7 +251,7 @@ flux-activated `<op>_coupler_flux`; microwave-activated `<op>_drive_freq_hz`, `<
 
 | kind | knobs | monitors | facts |
 |---|---|---|---|
-| `drive` | `drive_freq_hz`, `drive_amp`, `drive_power_dbm`, `pi_amp`, `drag_beta`, `pi_duration_s` | — | — |
+| `drive` | `drive_freq_hz`, `drive_amp`, `drive_power_dbm`, `pi_amp`, `drag_beta`, `pi_duration_s`, `thermalization_time_s` | — | — |
 | `readout` | `readout_freq_hz`, `readout_amp`, `readout_power_dbm`, `readout_duration_s`, `readout_integration_s`, `readout_rotation_rad`, `readout_threshold`, `readout_rus_threshold` | `fidelity_g`, `fidelity_e`, `pos_g_i`, `pos_g_q`, `pos_e_i`, `pos_e_q` | — |
 | `flux` | `idle_flux` | — | `flux_offset`, `flux_per_phi0`, `distortion_amp[]`, `distortion_tau_s[]` |
 | `pump` | `pump_freq_hz`, `pump_amp`, `pump_phase_rad`, `pump_duration_s` | — | — |
@@ -464,7 +462,8 @@ j_hz = 1.0e7
 
 // scqo_state.json — operated
 { "schema": 3, "values": {
-    "q1_xy":     { "drive_freq_hz": 5.136e9, "pi_amp": 0.209, "drag_beta": -1.0 },
+    "q1_xy":     { "drive_freq_hz": 5.136e9, "pi_amp": 0.209, "drag_beta": -1.0,
+                   "thermalization_time_s": 3.7e-4 },
     "q1_ro":     { "readout_freq_hz": 5.934e9, "fidelity_g": 0.96, "fidelity_e": 0.94 },
     "q1_z":      { "idle_flux": 0.118 },
     "q1_q2_c_z": { "idle_flux": 0.081 },
