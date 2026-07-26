@@ -99,7 +99,7 @@ def test_default_run_stores_pending_suggestions(tmp_path):
 
     record = json.loads((run_dir / "record.json").read_text(encoding="utf-8"))
     assert record["updated_device"] is False
-    assert [s["field"] for s in record["suggestions"]] == ["readout_freq_hz", "f_r_hz", "kappa_tot_hz"]
+    assert [s["field"] for s in record["suggestions"]] == ["readout_freq_hz", "f_r_hz", "kappa_tot_hz", "readout_depletion_s"]
     assert {s["status"] for s in record["suggestions"]} == {"pending"}
 
     before = json.loads((run_dir / "device_before.json").read_text(encoding="utf-8"))
@@ -131,7 +131,7 @@ def test_update_suggestions_append_recomputes_pending(tmp_path):
 
     assert [r["run_id"] for r in sess.find_runs(pending=True)] == [run_id]
     row = sess.find_runs()[0]
-    assert row["suggestions_pending"] == 1 and len(row["suggestions"]) == 4
+    assert row["suggestions_pending"] == 1 and len(row["suggestions"]) == 5
     assert sess.datastore.reindex() == 1  # record.json carries the appended item
     assert [r["run_id"] for r in sess.find_runs(pending=True)] == [run_id]
 
@@ -228,13 +228,13 @@ def test_suggest_during_tag_window_survives(tmp_path, monkeypatch):
     record = sess_a.load_run(run_id)["record"]
     assert record["tags"] == ["thesis-fig3"] and record["note"] == "tagged mid-suggest"
     assert [s["field"] for s in record["suggestions"]] == [  # nothing clobbered
-        "readout_freq_hz", "f_r_hz", "kappa_tot_hz", "pi_amp"]
+        "readout_freq_hz", "f_r_hz", "kappa_tot_hz", "readout_depletion_s", "pi_amp"]
     assert record["suggestions"][-1]["origin"] == "operator"
 
     # record.json is the truth: both writers' edits survive a full rebuild
     assert sess_a.datastore.reindex() == 1
     assert [r["run_id"] for r in sess_a.find_runs(tag="thesis-fig3", pending=True)] == [run_id]
-    assert sess_a.find_runs()[0]["suggestions_pending"] == 4
+    assert sess_a.find_runs()[0]["suggestions_pending"] == 5
 
 
 def test_tag_during_suggest_window_survives(tmp_path):
@@ -255,13 +255,13 @@ def test_tag_during_suggest_window_survives(tmp_path):
 
     sess_b._load_run_record = load_then_concurrent_tag
     summary = sess_b.suggest(run_id, {"q0.pi_amp": 0.21})
-    assert summary["pending_total"] == 4  # 3 estimator rows + the operator's
+    assert summary["pending_total"] == 5  # 4 estimator rows + the operator's
 
     record = sess_b.load_run(run_id)["record"]
     assert record["tags"] == ["thesis-fig3"]  # NOT reverted by the suggestion write
     assert record["note"] == "tagged mid-suggest"
     assert [s["field"] for s in record["suggestions"]] == [
-        "readout_freq_hz", "f_r_hz", "kappa_tot_hz", "pi_amp"]
+        "readout_freq_hz", "f_r_hz", "kappa_tot_hz", "readout_depletion_s", "pi_amp"]
     assert [r["run_id"] for r in sess_b.find_runs(tag="thesis-fig3")] == [run_id]
 
 

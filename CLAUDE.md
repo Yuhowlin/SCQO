@@ -145,6 +145,12 @@ scqo/
                     #   today and LCHQMDriver raises); catalog
                     #   `tags` are DERIVED from mixin subclassing — never declared strings,
                     #   zero tags legitimate (new experiments may be unclassifiable)
+    _depletion.py               # the post-readout photon-depletion wait: THE precedence
+                                #   helper depletion_wait_ns + the kappa->wait formula.
+                                #   The readout twin of qubit_reset one level over -
+                                #   kappa_tot_hz (fact) x depletion_factor -> the
+                                #   readout channel's readout_depletion_s knob, exactly
+                                #   as t1_s -> thermalization_time_s
     _drive_power.py             # shared recorded set->revert drive_power_dbm boundary
     _flux_component.py          # kind-agnostic foreign flux source mixin (record-only guard)
     _sim.py                     # shared helpers for the offline simulators

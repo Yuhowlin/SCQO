@@ -16,6 +16,7 @@ from pydantic import Field
 
 from .._scqat import per_qubit_results
 from ..contract import DatasetContract
+from ._depletion import DEPLETION_FACTOR_DESC, depletion_time_s
 from ._sim import stable_seed
 from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
@@ -34,6 +35,7 @@ class ResonatorSpectroscopyParameters(TargetSelection, AveragingParameters):
     readout_amplitude: float | None = Field(
         None, gt=0, description="Optional readout amplitude override; None "
                                 "keeps the device value.")
+    depletion_factor: float = Field(5.0, gt=0, description=DEPLETION_FACTOR_DESC)
     analysis_method: Literal["lorentzian", "circle"] = Field(
         "lorentzian",
         description=(
@@ -61,7 +63,10 @@ class ResonatorSpectroscopy(Experiment):
         "Sweep readout frequency around each resonator and locate the "
         "transmission dip; updates each target's readout channel "
         "readout_freq_hz and proposes the dip position (f_r_hz) and "
-        "linewidth (kappa_tot_hz) on the attached resonator mode.")
+        "linewidth (kappa_tot_hz) on the attached resonator mode, plus "
+        "depletion_factor / (2 pi x kappa_tot_hz) as the readout channel's "
+        "readout_depletion_s knob — this is the experiment that calibrates the "
+        "photon-depletion wait every other experiment leaves after a readout.")
     Parameters: ClassVar[type] = ResonatorSpectroscopyParameters
     Result: ClassVar[type] = ResonatorSpectroscopyResult
     Contract: ClassVar[DatasetContract] = DatasetContract(
@@ -146,6 +151,16 @@ class ResonatorSpectroscopy(Experiment):
             for field in ("f_r_hz", "kappa_tot_hz"):
                 if field in fit:
                     setattr(res_view, field, fit[field])
+            # One fit, two roles, two homes — the same split qubit_relaxation
+            # makes with t1_s: the LINEWIDTH is sample physics (a resonator fact
+            # above), while depletion_factor / (2 pi x kappa) is an operating
+            # CHOICE realized by a vendor knob, so it lands on the readout
+            # CHANNEL. This is the experiment that calibrates the depletion wait
+            # every other experiment then leaves after a readout.
+            kappa = fit.get("kappa_tot_hz")
+            if kappa is not None and np.isfinite(kappa) and kappa > 0:
+                self.device.channel(target, "readout").readout_depletion_s = (
+                    depletion_time_s(kappa, self.params.depletion_factor))
 
     def probe(self):  # pragma: no cover - driver half
         raise NotImplementedError("a driver backend supplies probe()")

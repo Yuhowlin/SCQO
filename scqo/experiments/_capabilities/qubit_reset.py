@@ -6,6 +6,15 @@ from that subclass relation (never from a declared string). Every experiment
 that pulses a qubit and reads it out needs one, because shot-to-shot
 independence is the assumption its averaging rests on.
 
+THE SETTLE AFTER AN ACTIVE RESET IS NOT HERE. It is the readout channel's
+``readout_depletion_s`` knob, calibrated from the measured linewidth by
+``resonator_spectroscopy`` and resolved by ``_depletion.depletion_wait_ns`` —
+see that module for why (it is this capability's own logic one level over:
+a measured FACT, a factor, a proposed channel KNOB). It briefly lived here as a
+per-run field, which was wrong: the photon-depletion time is a property of the
+resonator and the readout condition, identical for every experiment that
+measures, so it is device state and not a per-run choice.
+
 Two methods exist: ``"thermal"`` (wait out the qubit's own relaxation) and
 ``"active"`` (measure, then play a pi pulse only if it came back excited).
 Active reset is ~100x faster on a real chip, and it is why the discriminator
@@ -72,14 +81,6 @@ ACTIVE_RESET_ROUNDS_DESC = (
     "read the same number as an upper bound. Raise it to 2 if an active run's "
     "contrast is worse than its thermal reference."
 )
-ACTIVE_RESET_DEPLETION_DESC = (
-    "Settle wait AFTER the last conditional pi pulse, ns. It protects the "
-    "experiment's NEXT pulse from the readout photons still ringing in the "
-    "resonator — not the pi pulse itself, which no backend lets you delay "
-    "(the Qblox trigger latency is a fixed 364 ns). 0 disables. The symptom of "
-    "too little is a Stark shift on the first pulse: an active run's fitted "
-    "frequency drifts from its thermal reference. reset_method='active' only."
-)
 
 
 class QubitResetParameters(Parameters):
@@ -92,9 +93,6 @@ class QubitResetParameters(Parameters):
         None, gt=0, description=THERMALIZATION_TIME_DESC
     )
     active_reset_rounds: int = Field(1, ge=1, le=15, description=ACTIVE_RESET_ROUNDS_DESC)
-    active_reset_depletion_ns: float = Field(
-        1000.0, ge=0, description=ACTIVE_RESET_DEPLETION_DESC
-    )
 
 
 def reset_wait_ns(experiment, target: str) -> float:

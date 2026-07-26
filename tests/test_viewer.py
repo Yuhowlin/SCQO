@@ -238,7 +238,7 @@ def test_runs_page_pending_filter_and_updates_column(lab):
     assert lab["pend"]["run_id"] in page
     assert lab["res"]["run_id"] not in page  # applied at run time -> nothing pending
     full = c.get("/").text
-    assert "3 pending" in full  # the updates column flags the undecided run
+    assert "4 pending" in full  # the updates column flags the undecided run
 
 
 def test_trends_offer_descriptor_quantities(lab):
@@ -327,9 +327,9 @@ def test_runs_page_live_column(lab):
     live_row = _row_chunk(page, lab["res2"]["run_id"])
     assert "live:" in live_row and "readout_freq_hz (q0_ro)" in live_row
     superseded_row = _row_chunk(page, lab["res"]["run_id"])
-    assert "live:" not in superseded_row and "3/3 applied" in superseded_row
+    assert "live:" not in superseded_row and "4/4 applied" in superseded_row
     pending_row = _row_chunk(page, lab["pend"]["run_id"])
-    assert "3 pending" in pending_row
+    assert "4 pending" in pending_row
 
 
 def test_device_page_values_link_to_source_runs(lab):
@@ -363,8 +363,19 @@ def test_device_page_flags_external_change(lab):
 
     page = lab["client"].get("/device", params={"device": "chipZ"}).text
     state_table = page.split("Current calibration", 1)[1].split("<table>", 1)[1].split("</table>", 1)[0]
-    assert "(externally changed)" in state_table
-    assert f"/run/{lab['chipz']['run_id']}" not in state_table  # never a false credit
+    # Fields are COLUMNS here, so scope to CELLS: provenance is per VALUE, and
+    # this run writes more than one knob (readout_freq_hz + readout_depletion_s).
+    q0_ro = next(r for r in state_table.split("<tr")
+                 if "q0_ro" in r and "externally changed" in r)
+    cells = q0_ro.split("<td")
+    tampered = [c for c in cells if "externally changed" in c]
+    credited = [c for c in cells if f"/run/{lab['chipz']['run_id']}" in c]
+
+    assert tampered
+    assert not any("/run/" in c for c in tampered)  # never a false credit
+    # ... while the run's UNTOUCHED value is still credited: one hand-edit must
+    # not discredit everything else the same run legitimately set.
+    assert credited
 
 
 def test_device_page_renders_one_section_per_setup(lab):

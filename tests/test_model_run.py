@@ -40,10 +40,13 @@ def test_run_suggest_accept_roundtrip(session):
     assert out["run_id"] and out["data_path"]
     proposed = {(s["entity"], s["field"], s["role"])
                 for s in out["suggestions"]}
+    # ONE fit, THREE homes, and the role is what routes each: the operating
+    # choice and the wait derived from the linewidth are channel KNOBS (pushed),
+    # the linewidth and dip position are resonator FACTS (never pushed).
     assert proposed == {
-        ("q0_ro", "readout_freq_hz", "knob"),
+        ("q0_ro", "readout_freq_hz", "knob"), ("q0_ro", "readout_depletion_s", "knob"),
         ("q0_res", "f_r_hz", "fact"), ("q0_res", "kappa_tot_hz", "fact"),
-        ("q1_ro", "readout_freq_hz", "knob"),
+        ("q1_ro", "readout_freq_hz", "knob"), ("q1_ro", "readout_depletion_s", "knob"),
         ("q1_res", "f_r_hz", "fact"), ("q1_res", "kappa_tot_hz", "fact"),
     }
     # nothing applied yet

@@ -9,13 +9,16 @@ classifiable yet, and no test may demand tag completeness.
 
 from __future__ import annotations
 
+import math
+
 import pytest
 from pydantic import ValidationError
 
 from scqo import Session, catalog
+from scqo.catalog import CHANNELS
+from scqo.experiments._depletion import depletion_time_s
 from scqo.cli._backends import ensure_demo_experiments
 from scqo.experiments._capabilities import (
-    ACTIVE_RESET_DEPLETION_DESC,
     ACTIVE_RESET_ROUNDS_DESC,
     FLUX_AXIS,
     MAX_FLUX_DESC,
@@ -114,8 +117,6 @@ def test_canonical_field_text_never_drifts():
                     == THERMALIZATION_TIME_DESC), name
             assert (props["active_reset_rounds"]["description"]
                     == ACTIVE_RESET_ROUNDS_DESC), name
-            assert (props["active_reset_depletion_ns"]["description"]
-                    == ACTIVE_RESET_DEPLETION_DESC), name
 
 
 def test_flux_axis_is_the_contract_axis():
@@ -169,18 +170,26 @@ def test_reset_method_admits_exactly_the_realized_methods():
         QubitResetParameters(thermalization_time_ns=0)
 
 
-def test_active_reset_fields_are_bounded():
-    """The two active-reset knobs are per-run Parameters, not device state, so
-    their only guard is the schema. Rounds are capped because each one costs a
-    FULL readout on a fixed-round backend; the settle is a duration, so negative
-    is nonsense and 0 must stay legal (it is how you turn it off)."""
-    p = QubitResetParameters()
-    assert (p.active_reset_rounds, p.active_reset_depletion_ns) == (1, 1000.0)
-    assert QubitResetParameters(active_reset_depletion_ns=0).active_reset_depletion_ns == 0
-    for bad in ({"active_reset_rounds": 0}, {"active_reset_rounds": 16},
-                {"active_reset_depletion_ns": -1}):
+def test_active_reset_rounds_are_bounded():
+    """Rounds is a per-run choice, so the schema is its only guard, and it is
+    capped because each round costs a FULL readout on a fixed-round backend."""
+    assert QubitResetParameters().active_reset_rounds == 1
+    for bad in (0, 16, -1):
         with pytest.raises(ValidationError):
-            QubitResetParameters(**bad)
+            QubitResetParameters(active_reset_rounds=bad)
+
+
+def test_the_depletion_settle_is_device_state_not_a_parameter():
+    """It briefly lived on this mixin as active_reset_depletion_ns and that was
+    wrong: the photon-depletion time is a property of the resonator and the
+    readout condition, identical for every experiment that measures it, and it
+    has a real vendor field on both backends. So it is the readout channel's
+    readout_depletion_s KNOB (placement rule step 4), proposed from the measured
+    linewidth by resonator_spectroscopy — the same shape as t1_s ->
+    thermalization_time_s one level over."""
+    assert "active_reset_depletion_ns" not in QubitResetParameters.model_fields
+    assert "readout_depletion_s" in CHANNELS["readout"].fields
+    assert CHANNELS["readout"].fields["readout_depletion_s"].role == "knob"
 
 
 def test_relaxation_proposes_the_reset_wait():
@@ -196,6 +205,29 @@ def test_relaxation_proposes_the_reset_wait():
     t1 = out["fit"]["q0"]["t1_s"]
     assert proposed[("q0", "t1_s")] == pytest.approx(t1)
     assert proposed[("q0_xy", "thermalization_time_s")] == pytest.approx(8.0 * t1)
+
+
+def test_resonator_spectroscopy_proposes_the_depletion_wait():
+    """The readout twin of the test above, and the reason both exist: ONE fit,
+    TWO roles, TWO homes. The linewidth is sample physics and stays a resonator
+    FACT; factor / (2 pi x kappa) is an operating choice realized by a vendor
+    field, so it becomes a KNOB on the readout CHANNEL. Getting that split wrong
+    is how a value ends up in physical.json where nothing pushes it."""
+    ensure_demo_experiments()
+    roster, design, vendor = demo_device()
+    sess = Session(SimulatedBackend(vendor), roster, design=design)
+    out = sess.run("resonator_spectroscopy",
+                   {"targets": ["q0"], "num_averages": 30, "num_points": 51,
+                    "depletion_factor": 4.0})
+    proposed = {(s["entity"], s["field"]): s["after"] for s in out["suggestions"]}
+    kappa = out["fit"]["q0"]["kappa_tot_hz"]
+
+    assert proposed[("q0_res", "kappa_tot_hz")] == pytest.approx(kappa)
+    assert proposed[("q0_ro", "readout_depletion_s")] == pytest.approx(
+        depletion_time_s(kappa, 4.0))
+    # the factor is a choice, the linewidth is a fact: the knob must MOVE with it
+    assert proposed[("q0_ro", "readout_depletion_s")] == pytest.approx(
+        4.0 / (2 * math.pi * kappa))
 
 
 def test_foreign_flux_source_guard():

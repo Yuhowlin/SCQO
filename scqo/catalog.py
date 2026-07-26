@@ -389,6 +389,12 @@ CHANNELS: dict[str, ChannelKind] = {
             "readout_integration_s": FieldSpec(
                 "s", "Integration window; contract <= readout_duration_s.",
                 role="knob"),
+            "readout_depletion_s": FieldSpec(
+                "s", "Wait for the readout photons to leave the resonator "
+                     "before the next pulse; the calibration loop proposes "
+                     "depletion_factor / (2 pi x kappa_tot_hz) from "
+                     "resonator_spectroscopy — the readout twin of "
+                     "thermalization_time_s.", role="knob"),
             "readout_rotation_rad": FieldSpec(
                 "rad", "Demod rotation landing |0>->|1> on I (acquisition "
                        "frame).", role="knob", portable=False),

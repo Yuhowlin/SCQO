@@ -21,6 +21,7 @@ from pydantic import Field, model_validator
 
 from .._scqat import per_qubit_results
 from ..contract import DatasetContract
+from ._depletion import READOUT_DEPLETION_NS_DESC
 from ._sim import stable_seed
 from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
@@ -46,12 +47,8 @@ class ResonatorSpectroscopyPowerAmpParameters(TargetSelection, AveragingParamete
         "the optimal-power derivative uses a ~10-point smoothing window, so keep this "
         "comfortably above 10)."
     )
-    resonator_relaxation_time_ns: float | None = Field(
-        None, gt=0,
-        description="Resonator relaxation (depletion) wait between readouts, ns. None = the "
-        "backend's configured value (QM: each resonator's depletion_time; Qblox: the probe's "
-        "built-in idle).",
-    )
+    readout_depletion_ns: float | None = Field(
+        None, gt=0, description=READOUT_DEPLETION_NS_DESC)
     dip_method: Literal["lorentzian", "circle"] = Field(
         "lorentzian",
         description=(

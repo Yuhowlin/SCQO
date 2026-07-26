@@ -18,7 +18,6 @@ from .flux import (
     foreign_flux_source,
 )
 from .qubit_reset import (
-    ACTIVE_RESET_DEPLETION_DESC,
     ACTIVE_RESET_ROUNDS_DESC,
     RESET_METHOD_DESC,
     THERMALIZATION_TIME_DESC,
@@ -34,7 +33,6 @@ from .state_readout import (
 )
 
 __all__ = [
-    "ACTIVE_RESET_DEPLETION_DESC",
     "ACTIVE_RESET_ROUNDS_DESC",
     "FLUX_AXIS",
     "MAX_FLUX_DESC",
