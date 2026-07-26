@@ -26,6 +26,7 @@ from ._capabilities.state_readout import (
     state_row,
 )
 from ._sim import iq_from_population, stable_seed
+from ._time_grid import time_axis_ns
 from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
 from ..experiment import Experiment
@@ -80,7 +81,7 @@ class QubitRelaxation(Experiment):
 
     def define_sweep(self) -> dict[str, np.ndarray]:
         return {
-            "wait_time_ns": np.linspace(self.params.min_wait_ns, self.params.max_wait_ns, self.params.num_points)
+            "wait_time_ns": time_axis_ns(self.params.min_wait_ns, self.params.max_wait_ns, self.params.num_points)
         }
 
     def simulate(self, coords: dict[str, np.ndarray]) -> dict[str, np.ndarray]:

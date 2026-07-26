@@ -19,6 +19,7 @@ from .._scqat import per_qubit_results
 from ..contract import DatasetContract
 from ._capabilities.qubit_reset import QubitResetParameters
 from ._sim import stable_seed
+from ._time_grid import time_axis_ns
 from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
 from ..experiment import Experiment
@@ -76,9 +77,10 @@ class PairZZCoupler(Experiment):
             "coupler_bias_v": np.linspace(self.params.min_coupler_v,
                                           self.params.max_coupler_v,
                                           self.params.num_coupler_points),
-            # 16 ns floor: each echo arm is one coupler pulse of >= 4 clock cycles
-            "idle_time_ns": np.linspace(16, self.params.max_idle_time_ns,
-                                        self.params.num_time_points),
+            # 16 ns floor: each echo arm is one coupler pulse of >= 4 clock
+            # cycles; grid_ns=2 keeps the two arms whole nanoseconds
+            "idle_time_ns": time_axis_ns(16, self.params.max_idle_time_ns,
+                                         self.params.num_time_points, grid_ns=2),
         }
 
     def simulate(self, coords: dict[str, np.ndarray]) -> dict[str, np.ndarray]:

@@ -24,6 +24,7 @@ from ._capabilities.state_readout import (
     state_row,
 )
 from ._sim import iq_from_population, stable_seed
+from ._time_grid import time_axis_ns
 from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
 from ..experiment import Experiment
@@ -76,7 +77,7 @@ class QubitRamsey(Experiment):
 
     def define_sweep(self) -> dict[str, np.ndarray]:
         return {
-            "idle_time_ns": np.linspace(
+            "idle_time_ns": time_axis_ns(
                 self.params.min_idle_time_ns, self.params.max_idle_time_ns, self.params.num_points
             )
         }

@@ -30,6 +30,7 @@ from ._capabilities.state_readout import (
     state_row,
 )
 from ._sim import stable_seed
+from ._time_grid import time_axis_ns
 from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
 from ..experiment import Experiment
@@ -76,10 +77,11 @@ class QubitEchoFlux(Experiment):
     required_operations: ClassVar[tuple[str, ...]] = ("rx", "readout", "flux_bias")
 
     def define_sweep(self) -> dict[str, np.ndarray]:
-        wait_time = np.linspace(
+        wait_time = time_axis_ns(
             self.params.min_wait_ns,
             self.params.max_wait_ns,
             self.params.num_wait_points,
+            grid_ns=2,  # total idle splits into two equal echo arms
         )
         return {**flux_sweep(self.params), "wait_time_ns": wait_time}
 
