@@ -15,6 +15,8 @@ from pydantic import ValidationError
 from scqo import Session, catalog
 from scqo.cli._backends import ensure_demo_experiments
 from scqo.experiments._capabilities import (
+    ACTIVE_RESET_DEPLETION_DESC,
+    ACTIVE_RESET_ROUNDS_DESC,
     FLUX_AXIS,
     MAX_FLUX_DESC,
     MIN_FLUX_DESC,
@@ -110,6 +112,10 @@ def test_canonical_field_text_never_drifts():
             assert props["reset_method"]["description"] == RESET_METHOD_DESC, name
             assert (props["thermalization_time_ns"]["description"]
                     == THERMALIZATION_TIME_DESC), name
+            assert (props["active_reset_rounds"]["description"]
+                    == ACTIVE_RESET_ROUNDS_DESC), name
+            assert (props["active_reset_depletion_ns"]["description"]
+                    == ACTIVE_RESET_DEPLETION_DESC), name
 
 
 def test_flux_axis_is_the_contract_axis():
@@ -144,14 +150,37 @@ def test_reset_wait_precedence():
         experiment(thermalization_time_ns=5_000.0), "q0") == pytest.approx(5_000.0)
 
 
-def test_reset_method_is_the_extension_point():
-    """Only thermal exists today; the selector is what active reset widens, so
-    it must be a Literal (a plain str would let a typo through validation)."""
-    assert QubitResetParameters().reset_method == "thermal"
-    with pytest.raises(ValidationError):
-        QubitResetParameters(reset_method="active")
+def test_reset_method_admits_exactly_the_realized_methods():
+    """Both methods validate, and the selector stays a Literal so a NEAR MISS is
+    caught here rather than silently thermalizing on the instrument. 'activ'
+    (not some absurd string) is the realistic typo and the reason the field was
+    never a plain str.
+
+    Widening this Literal is a cross-repo commitment: every backend that carries
+    the mixin must either realize the new method or refuse it BY NAME. Adding a
+    member here without a refusal path on the other backend is the bug this test
+    cannot catch — see the module docstring's BOUNDARY RULE."""
+    assert QubitResetParameters().reset_method == "thermal"  # default unchanged
+    assert QubitResetParameters(reset_method="active").reset_method == "active"
+    for typo in ("activ", "Active", "active_gef", "none"):
+        with pytest.raises(ValidationError):
+            QubitResetParameters(reset_method=typo)
     with pytest.raises(ValidationError):
         QubitResetParameters(thermalization_time_ns=0)
+
+
+def test_active_reset_fields_are_bounded():
+    """The two active-reset knobs are per-run Parameters, not device state, so
+    their only guard is the schema. Rounds are capped because each one costs a
+    FULL readout on a fixed-round backend; the settle is a duration, so negative
+    is nonsense and 0 must stay legal (it is how you turn it off)."""
+    p = QubitResetParameters()
+    assert (p.active_reset_rounds, p.active_reset_depletion_ns) == (1, 1000.0)
+    assert QubitResetParameters(active_reset_depletion_ns=0).active_reset_depletion_ns == 0
+    for bad in ({"active_reset_rounds": 0}, {"active_reset_rounds": 16},
+                {"active_reset_depletion_ns": -1}):
+        with pytest.raises(ValidationError):
+            QubitResetParameters(**bad)
 
 
 def test_relaxation_proposes_the_reset_wait():

@@ -138,8 +138,11 @@ scqo/
                   #   AI's menu; maturity core|contrib + DERIVED capability tags)
     _capabilities/  # one module per capability: the canonical Parameters mixin + contract
                     #   fragment + sim/estimate helpers (state_readout.py, flux.py,
-                    #   qubit_reset.py = reset_method + the thermal wait, resolved for
-                    #   both drivers by the ONE helper reset_wait_ns); catalog
+                    #   qubit_reset.py = reset_method 'thermal'|'active' + the thermal
+                    #   wait, resolved for both drivers by the ONE helper
+                    #   reset_wait_ns; a backend that cannot realize a method must
+                    #   REFUSE it by name, never downgrade — 'active' is Qblox-only
+                    #   today and LCHQMDriver raises); catalog
                     #   `tags` are DERIVED from mixin subclassing — never declared strings,
                     #   zero tags legitimate (new experiments may be unclassifiable)
     _drive_power.py             # shared recorded set->revert drive_power_dbm boundary
