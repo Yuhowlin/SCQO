@@ -14,6 +14,7 @@ import numpy as np
 from pydantic import Field, field_validator
 
 from ..contract import DatasetContract
+from ._capabilities.qubit_reset import QubitResetParameters
 from ._sim import stable_seed
 from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
@@ -21,7 +22,7 @@ from ..experiment import Experiment
 from . import register
 
 
-class QubitDragEquatorParameters(TargetSelection, AveragingParameters):
+class QubitDragEquatorParameters(TargetSelection, AveragingParameters, QubitResetParameters):
     """Inputs for a 3-line symmetric equator DRAG calibration experiment."""
 
     min_beta: float = Field(-0.5, description="Minimum DRAG beta coefficient.")

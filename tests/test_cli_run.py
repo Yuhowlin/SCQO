@@ -174,8 +174,13 @@ def test_reject_needs_no_backend(tmp_path):
     reject = _run_cli(tmp_path, "accept", run_id, "--reject", "--comment", "noisy fit")
     assert reject.returncode == 0, reject.stderr
     summary = json.loads(reject.stdout)
-    # t1_s is a FACT of the qubit mode itself (no channel realizes it)
-    assert summary["rejected"] == [{"entity": "q0", "field": "t1_s"}]
+    # the run's two roles, two homes: t1_s is a FACT of the qubit mode itself
+    # (no channel realizes it), while the thermal-reset wait it implies is a
+    # KNOB on the drive channel. Rejecting drops BOTH.
+    assert summary["rejected"] == [
+        {"entity": "q0", "field": "t1_s"},
+        {"entity": "q0_xy", "field": "thermalization_time_s"},
+    ]
     assert "no runs match" in _run_cli(tmp_path, "find", "--pending").stdout
     # the T1 was never applied: the physical table stays empty
     physical = _run_cli(tmp_path, "state", "--physical")

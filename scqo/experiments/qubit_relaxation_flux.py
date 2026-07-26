@@ -22,6 +22,7 @@ from ._capabilities.flux import (
     FluxSweepParameters,
     flux_sweep,
 )
+from ._capabilities.qubit_reset import QubitResetParameters
 from ._capabilities.state_readout import (
     STATE_ALT,
     StateReadoutParameters,
@@ -37,7 +38,7 @@ from . import register
 
 
 class QubitRelaxationFluxParameters(
-    TargetSelection, AveragingParameters, StateReadoutParameters, FluxSweepParameters
+    TargetSelection, AveragingParameters, StateReadoutParameters, FluxSweepParameters, QubitResetParameters
 ):
     """Parameters for T1 vs flux spectroscopy."""
 

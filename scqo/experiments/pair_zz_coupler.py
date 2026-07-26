@@ -17,6 +17,7 @@ from pydantic import Field
 
 from .._scqat import per_qubit_results
 from ..contract import DatasetContract
+from ._capabilities.qubit_reset import QubitResetParameters
 from ._sim import stable_seed
 from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
@@ -24,7 +25,7 @@ from ..experiment import Experiment
 from . import register
 
 
-class PairZZCouplerParameters(TargetSelection, AveragingParameters):
+class PairZZCouplerParameters(TargetSelection, AveragingParameters, QubitResetParameters):
     """Inputs for the ZZ-vs-coupler-bias map. ``targets`` are PAIR components."""
 
     min_coupler_v: float = Field(-0.3, ge=-0.5, description="Lowest coupler standing bias (V; OPX DAC rail is +/-0.5 V).")

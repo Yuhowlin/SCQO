@@ -15,6 +15,7 @@ from pydantic import Field
 
 from .._scqat import per_qubit_results
 from ..contract import DatasetContract
+from ._capabilities.qubit_reset import QubitResetParameters
 from ._capabilities.state_readout import (
     STATE_ALT,
     StateReadoutParameters,
@@ -28,7 +29,7 @@ from ..experiment import Experiment
 from . import register
 
 
-class QubitSQRBParameters(TargetSelection, AveragingParameters, StateReadoutParameters):
+class QubitSQRBParameters(TargetSelection, AveragingParameters, StateReadoutParameters, QubitResetParameters):
     """Inputs for a Qubit SQRB experiment."""
 
     num_random_sequences: int = Field(

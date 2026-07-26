@@ -14,6 +14,7 @@ import numpy as np
 from pydantic import Field
 
 from ..contract import DatasetContract
+from ._capabilities.qubit_reset import QubitResetParameters
 from ._sim import stable_seed
 from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
@@ -21,7 +22,7 @@ from ..experiment import Experiment
 from . import register
 
 
-class QubitDragAlternatingParameters(TargetSelection, AveragingParameters):
+class QubitDragAlternatingParameters(TargetSelection, AveragingParameters, QubitResetParameters):
     """Inputs for an alternating pulse error amplification DRAG calibration experiment."""
 
     min_beta: float = Field(-2.0, description="Minimum DRAG beta coefficient / pre-factor.")

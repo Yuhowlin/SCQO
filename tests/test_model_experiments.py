@@ -7,6 +7,7 @@ import pytest
 
 from scqo import Session
 from scqo import experiments as registry
+from scqo.experiment import Experiment
 from scqo.testing import (
     InMemoryDevice,
     SimulatedBackend,
@@ -34,9 +35,12 @@ def session(tmp_path_factory):
 
 
 #: the CORE catalog, taken from the exported classes rather than the live
-#: registry — another test's @register must never widen this sweep.
-CORE = sorted(getattr(registry, n).name for n in registry.__all__
-              if n not in ("catalog", "get", "register"))
+#: registry — another test's @register must never widen this sweep. Selected by
+#: TYPE, not by an exclusion list: __all__ also re-exports the registry
+#: functions and the driver-facing capability surface (QubitResetParameters,
+#: reset_wait_ns), and a name list would need editing every time one is added.
+CORE = sorted(obj.name for obj in map(lambda n: getattr(registry, n), registry.__all__)
+              if isinstance(obj, type) and issubclass(obj, Experiment))
 
 
 @pytest.mark.parametrize("name", CORE)

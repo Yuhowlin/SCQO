@@ -16,14 +16,15 @@ from pydantic import Field
 
 from .._scqat import per_qubit_results
 from ..contract import DatasetContract
+from ._capabilities.qubit_reset import QubitResetParameters
 from ._sim import stable_seed
-from ..parameters import Parameters, TargetSelection
+from ..parameters import TargetSelection
 from ..result import Outcome, Result
 from ..experiment import Experiment
 from . import register
 
 
-class ReadoutFrequencyParameters(TargetSelection, Parameters):
+class ReadoutFrequencyParameters(TargetSelection, QubitResetParameters):
     """Inputs for fidelity-vs-readout-frequency optimization."""
 
     frequency_span_hz: float = Field(5e6, gt=0, description="Total detuning span around the current readout_freq (chi-scale).")

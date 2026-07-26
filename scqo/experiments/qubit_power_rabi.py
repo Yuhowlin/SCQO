@@ -16,6 +16,7 @@ from pydantic import Field
 
 from .._scqat import per_qubit_results
 from ..contract import DatasetContract
+from ._capabilities.qubit_reset import QubitResetParameters
 from ._capabilities.state_readout import (
     STATE_ALT,
     StateReadoutParameters,
@@ -30,7 +31,7 @@ from ..experiment import Experiment
 from . import register
 
 
-class QubitPowerRabiParameters(TargetSelection, AveragingParameters, StateReadoutParameters):
+class QubitPowerRabiParameters(TargetSelection, AveragingParameters, StateReadoutParameters, QubitResetParameters):
     """Inputs for power Rabi."""
 
     min_amp_factor: float = Field(0.0, ge=0, description="Lowest drive amplitude, as a factor of current pi_amp.")

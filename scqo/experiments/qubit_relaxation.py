@@ -17,6 +17,7 @@ from pydantic import Field
 
 from .._scqat import per_qubit_results
 from ..contract import DatasetContract
+from ._capabilities.qubit_reset import QubitResetParameters
 from ._capabilities.state_readout import (
     STATE_ALT,
     StateReadoutParameters,
@@ -31,12 +32,19 @@ from ..experiment import Experiment
 from . import register
 
 
-class QubitRelaxationParameters(TargetSelection, AveragingParameters, StateReadoutParameters):
+class QubitRelaxationParameters(TargetSelection, AveragingParameters, StateReadoutParameters, QubitResetParameters):
     """Inputs for a T1 relaxation measurement."""
 
     min_wait_ns: float = Field(16, ge=0, description="Shortest delay after the pi pulse.")
     max_wait_ns: float = Field(200_000, gt=0, description="Longest delay (should exceed a few T1).")
     num_points: int = Field(51, gt=1, description="Number of delay points.")
+    thermalization_factor: float = Field(
+        10.0, gt=0,
+        description="Multiple of the fitted T1 proposed as each target's "
+        "thermalization_time_s knob (the thermal-reset wait every other "
+        "experiment then uses). This run's OWN reset still uses the standing "
+        "knob — the proposal takes effect once accepted.",
+    )
 
 
 class QubitRelaxationResult(Result):
@@ -52,7 +60,9 @@ class QubitRelaxation(Experiment):
     description: ClassVar[str] = (
         "Excite with a pi pulse, wait a swept delay and measure; fits the exponential "
         "decay and proposes t1_s as a physical parameter (sample physics, no instrument "
-        "knob). use_state_discrimination returns the FPGA-discriminated averaged state "
+        "knob) AND thermalization_factor x T1 as each target's thermalization_time_s "
+        "knob — this is the experiment that calibrates the thermal-reset wait every "
+        "other experiment uses. use_state_discrimination returns the FPGA-discriminated averaged state "
         "instead of I/Q (needs a calibrated discriminator: run single_shot_readout and "
         "accept its readout_rotation_rad / readout_threshold suggestions first)."
     )
@@ -117,12 +127,18 @@ class QubitRelaxation(Experiment):
         return result
 
     def update(self) -> None:
-        # Record T1 as device state (record-only field: history + config, no push).
+        # Two roles from one fit, two homes (the placement rule's "classify each
+        # USE"): t1_s is a sample FACT -> physical.json, while the thermal-reset
+        # wait it implies is a KNOB on the drive channel -> scqo_state.json and
+        # pushed to the vendor. Both leave here as pending suggestions.
         if self.result is None:
             return
         for qubit, fit in self.result.fit.items():
             if self.result.outcomes[qubit] is Outcome.SUCCESSFUL:
                 self.device.component(qubit).t1_s = fit["t1_s"]
+                self.device.channel(qubit, "drive").thermalization_time_s = (
+                    self.params.thermalization_factor * fit["t1_s"]
+                )
 
     def probe(self):  # pragma: no cover - driver half
         raise NotImplementedError("a driver backend supplies probe()")

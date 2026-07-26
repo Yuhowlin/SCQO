@@ -17,14 +17,15 @@ from pydantic import Field
 
 from .._scqat import per_qubit_results
 from ..contract import DatasetContract
+from ._capabilities.qubit_reset import QubitResetParameters
 from ._sim import stable_seed
-from ..parameters import Parameters, TargetSelection
+from ..parameters import TargetSelection
 from ..result import Outcome, Result
 from ..experiment import Experiment
 from . import register
 
 
-class ReadoutPowerParameters(TargetSelection, Parameters):
+class ReadoutPowerParameters(TargetSelection, QubitResetParameters):
     """Inputs for fidelity-vs-readout-amplitude optimization."""
 
     min_amp_factor: float = Field(0.4, gt=0, description="Lowest amplitude prefactor (x current readout_amp).")

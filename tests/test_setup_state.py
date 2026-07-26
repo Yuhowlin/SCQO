@@ -514,8 +514,12 @@ def test_two_users_two_setups_end_to_end(tmp_path, monkeypatch):
     hist_a = read_history(scqo_a / "scqo_state.json")
     hist_b = read_history(scqo_b / "scqo_state.json")
     assert "history" not in file_a and "history" not in file_b  # values-only files
-    assert {(r["run_id"], r["setup"]) for r in hist_a} == {(res_a["run_id"], "alpha")}
-    assert {(r["run_id"], r["setup"]) for r in hist_b} == {(res_b["run_id"], "beta")}
+    # two knob-writing runs per setup: the resonator sets readout_freq_hz, the
+    # T1 sets the drive channel's thermalization_time_s (10 x the fitted T1)
+    assert {(r["run_id"], r["setup"]) for r in hist_a} == {
+        (res_a["run_id"], "alpha"), (t1_a["run_id"], "alpha")}
+    assert {(r["run_id"], r["setup"]) for r in hist_b} == {
+        (res_b["run_id"], "beta"), (t1_b["run_id"], "beta")}
     assert (file_a["values"]["q0_ro"]["readout_freq_hz"]
             == res_a["fit"]["q0"]["readout_freq_hz"])
     assert (file_b["values"]["q0_ro"]["readout_freq_hz"]

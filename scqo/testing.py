@@ -94,6 +94,7 @@ def demo_vendor_state(roster: Roster, design: Design) -> dict:
             fields.setdefault("pi_amp", 0.1)
             fields.setdefault("drive_amp", 0.05)
             fields.setdefault("drive_power_dbm", -13.0)
+            fields.setdefault("thermalization_time_s", 200e-6)
         elif e.kind == "readout":
             fields.setdefault("readout_amp", 0.08)
             fields.setdefault("readout_power_dbm", -30.0)

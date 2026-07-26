@@ -17,6 +17,12 @@ from .flux import (
     flux_sweep,
     foreign_flux_source,
 )
+from .qubit_reset import (
+    RESET_METHOD_DESC,
+    THERMALIZATION_TIME_DESC,
+    QubitResetParameters,
+    reset_wait_ns,
+)
 from .state_readout import (
     STATE_ALT,
     StateReadoutParameters,
@@ -30,13 +36,17 @@ __all__ = [
     "MAX_FLUX_DESC",
     "MIN_FLUX_DESC",
     "NUM_FLUX_DESC",
+    "RESET_METHOD_DESC",
     "STATE_ALT",
+    "THERMALIZATION_TIME_DESC",
     "FluxComponentParameters",
     "FluxSweepParameters",
+    "QubitResetParameters",
     "StateReadoutParameters",
     "flux_sweep",
     "foreign_flux_source",
     "readout_vars",
+    "reset_wait_ns",
     "signal_rename",
     "state_row",
 ]

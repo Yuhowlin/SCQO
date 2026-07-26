@@ -16,6 +16,7 @@ from pydantic import Field
 
 from .._scqat import per_qubit_results
 from ..contract import DatasetContract
+from ._capabilities.qubit_reset import QubitResetParameters
 from ._capabilities.state_readout import (
     STATE_ALT,
     StateReadoutParameters,
@@ -30,7 +31,7 @@ from ..experiment import Experiment
 from . import register
 
 
-class QubitEchoParameters(TargetSelection, AveragingParameters, StateReadoutParameters):
+class QubitEchoParameters(TargetSelection, AveragingParameters, StateReadoutParameters, QubitResetParameters):
     """Inputs for a Hahn-echo measurement."""
 
     min_wait_ns: float = Field(32, ge=0, description="Shortest total echo idle time.")

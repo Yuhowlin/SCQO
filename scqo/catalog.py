@@ -348,6 +348,10 @@ CHANNELS: dict[str, ChannelKind] = {
                     "rxy.beta).", role="knob", portable=False),
             "pi_duration_s": FieldSpec(
                 "s", "Calibrated pi pulse length.", role="knob"),
+            "thermalization_time_s": FieldSpec(
+                "s", "Passive-reset wait between shots (measurement end -> the "
+                     "next shot's first operation); the calibration loop "
+                     "proposes ~10 x T1 from qubit_relaxation.", role="knob"),
             # drive_power_dbm AFTER drive_amp: pushes go in declaration order
             # and the absolute power must win (amp is the chain solve's residual).
             "drive_amp": FieldSpec(

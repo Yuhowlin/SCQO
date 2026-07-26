@@ -155,13 +155,17 @@ def _print_state(sess, entity_filter: str | None) -> int:
             if r["field"] not in fields:
                 fields.append(r["field"])
         values = {(r["entity"], r["field"]): r["value"] for r in group}
+        # Column width DERIVED from the widest name, never hardcoded: at 20 the
+        # 21-character fields (readout_integration_s, thermalization_time_s) ran
+        # into their left neighbour and the header became unreadable.
+        w = max(20, max(len(f) for f in fields) + 2)
         print(f"# {kind}")
-        print(f"{'entity':12s}" + "".join(f"{f:>20s}" for f in fields))
+        print(f"{'entity':12s}" + "".join(f"{f:>{w}s}" for f in fields))
         for name in names:
             row = "".join(
-                f"{values.get((name, f)):>20.6g}"
+                f"{values.get((name, f)):>{w}.6g}"
                 if isinstance(values.get((name, f)), float)
-                else f"{str(values.get((name, f))):>20s}"
+                else f"{str(values.get((name, f))):>{w}s}"
                 for f in fields)
             print(f"{name:12s}{row}")
     if not by_kind:

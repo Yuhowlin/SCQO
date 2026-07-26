@@ -17,6 +17,7 @@ from pydantic import Field
 
 from .._scqat import per_qubit_results
 from ..contract import DatasetContract
+from ._capabilities.qubit_reset import QubitResetParameters
 from ._sim import stable_seed
 from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
@@ -25,7 +26,7 @@ from . import register
 from ._drive_power import drive_power_boundary
 
 
-class QubitSpectroscopyParameters(TargetSelection, AveragingParameters):
+class QubitSpectroscopyParameters(TargetSelection, AveragingParameters, QubitResetParameters):
     """Inputs for a qubit-spectroscopy (two-tone) measurement."""
 
     frequency_span_hz: float = Field(

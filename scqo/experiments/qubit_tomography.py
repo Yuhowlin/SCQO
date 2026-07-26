@@ -18,6 +18,7 @@ import xarray as xr
 
 from .._scqat import per_qubit_results
 from ..contract import ContractError, DatasetContract
+from ._capabilities.qubit_reset import QubitResetParameters
 from ._sim import stable_seed
 from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
@@ -59,7 +60,7 @@ class TomographyContract(DatasetContract):
             raise ContractError("dataset does not conform to Tomography contract: " + "; ".join(problems))
 
 
-class QubitTomographyParameters(TargetSelection, AveragingParameters):
+class QubitTomographyParameters(TargetSelection, AveragingParameters, QubitResetParameters):
     """Inputs for a Qubit Tomography experiment."""
 
     qubit_configs: dict[str, dict[str, str]] = Field(

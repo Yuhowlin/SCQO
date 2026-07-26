@@ -87,13 +87,22 @@ def _derived_tags(cls: type[Experiment]) -> list[str]:
     declared string, so a tag cannot lie or rot as the code evolves.
     Experiments with no tags are legitimate (a new experiment may not be
     classifiable yet)."""
-    from ._capabilities import FluxSweepParameters, StateReadoutParameters
+    from ._capabilities import (
+        FluxSweepParameters,
+        QubitResetParameters,
+        StateReadoutParameters,
+    )
 
+    # Derivation order is fixed (tests pin the exact lists): the two original
+    # capabilities first, qubit_reset appended last so adding it did not
+    # reshuffle every existing entry.
     tags = []
     if issubclass(cls.Parameters, StateReadoutParameters):
         tags.append("state_readout")
     if issubclass(cls.Parameters, FluxSweepParameters):
         tags.append("flux")
+    if issubclass(cls.Parameters, QubitResetParameters):
+        tags.append("qubit_reset")
     return tags
 
 
@@ -121,6 +130,13 @@ def catalog() -> list[dict]:
 # Importing the modules runs their @register decorators; re-exporting the
 # classes is the driver-facing API (`from scqo.experiments import
 # ResonatorSpectroscopy` to subclass with a probe).
+#: the driver-facing slice of the capability package: a probe resolves its
+#: thermal-reset wait through reset_wait_ns rather than reading the knob or the
+#: override itself (the precedence rule has exactly one home).
+from ._capabilities import (  # noqa: E402
+    QubitResetParameters,
+    reset_wait_ns,
+)
 from .pair_zz_coupler import PairZZCoupler  # noqa: E402
 from .qubit_drag_alternating import QubitDragAlternating  # noqa: E402
 from .qubit_drag_equator import QubitDragEquator  # noqa: E402
@@ -151,6 +167,7 @@ from .single_shot_readout import SingleShotReadout  # noqa: E402
 
 __all__ = [
     "catalog", "get", "register",
+    "QubitResetParameters", "reset_wait_ns",
     "PairZZCoupler", "QubitDragAlternating", "QubitDragEquator", "QubitEcho",
     "QubitEchoFlux", "QubitPiPulseError", "QubitPowerRabi", "QubitRamsey",
     "QubitRelaxation", "QubitRelaxationFlux", "QubitSQRB",

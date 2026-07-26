@@ -15,6 +15,7 @@ import numpy as np
 from pydantic import Field
 
 from ..contract import DatasetContract
+from ._capabilities.qubit_reset import QubitResetParameters
 from ._sim import stable_seed
 from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
@@ -22,7 +23,7 @@ from ..experiment import Experiment
 from . import register
 
 
-class QubitPiPulseErrorParameters(TargetSelection, AveragingParameters):
+class QubitPiPulseErrorParameters(TargetSelection, AveragingParameters, QubitResetParameters):
     """Inputs for pi-pulse error amplification calibration."""
 
     min_amp_factor: float = Field(0.90, ge=0, description="Minimum amplitude factor relative to current pi_amp.")

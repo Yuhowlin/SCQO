@@ -19,14 +19,15 @@ from pydantic import Field
 
 from .._scqat import per_qubit_results
 from ..contract import DatasetContract
+from ._capabilities.qubit_reset import QubitResetParameters
 from ._sim import stable_seed
-from ..parameters import Parameters, TargetSelection
+from ..parameters import TargetSelection
 from ..result import Outcome, Result
 from ..experiment import Experiment
 from . import register
 
 
-class SingleShotReadoutParameters(TargetSelection, Parameters):
+class SingleShotReadoutParameters(TargetSelection, QubitResetParameters):
     """Inputs for a single-shot readout-fidelity measurement."""
 
     num_shots: int = Field(2000, gt=99, description="Shots per prepared state (each recorded individually).")
