@@ -29,6 +29,7 @@
   {% endfor %}
 </table>
 {% else %}
-<p>No fitted values of <code>{{ quantity }}</code> for <code>{{ target }}</code> yet — run an experiment that reports it.</p>
+<p>No recorded values of <code>{{ quantity }}</code> for <code>{{ target }}</code> yet — run an
+experiment that fits it, or one whose suggestion for it you accepted.</p>
 {% endif %}
 {% endblock %}

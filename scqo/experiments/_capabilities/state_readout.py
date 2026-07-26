@@ -9,9 +9,12 @@ the simulate-side draw (:func:`state_row`) and the estimate-side rename
 
 BOUNDARY RULE: the field name ``use_state_discrimination`` and its semantics
 (True => the probe returns ONE averaged ``state`` variable; False => ``I`` + ``Q``)
-cross the QM probe boundary — LCHQMDriver shells pass it verbatim to the vendor
-``build_program`` — so NEITHER side is ever renamed. LCHQBDriver never reads it
-(Qblox probes always emit averaged I/Q, so True is a no-op there).
+cross the probe boundary on BOTH backends — LCHQMDriver shells pass it verbatim to
+the vendor ``build_program``; LCHQBDriver reads it in ``experiments/_state.py`` and
+asks for the ``ThresholdedAcquisition`` protocol — so NEITHER side is ever renamed.
+The two realize the same semantics on different vendor knobs (QM's readout-operation
+``threshold``, Qblox's ``element.measure.acq_threshold``), which is why the
+discriminator fields are ``portable=False``: the calibrated numbers do not transfer.
 
 ``attach_readout_positions`` deliberately does NOT ride along: it is an
 Experiment ClassVar owned by experiments whose scqat estimator consumes the

@@ -397,27 +397,73 @@ class DataStore:
         return [r["device"] for r in rows]
 
     def fit_trend(self, qubit: str, quantity: str, limit: int = 500, device: str | None = None) -> list[dict]:
-        """One fitted quantity vs time for one qubit (oldest first) — drift at a glance.
+        """One recorded quantity vs time for one qubit (oldest first) — drift at a glance.
 
-        ``quantity`` is a fit key (t1_s, t2_star_s, readout_freq_hz, pi_amp, ...). The
-        JSON path is passed as a bound parameter, so arbitrary names are safe.
+        TWO sources, because a value reaches a run record by two different roads and
+        a trend that knows only one is a page full of dead links:
+
+        * ``runs.fit`` — what ``estimate()`` returned (t1_s, t2_star_s, pi_amp, ...).
+        * ``runs.suggestions`` — what ``update()`` proposed and a human ACCEPTED. Every
+          governed knob and every monitor arrives this way and ONLY this way: the
+          session swaps a SuggestionCapture in around ``update()``, so those writes
+          never touch ``fit``. readout_rotation_rad, fidelity_g, pos_* ... all of it.
+
+        A run contributes at most ONE point: the fit value when it has one, else the
+        accepted suggestion (``pi_amp`` is both on a power-Rabi run, and plotting it
+        twice per run would be a lie about how often it was measured). Only
+        ``accepted`` suggestions count — a pending or rejected proposal never became
+        the device's value.
+
+        Suggestions are keyed by channel ENTITY (``q1_ro``) while fits are keyed by
+        TARGET (``q1``), and this module is deliberately roster-free, so the match is
+        by name: the entity itself or a rider the roster minted from it
+        (``<target>_ro`` / ``_xy`` / ``_z``). Field names do not repeat across a
+        target's channels, so this cannot collide in practice.
+
+        The JSON paths are passed as bound parameters, so arbitrary names are safe.
         ``device`` narrows to one sample — qubit names repeat across samples ("q1"
         exists on every chip), so multi-device data roots should always pass it.
         """
         path = f"$.{qubit}.{quantity}"
-        sql = (
+        dev_sql = "AND {col}device = ? " if device is not None else ""
+        dev_args: list[Any] = [device] if device is not None else []
+
+        fit_sql = (
             "SELECT run_id, started_at, experiment, json_extract(fit, ?) AS value "
             "FROM runs WHERE json_extract(fit, ?) IS NOT NULL "
+            + dev_sql.format(col="") +
+            "ORDER BY started_at LIMIT ?"
         )
-        args: list[Any] = [path, path]
-        if device is not None:
-            sql += "AND device = ? "
-            args.append(device)
-        sql += "ORDER BY started_at LIMIT ?"
-        args.append(int(limit))
+        # json_each expands the suggestions ARRAY into one row per suggestion.
+        # ESCAPE: the rider prefix contains a literal '_', which LIKE would
+        # otherwise read as "any character".
+        sug_sql = (
+            "SELECT r.run_id AS run_id, r.started_at AS started_at, "
+            "       r.experiment AS experiment, "
+            "       json_extract(s.value, '$.after') AS value "
+            "FROM runs r, json_each(r.suggestions) s "
+            "WHERE json_extract(s.value, '$.field') = ? "
+            "  AND json_extract(s.value, '$.status') = 'accepted' "
+            "  AND json_extract(s.value, '$.after') IS NOT NULL "
+            "  AND (json_extract(s.value, '$.entity') = ? "
+            "       OR json_extract(s.value, '$.entity') LIKE ? ESCAPE '\\') "
+            + dev_sql.format(col="r.") +
+            "ORDER BY r.started_at LIMIT ?"
+        )
         with self._connect() as db:
-            rows = db.execute(sql, args).fetchall()
-        return [dict(r) for r in rows]
+            fit_rows = db.execute(fit_sql, [path, path, *dev_args, int(limit)]).fetchall()
+            sug_rows = db.execute(
+                sug_sql,
+                [quantity, qubit, f"{qubit}\\_%", *dev_args, int(limit)],
+            ).fetchall()
+
+        # One point per run, fit first: `pi_amp` is both a fit key and an accepted
+        # suggestion on a power-Rabi run, and plotting it twice would misreport how
+        # often it was measured.
+        merged: dict[str, dict] = {r["run_id"]: dict(r) for r in sug_rows}
+        merged.update({r["run_id"]: dict(r) for r in fit_rows})
+        ordered = sorted(merged.values(), key=lambda r: r["started_at"])
+        return ordered[:int(limit)]
 
     def load_run(self, run_id: str) -> dict:
         """Load one run's JSON-able contents (record, parameters, result, figure paths)."""

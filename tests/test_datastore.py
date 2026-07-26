@@ -411,6 +411,72 @@ def test_multi_device_one_index(tmp_path):
     assert [r["run_id"] for r in scoped] == [rb["run_id"]]
 
 
+@register
+class _TrendKnobResonatorSpectroscopy(_DsResonatorSpectroscopy):
+    """Test-only: also proposes a knob that appears in NO fit — the shape of every
+    governed knob a driver's update() calibrates (readout_rotation_rad on Qblox)."""
+
+    name = "trend_knob_resonator_spectroscopy"
+    description = "test-only: an update()-only knob"
+
+    def update(self) -> None:
+        super().update()
+        for target in self.params.targets:
+            self.device.channel(target, "readout").readout_amp = 0.42
+
+
+def test_trend_includes_accepted_knob_suggestions(tmp_path):
+    """A knob calibrated in update() never reaches `fit` — the session intercepts
+    those writes into Suggestions — so a trend that reads only `runs.fit` shows
+    nothing for it. chipA 2026-07-26: three accepted readout_rotation_rad updates,
+    empty trend page."""
+    from scqo import DataStore
+
+    sess = _session(tmp_path)
+    r = sess.run("trend_knob_resonator_spectroscopy", {"targets": ["q1"]})
+    store = DataStore(tmp_path / "data")
+
+    assert store.fit_trend("q1", "readout_amp") == [], "not accepted yet"
+
+    sess.accept(r["run_id"])
+    rows = store.fit_trend("q1", "readout_amp")
+    assert [x["run_id"] for x in rows] == [r["run_id"]]
+    assert rows[0]["value"] == 0.42
+    # keyed by TARGET even though the suggestion lives on the q1_ro entity
+    assert store.fit_trend("q0", "readout_amp") == []
+
+
+def test_trend_ignores_undecided_and_rejected_suggestions(tmp_path):
+    """A proposal that never became the device's value is not a measurement."""
+    from scqo import DataStore
+
+    sess = _session(tmp_path)
+    pending = sess.run("trend_knob_resonator_spectroscopy", {"targets": ["q1"]})
+    rejected = sess.run("trend_knob_resonator_spectroscopy", {"targets": ["q1"]})
+    sess.reject(rejected["run_id"], fields=["readout_amp"])
+
+    store = DataStore(tmp_path / "data")
+    trended = {x["run_id"] for x in store.fit_trend("q1", "readout_amp")}
+    assert pending["run_id"] not in trended
+    assert rejected["run_id"] not in trended
+
+
+def test_trend_counts_a_run_once_when_it_both_fits_and_suggests(tmp_path):
+    """readout_freq_hz is a fit key AND an accepted suggestion on the same run.
+    Two rows would misreport how often it was measured."""
+    from scqo import DataStore
+
+    sess = _session(tmp_path)
+    r = sess.run("resonator_spectroscopy", {"targets": ["q1"]}, update="apply")
+
+    store = DataStore(tmp_path / "data")
+    rows = store.fit_trend("q1", "readout_freq_hz")
+    assert [x["run_id"] for x in rows] == [r["run_id"]]
+    # the fit value wins over the suggestion's `after` (identical here, but the
+    # fit is the measurement and the suggestion is the decision about it)
+    assert rows[0]["value"] == r["fit"]["q1"]["readout_freq_hz"]
+
+
 def test_operator_is_stamped_and_survives_reindex(tmp_path):
     """Multi-user provenance: every run records the OS login of whoever ran it."""
     import getpass
