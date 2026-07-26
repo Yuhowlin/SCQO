@@ -229,6 +229,31 @@ so reindex heals any skipped write); multi-PC writers need per-PC data_roots.
 3. `@register` the subclass so it appears in `catalog()`.
 Parameters, Result, `estimate`, `simulate` and `update` are inherited unchanged.
 
+### Testing discipline — run only what the edit can break
+Default for a localized change (from `D:\github\SCQO`): `uv run pytest tests/test_model_experiments.py -k ramsey -q`.
+Selection map for experiment work (`scqo/experiments/<name>.py`) — always the first row, plus any that apply:
+
+| Also changed | Add to the run |
+|---|---|
+| *always* | `tests/test_model_experiments.py -k <stem>` |
+| a capability mixin (`_capabilities/`) | `tests/test_capabilities.py` **+ `tests/test_model_experiments.py` UNFILTERED** — drop the `-k`: a mixin edit is shared-core for every experiment that subclasses it, and only the full every-experiment sweep catches the ones you didn't think of (~50 s, 30 tests) |
+| a time axis (`idle_time_ns`-style grid) | `tests/test_time_grid.py -k <stem>` |
+| `Contract` / `define_sweep` | `tests/test_contract.py` (small — run whole) |
+| a `*_method` Literal | `tests/test_estimator_method_sync.py` |
+| a `catalog.py` FieldSpec | `tests/test_model_catalog.py` |
+| Parameters defaults/overlay plumbing | `tests/test_parameter_defaults.py` |
+
+`-k` takes the **distinctive stem, not the registered name**: `-k ramsey` matches both
+`test_every_experiment_runs_clean[qubit_ramsey]` and `test_ramsey_writes_drive_freq_fact_twin_and_t2`,
+while `-k qubit_ramsey` misses the second. **0 collected means the filter was wrong** — widen it, never skip.
+Leave `test_cli_*.py` (20 subprocess spawns), `test_index_scale.py` (100k rows) and `test_viewer.py` alone
+unless the edit is in `scqo/cli/`, `scqo/datastore.py` or `scqo/viewer/` respectively.
+
+The **full suite** (`uv run pytest -q`) is for exactly two cases: (1) cutting a release, and (2) an edit to
+shared core, where the blast radius is everything — `catalog.py`, `entities.py`, `roster.py`, `stores.py`,
+`device.py`, `experiment.py`, `session.py`. Otherwise **report the exact command run** and offer the
+full-suite command instead of spending the minutes unasked.
+
 ### Experiment governance (3 tiers) + promotion checklist
 1. **Students** use the `scqo` command (`scqo run` / `scqo find` / `scqo user`) with
    `~/.scqo/config.toml`; they change nothing in the governed repos.
