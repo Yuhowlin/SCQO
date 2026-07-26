@@ -249,7 +249,9 @@ while `-k qubit_ramsey` misses the second. **0 collected means the filter was wr
 Leave `test_cli_*.py` (20 subprocess spawns), `test_index_scale.py` (100k rows) and `test_viewer.py` alone
 unless the edit is in `scqo/cli/`, `scqo/datastore.py` or `scqo/viewer/` respectively.
 
-The **full suite** (`uv run pytest -q`) is for exactly two cases: (1) cutting a release, and (2) an edit to
+The **full suite** (`uv run pytest -q`) costs **476 tests / ~7 min** — the `test_cli_*.py` subprocess
+tests dominate it (`test_cli_cooldown` alone is 42 s, three `test_cli_run` cases 23–30 s each). It is
+for exactly two cases: (1) cutting a release, and (2) an edit to
 shared core, where the blast radius is everything — `catalog.py`, `entities.py`, `roster.py`, `stores.py`,
 `device.py`, `experiment.py`, `session.py`. Otherwise **report the exact command run** and offer the
 full-suite command instead of spending the minutes unasked.
@@ -294,4 +296,4 @@ unique locks experiments to that instrument.
 - `D:\github\QBLOX_training` — read-only Qblox reference docs (`docs/applications/superconducting/single_qubit_experiment_helpers/experiment.py`, `cal*.py`, `custom_elements.py`).
 
 ## Status
-Current published release: **v0.14.0** — see `RELEASES.toml` for the combo manifest and required upgrade actions. Release history lives in git tags + `RELEASES.toml`, not here.
+Current published release: **v0.15.0** — see `RELEASES.toml` for the combo manifest and required upgrade actions. Release history lives in git tags + `RELEASES.toml`, not here.
