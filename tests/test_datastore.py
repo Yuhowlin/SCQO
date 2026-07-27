@@ -7,6 +7,7 @@ disposable cache — several tests delete/rebuild it to prove that.
 from __future__ import annotations
 
 import json
+import re
 import threading
 from pathlib import Path
 
@@ -379,6 +380,80 @@ def test_old_index_schema_triggers_rebuild(tmp_path):
     assert [x["run_id"] for x in sess2.find_runs()] == [r["run_id"]]
 
 
+#: The v8 `runs` layout, verbatim — no campaign/repeat_idx/step_idx. Kept as literal
+#: DDL because the point of the test is a table this code can no longer produce.
+_V8_RUNS = """
+CREATE TABLE runs (
+  run_id TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT,
+  experiment TEXT NOT NULL, device TEXT NOT NULL, backend TEXT NOT NULL,
+  operator TEXT NOT NULL DEFAULT '', cooldown TEXT NOT NULL DEFAULT '',
+  setup TEXT NOT NULL DEFAULT '', targets TEXT NOT NULL, outcome TEXT NOT NULL,
+  outcomes TEXT NOT NULL, fit TEXT, tags TEXT NOT NULL DEFAULT '[]',
+  note TEXT NOT NULL DEFAULT '', error TEXT, parameters TEXT NOT NULL,
+  updated_device INTEGER NOT NULL DEFAULT 0, suggestions TEXT NOT NULL DEFAULT '[]',
+  suggestions_pending INTEGER NOT NULL DEFAULT 0, path TEXT NOT NULL,
+  schema_version INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (run_id, device)
+);
+"""
+
+
+def _downgrade_index_to_v8(db_path, keep_version: str | None = "8") -> None:
+    """Replace the index with a real v8-shaped one (rows preserved, columns dropped)."""
+    import sqlite3
+
+    con = sqlite3.connect(db_path)
+    con.row_factory = sqlite3.Row
+    cols = [c.strip().split()[0] for c in _V8_RUNS.split("(", 1)[1].rsplit(")", 2)[0].split(",")
+            if c.strip() and not c.strip().upper().startswith("PRIMARY KEY")]
+    rows = [tuple(r[c] for c in cols) for r in con.execute("SELECT * FROM runs")]
+    con.execute("DROP TABLE runs")
+    con.execute("DROP TABLE IF EXISTS campaigns")
+    con.executescript(_V8_RUNS)
+    con.executemany(f"INSERT INTO runs ({', '.join(cols)}) "
+                    f"VALUES ({','.join('?' * len(cols))})", rows)
+    if keep_version is None:
+        con.execute("DELETE FROM meta WHERE key = 'schema_version'")
+    else:
+        con.execute("UPDATE meta SET value = ? WHERE key = 'schema_version'", (keep_version,))
+    con.commit()
+    con.close()
+
+
+def test_a_real_old_table_layout_is_dropped_not_patched(tmp_path):
+    """The regression for `sqlite3.OperationalError: no such column: campaign`.
+
+    test_old_index_schema_triggers_rebuild above only rewrites the meta VALUE, so its
+    table is already current — it never proves the recovery path. Here the table is
+    genuinely v8, which is what an existing lab index is: `CREATE TABLE IF NOT EXISTS`
+    keeps it, and the v9 index over `campaign` then fails at OPEN time, before any
+    version check can fire. The version must therefore be read FIRST.
+    """
+    from scqo import DataStore
+
+    sess = _session(tmp_path)
+    r = sess.run("resonator_spectroscopy", {"targets": ["q0"]})
+    _downgrade_index_to_v8(sess.datastore._db_path)
+
+    store = DataStore(tmp_path / "data", device_name="devA")  # must not raise
+    assert [x["run_id"] for x in store.find_runs()] == [r["run_id"]]
+    assert store.find_campaigns() == []  # the campaigns table exists again
+    assert store.find_runs()[0]["campaign"] == ""
+
+
+def test_an_index_with_no_recorded_version_is_rebuilt_too(tmp_path):
+    """Pre-meta indexes cannot be trusted either — an absent version + a live `runs`
+    table means "older than the version marker", not "brand new"."""
+    from scqo import DataStore
+
+    sess = _session(tmp_path)
+    r = sess.run("resonator_spectroscopy", {"targets": ["q0"]})
+    _downgrade_index_to_v8(sess.datastore._db_path, keep_version=None)
+
+    store = DataStore(tmp_path / "data", device_name="devA")
+    assert [x["run_id"] for x in store.find_runs()] == [r["run_id"]]
+
+
 def test_without_data_root_behaves_as_before(tmp_path):
     roster, design, vendor = demo_device()
     sess = Session(SimulatedBackend(vendor), roster, design=design)
@@ -477,6 +552,43 @@ def test_trend_counts_a_run_once_when_it_both_fits_and_suggests(tmp_path):
     assert rows[0]["value"] == r["fit"]["q1"]["readout_freq_hz"]
 
 
+def test_browse_metadata_queries_match_the_live_schema(tmp_path):
+    """The datasette canned queries must run against a real index.
+
+    Nothing in the package reads ``browse_metadata.json`` — datasette does, at
+    runtime — so a column rename breaks every saved query silently. The v8
+    ``qubits`` -> ``targets`` rename did exactly that to three of the four.
+    """
+    import re
+    import sqlite3
+
+    from scqo import browse
+
+    sess = _session(tmp_path, default_tags=["browsetest"])
+    run = sess.run("resonator_spectroscopy", {"targets": ["q1"]})
+    quantity = next(iter(run["fit"]["q1"]))  # whatever this estimator fitted
+    bindings = {"tag": "browsetest", "target": "q1", "quantity": quantity}
+
+    metadata = json.loads(Path(browse.__file__).with_name("browse_metadata.json").read_text())
+    queries = metadata["databases"]["index"]["queries"]
+    con = sqlite3.connect(sess.datastore._db_path)
+    con.row_factory = sqlite3.Row
+    try:
+        rows = {}
+        for name, query in queries.items():
+            sql = query["sql"]
+            params = set(re.findall(r":(\w+)", sql))
+            assert params <= set(bindings), f"{name}: unknown parameter(s) {params - set(bindings)}"
+            rows[name] = [dict(r) for r in con.execute(sql, {k: bindings[k] for k in params})]
+    finally:
+        con.close()
+
+    assert [r["run_id"] for r in rows["runs_by_tag"]] == [run["run_id"]]
+    assert [r["run_id"] for r in rows["runs_by_target"]] == [run["run_id"]]
+    assert rows["failed_runs"] == [], "the run succeeded"
+    assert [r["value"] for r in rows["fit_trend"]] == [run["fit"]["q1"][quantity]]
+
+
 def test_operator_is_stamped_and_survives_reindex(tmp_path):
     """Multi-user provenance: every run records the OS login of whoever ran it."""
     import getpass
@@ -508,6 +620,30 @@ def test_run_ids_unique_across_devices_same_second(tmp_path):
     id_b, _ = b.new_run_dir("resonator_spectroscopy")
     assert id_a != id_b
     assert "devA" in id_a and "devB" in id_b
+
+
+def test_run_id_format_is_pinned(tmp_path):
+    """Nothing PARSES a run_id, but the shape is a user-facing sort key — changing it
+    should be deliberate. Millisecond precision is load-bearing (see the 100-in-a-row
+    test below)."""
+    from scqo import DataStore
+
+    run_id, run_dir = DataStore(tmp_path / "data", device_name="devA").new_run_dir("qubit_echo")
+    assert re.fullmatch(r"\d{8}-\d{6}-\d{3}-devA-qubit_echo-\d{2}", run_id), run_id
+    assert run_dir.name == run_id
+
+
+def test_a_hundred_run_dirs_in_one_second(tmp_path):
+    """The regression for the old 99-per-(second, device, experiment) cap.
+
+    It was a hard RuntimeError raised OUTSIDE Session.run's try block — so a
+    `--repeat 100` campaign on the simulated backend would abort mid-flight and lose
+    everything already collected. Millisecond stamps removed the cap."""
+    from scqo import DataStore
+
+    store = DataStore(tmp_path / "data", device_name="devA")
+    ids = [store.new_run_dir("qubit_relaxation")[0] for _ in range(100)]
+    assert len(set(ids)) == 100
 
 
 def test_device_registry_loader(tmp_path):
@@ -762,7 +898,7 @@ def test_old_index_auto_reindexes_to_v8(tmp_path):
     con = sqlite3.connect(db_path)
     (version,) = con.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
     con.close()
-    assert version == "8"
+    assert version == "9"
 
 
 def test_setup_validation_rejects_any_typed_instrument_config(tmp_path):

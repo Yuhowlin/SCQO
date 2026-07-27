@@ -15,6 +15,49 @@ from .entities import Channel, Composite, Line, Mode
 from .roster import Roster
 
 
+def catalog_fields(*roles: str) -> list[str]:
+    """Catalog field names of the given roles, in declaration order (deduped
+    across kinds)."""
+    out: list[str] = []
+    for kinds in (MODES, COMPOSITES, CHANNELS):
+        for spec in kinds.values():
+            for f, fs in spec.fields.items():
+                if fs.role in roles and f not in out:
+                    out.append(f)
+    return out
+
+
+PHYSICAL_FIELD_ORDER = catalog_fields("fact")
+INSTRUMENT_FIELD_ORDER = catalog_fields("knob", "monitor")
+
+#: Quantities never tracked as device state (instrument-dependent; a recorded
+#: decision), but still worth reporting from a run's fit.
+FIT_ONLY_QUANTITIES = ("p_e_given_g",)
+
+#: Everything worth OFFERING as a trend: measured physics, then monitors, then
+#: calibration knobs. Derived from the kind catalogs by field ROLE, never a
+#: hand-kept list — an experiment writing catalogued fields is covered for free
+#: and a quantity cannot rot out of the set. Consumer: the viewer's /trends menu,
+#: where trending a knob over time is a legitimate question.
+REPORTABLE_QUANTITIES = (
+    *PHYSICAL_FIELD_ORDER,
+    *catalog_fields("monitor"),
+    *catalog_fields("knob"),
+    *FIT_ONLY_QUANTITIES,
+)
+
+#: The subset that can actually MOVE on its own: facts and monitors the fit
+#: measured, never knobs. A knob appearing in a fit dict is the standing value the
+#: run was configured with, so in an update="none" campaign it is constant by
+#: construction — printing it on a live progress line spends width on a number
+#: that cannot drift. Consumer: the campaign progress line.
+MEASURED_QUANTITIES = (
+    *PHYSICAL_FIELD_ORDER,
+    *catalog_fields("monitor"),
+    *FIT_ONLY_QUANTITIES,
+)
+
+
 def _origin(entity) -> str:
     return str(entity.derived) if entity.derived is not None else "declared"
 

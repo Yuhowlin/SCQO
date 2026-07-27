@@ -89,6 +89,24 @@ def test_invalid_params_return_structured_not_raise(session):
                       {"targets": ["q0"], "num_points": 1})
     assert "invalid parameters" in out["error"]
     assert out.get("run_id") is None                  # nothing persisted
+    # EVERY return of run() carries "suggestions", so a caller in a loop
+    # (run_campaign) can read it blind — this early return used to omit it.
+    assert out["suggestions"] == []
+
+
+def test_run_campaign_repeats_and_summarizes(session):
+    """The run-flow twin of the campaign suite: N runs, one manifest, statistics."""
+    out = session.run_campaign({
+        "label": "t1_stability", "repeat": 3, "defaults": {"targets": ["q0"]},
+        "steps": [{"experiment": "resonator_spectroscopy", "params": {"num_points": 61}}],
+    })
+    assert out["status"] == "complete" and out["repeat_done"] == 3
+    assert out["statistics"]["resonator_spectroscopy"]["q0"]["f_r_hz"]["n"] == 3
+    children = session.campaign_runs(out["campaign_id"])
+    assert [c["repeat_idx"] for c in children] == [0, 1, 2]
+    # update defaults to "none" for a campaign: no pending suggestions to go stale
+    assert session.physical_state() == {}
+    assert all(not c["suggestions"] for c in children)
 
 
 def test_design_seeded_anchor_tags_the_run(tmp_path):

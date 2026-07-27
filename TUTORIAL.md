@@ -350,6 +350,108 @@ the amplitude sawtooths around 0.5 — so every map records what the instrument
 was actually doing. Every run also records the raw chain values (`power_context`
 in record.json), so past axes stay interpretable even after the chain changes.
 
+### Repeating a measurement — campaigns
+
+One run gives one T1. A **campaign** gives you a hundred, each with its own timestamp,
+so you can ask whether the qubit actually drifted:
+
+```bash
+scqo run qubit_relaxation --targets q1 --repeat 100 --period 300
+```
+
+That is 100 separate saved runs, one every 5 minutes, plus a table:
+
+```
+experiment             target   quantity                n  miss        mean         std         sem         min         max  std/err
+qubit_relaxation       q1       t1_s                   98     2  4.1310e-05  3.1000e-06  3.1300e-07  3.4200e-05  4.9300e-05     3.88
+```
+
+The last column is the one to read. **`std/err` is the across-repeat scatter divided
+by the mean per-fit standard error**: much greater than 1 means the qubit really moved
+between repeats; around 1 means the spread is just fit noise and the qubit was stable.
+A `-` means that fit publishes no standard error for that quantity (`t2_star_s` is
+the common case), not that the scatter is zero.
+
+To repeat a **bundle** of different experiments, write a plan file. The bundle is
+walked in order, and the whole bundle is what repeats — so all four numbers in one
+repeat come from the same few minutes and are comparable with each other:
+
+```toml
+# t1_stability.toml
+label = "t1_stability"
+repeat = 100
+period_s = 300          # minimum seconds between repeat STARTS (a floor, never padding)
+max_duration_s = 43200  # give up after 12 h whatever happens
+skip_artifacts = true   # 400 runs x per-qubit figures is a lot of disk
+tags = ["stability", "overnight"]
+
+[defaults]
+targets = ["q1"]
+
+[[steps]]
+experiment = "qubit_relaxation"
+[[steps]]
+experiment = "qubit_ramsey"
+[[steps]]
+experiment = "qubit_echo"
+[[steps]]
+experiment = "single_shot_readout"
+params = { num_shots = 4000 }
+```
+
+```bash
+scqo campaign t1_stability.toml --dry-run   # validate + show what would run
+scqo campaign t1_stability.toml             # ...then actually run it
+scqo campaign --list                        # what has run
+scqo campaign --show <campaign_id>          # plan + statistics + every child run
+scqo find --campaign <campaign_id>          # the children as ordinary runs
+```
+
+**Always `--dry-run` first for a long one.** It builds every step's parameters and
+checks every target against the roster without touching the instrument, so a typo
+shows up now instead of at 3 a.m. on repeat 100.
+
+While it runs you get a live log, so an overnight campaign is never a silent box:
+
+```
+# repeat    1/100  started 20:15:03
+#   qubit_relaxation      q1       ok     t1_s=4.13100e-05                          2.4s
+#   qubit_ramsey          q1       ok     f_01_hz=3.8e+09  t2_star_s=7.99580e-06     2.9s
+#   qubit_echo            q1       ok     t2_echo_s=3.05340e-05                      2.1s
+#   single_shot_readout   q1       ok     p_e_given_g=0.0425                         3.1s
+# waiting 4m47s for the next repeat (period_s=300)
+# repeat    2/100  started 20:20:03   eta 04:22 (+8h02m)
+#   qubit_relaxation      q1       ok     t1_s=4.09800e-05                           2.4s
+#   qubit_ramsey          q1       FAILED ValueError: fit did not converge           2.8s
+```
+
+Reading it: the ETA appears from the second repeat (the first has no history to
+extrapolate from), a step that fails says so and keeps going, and the values shown
+are the *measured* ones — settings you configured, like `drive_freq_hz`, are left
+out because they cannot drift. All of it goes to **stderr**, so stdout stays clean
+for `--json | jq`; silence it with `2>$null` or capture it with `2>run.log`.
+
+Things worth knowing before you leave one running overnight:
+
+- **The device is not touched.** A campaign runs with updates off, because 100 repeats
+  would each propose the same change and accepting one makes the other 99 stale. Read
+  the mean off the table and write it deliberately: `scqo set q1.t1_s=41.31e-6`.
+  (`--accept` does exist, for a deliberate repeated *re-tuning* — but then the device
+  moves under its own measurement and the spread describes the tuning loop, not the qubit.)
+- **Ctrl-C is safe.** The campaign finalizes with the repeats already done and its
+  statistics are complete for those; nothing is lost.
+- **You can watch it from another terminal.** The manifest is rewritten after every
+  repeat, so `scqo campaign --show <campaign_id>` gives live statistics while the
+  campaign is still running.
+- **It stops itself** when the wall-clock budget runs out, or after 5 consecutive
+  repeats in which nothing succeeded (a disconnected instrument won't spend the night
+  filling your disk with failures). One flaky fit among four steps is not a failed
+  repeat — it shows up as `miss` in the table.
+- **A failed fit is counted, not hidden.** `n` and `miss` always add up to the repeats
+  attempted, so you can see how often the measurement worked.
+- Each child is an ordinary run in the ordinary day folder, stamped with its campaign
+  and its repeat/step number — `scqo find --show <run_id>`, figures and all.
+
 ## 3. Finding your data (the whole point)
 
 ```bash
@@ -380,6 +482,8 @@ when suggested updates are still undecided, and the folder path.)
   (also backend-free).
 - `--pending` narrows to runs whose suggested updates are still undecided —
   `scqo accept` shows the same list and is where you decide (section 2).
+- `--campaign <campaign_id>` narrows to one campaign's children; `scqo campaign --show`
+  lists the same runs in execution order instead of newest-first.
 
 ## 4. What's inside a run folder
 
@@ -399,6 +503,18 @@ when suggested updates are still undecided, and the folder path.)
 
 (A Ramsey run looks the same with its own artifacts: `ramsey_time_domain.png`,
 `ramsey_fft_spectrum.png`, etc.)
+
+A campaign adds one folder of its own — a sibling of the day folders, because an
+overnight campaign crosses midnight:
+
+```
+<data_root>/SQ_demo/campaigns/20260727-221503-472-SQ_demo-t1_stability-01/
+    campaign.json        the plan, the status, and the statistics table
+    repeats.jsonl        one line per completed repeat: which runs, when, outcome
+```
+
+`repeats.jsonl` deliberately stores no fitted numbers — the child runs' `result.json`
+stays the one place every number lives.
 
 **The folder is the truth.** The SQLite index (`<data_root>/index.sqlite`) is only a
 cache — if it is ever missing or stale, rebuild it losslessly:

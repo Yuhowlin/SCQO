@@ -30,7 +30,7 @@ def _row(device: str, i: int) -> tuple:
         f"r{i:07d}", ts, ts, "resonator_spectroscopy", device, "qblox",
         '["q1"]', "successful", '{"q1": "successful"}',
         '{"q1": {"readout_freq": 6.0e9}}', '["cooldown1"]', "", None, "{}",
-        1, f"{device}/2026-01-01/r{i:07d}", 8,
+        1, f"{device}/2026-01-01/r{i:07d}", 9,
     )
 
 

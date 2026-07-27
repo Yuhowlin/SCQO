@@ -33,6 +33,8 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
     parser.add_argument("--cooldown", help="filter by cooldown-cycle id, e.g. cd8")
     parser.add_argument("--setup", help="filter by setup name (unique per cycle only — "
                                         "combine with --cooldown)")
+    parser.add_argument("--campaign", metavar="CAMPAIGN_ID",
+                        help="filter to one campaign's children (see scqo campaign --list)")
     parser.add_argument("--pending", action="store_true",
                         help="only runs with undecided suggested updates (decide: scqo accept)")
     parser.add_argument("--limit", type=int, default=20)
@@ -53,6 +55,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
         experiment=args.experiment, target=args.target, tag=args.tag, since=args.since,
         until=args.until, outcome=args.outcome, device=args.device,
         operator=args.operator, cooldown=args.cooldown, setup=args.setup,
+        campaign=args.campaign,
         pending=True if args.pending else None, limit=args.limit,
     )
     if not runs:
@@ -63,7 +66,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
         targets = ",".join(r.get("targets") or r.get("qubits") or [])
         operator = r.get("operator") or "-"
         pend = f"pend:{r['suggestions_pending']}" if r.get("suggestions_pending") else ""
-        print(f"{r['run_id']:44s} {r['outcome']:10s} {targets:12s} {operator:10s} {tags:20s} {pend:8s} {r['path']}")
+        print(f"{r['run_id']:48s} {r['outcome']:10s} {targets:12s} {operator:10s} {tags:20s} {pend:8s} {r['path']}")
     print(f"\n({len(runs)} run(s); data_root = {store.data_root})")
     return 0
 

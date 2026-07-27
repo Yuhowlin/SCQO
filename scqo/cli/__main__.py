@@ -15,6 +15,7 @@ import sys
 #: subcommand -> (module in scqo.cli, one-line help)
 _COMMANDS = {
     "run": ("run", "run any cataloged experiment (no name = show the catalog)"),
+    "campaign": ("campaign", "walk a bundle of experiments N times; statistics over the fits"),
     "find": ("find", "query saved runs (no instrument touched)"),
     "accept": ("accept", "review / apply / reject a run's suggested updates (by run id)"),
     "suggest": ("suggest", "attach YOUR manually-read value to a run (fit failed, figure didn't)"),

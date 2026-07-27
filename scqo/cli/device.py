@@ -44,7 +44,7 @@ from pathlib import Path
 from scqo import DataStore, load_lab_config
 from scqo.datastore import (
     COOLDOWNS_FILE,
-    _SETUP_NAME_RE,
+    SLUG_RE,
     active_cooldown,
     load_cooldowns,
     load_device_registry,
@@ -232,7 +232,7 @@ def _show(cfg) -> int:
 def _start(cfg, cid: str, fridge: str, packaging: str, note: str) -> int:
     device = _device(cfg)
     path = _registry_path(cfg)
-    if not _SETUP_NAME_RE.match(cid):
+    if not SLUG_RE.match(cid):
         raise SystemExit(f"cycle id {cid!r} must be letters/digits/_/- only "
                          "(it becomes a TOML table header, a run stamp and a CLI argument)")
     cycles = load_cooldowns(cfg.data_root, device)

@@ -60,6 +60,7 @@ from .checks import Check, all_checks
 from .backend import Backend
 from .experiment import Experiment
 from .experiments import catalog, get, register
+from .campaign import CampaignPlan, CampaignStep, load_campaign_plan
 from .datastore import DataStore, RunRecord, reindex
 from .labconfig import LabConfig, load as load_lab_config, make_session
 from .session import Session
@@ -84,6 +85,7 @@ __all__ = [
     "freeze", "verify", "LockError", "Check", "all_checks",
     # orchestration
     "Backend", "Experiment", "register", "get", "catalog",
+    "CampaignPlan", "CampaignStep", "load_campaign_plan",
     "DataStore", "RunRecord", "reindex",
     "LabConfig", "load_lab_config", "make_session", "Session",
 ]

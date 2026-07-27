@@ -26,7 +26,7 @@ knobs/monitors through the recording device (vendor-push-first).
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from .datastore import DataStore
 from .design import Design
@@ -41,6 +41,50 @@ from .suggestions import (
     reject_suggestions,
     select_suggestions,
 )
+
+if TYPE_CHECKING:  # lazy at runtime: campaign.py is only needed by run_campaign
+    from .campaign import CampaignPlan
+
+
+def _safe_progress(on_progress):
+    """Wrap a progress callback so it can never kill the campaign.
+
+    A progress display is a convenience; an overnight measurement is not. A
+    raising callback is reported ONCE on stderr and then dropped for the rest of
+    the run — the same doctrine as ``_scqat``'s artifact-write fallback, where
+    losing the pretty output must never lose the measurement. ``None`` becomes a
+    no-op so the call sites stay unconditional."""
+    if on_progress is None:
+        return lambda event: None
+    state = {"broken": False}
+
+    def emit(event: dict):
+        if state["broken"]:
+            return None
+        try:
+            return on_progress(event)
+        except Exception as err:  # pragma: no cover - defensive
+            import sys
+
+            state["broken"] = True
+            print(f"scqo: progress callback failed ({type(err).__name__}: {err}); "
+                  "continuing without progress output", file=sys.stderr)
+            return None
+
+    return emit
+
+
+def _repeat_skeleton(row: dict) -> dict:
+    """One repeat, without the fit VALUES — what ``repeats.jsonl`` stores.
+
+    The child's ``result.json`` (and the indexed ``runs.fit`` column) is the one
+    truth for every number; a campaign's only derived numbers are the aggregate
+    statistics in the manifest. Copying fits into a second file would create a
+    second authority that can silently disagree with the first."""
+    return {
+        **{k: v for k, v in row.items() if k != "steps"},
+        "steps": [{k: v for k, v in step.items() if k != "fit"} for step in row["steps"]],
+    }
 
 
 class Session:
@@ -128,12 +172,23 @@ class Session:
 
     def run(self, experiment: str, params: dict[str, Any],
             update: str | bool = "suggest", *,
-            tags: list[str] | None = None, note: str = "") -> dict:
+            tags: list[str] | None = None, note: str = "",
+            skip_artifacts: bool = False,
+            campaign: tuple[str, int, int] | None = None) -> dict:
         """Run an experiment by name; return its structured result as a dict.
         ``update``: "suggest" (default — update() captured as pending
         Suggestions), "apply" (capture then immediately accept), "none".
         A failed run returns a structured result with ``error`` set, never
-        raises; with a data_root every run persists to its own folder."""
+        raises; with a data_root every run persists to its own folder.
+
+        ``skip_artifacts`` writes no ``analysis/`` folder — no figures, and no
+        scqat metadata or plotdata either (they share one switch); ``dataset.nc``
+        and ``result.json`` still land. It exists for long campaigns, where
+        per-qubit artifacts multiply by the repeat count.
+
+        ``campaign`` is ``(campaign_id, repeat_idx, step_idx)``, set only by
+        :meth:`run_campaign` — it stamps the run record so a child is
+        self-describing."""
         from pydantic import ValidationError
 
         from . import experiments as registry
@@ -150,8 +205,10 @@ class Session:
         try:
             validated = cls.Parameters(**merged)
         except ValidationError as err:
-            return self._invalid_params(cls, merged, defaults, params,
-                                        err).model_dump(mode="json")
+            # "suggestions" unconditionally: every return of run() carries the
+            # key, so a caller in a loop (run_campaign) can read it blind.
+            return {**self._invalid_params(cls, merged, defaults, params, err)
+                    .model_dump(mode="json"), "suggestions": []}
         exp = cls(self.backend, validated)
         exp.device = self.device  # route through the recording surface
         exp.design = self.design
@@ -164,7 +221,8 @@ class Session:
         run_id = run_dir = None
         if self.datastore is not None:
             run_id, run_dir = self.datastore.new_run_dir(experiment)
-            exp.artifact_dir = run_dir / "analysis"
+            if not skip_artifacts:
+                exp.artifact_dir = run_dir / "analysis"
 
         device_before = self.device.snapshot()
         self.device.set_context(experiment, run_id)
@@ -236,7 +294,8 @@ class Session:
                     tags=list(dict.fromkeys(
                         [*self.default_tags, *(tags or []),
                          *getattr(exp, "seed_tags", [])])),
-                    note=note)
+                    note=note,
+                    campaign=campaign)
             except Exception as err:  # never lose a measurement over a save
                 payload["datastore_error"] = f"{type(err).__name__}: {err}"
             else:
@@ -244,6 +303,330 @@ class Session:
                 payload["data_path"] = str(run_dir)
         payload["suggestions"] = suggestion_dicts
         return payload
+
+    # ----------------------------------------------------------- campaigns
+
+    def run_campaign(
+        self,
+        plan: "CampaignPlan | dict",
+        *,
+        update: str | bool = "none",
+        tags: list[str] | None = None,
+        note: str = "",
+        on_progress=None,
+    ) -> dict:
+        """Walk a :class:`~scqo.campaign.CampaignPlan`'s steps ``repeat`` times.
+
+        OUTER repetition: every (repeat, step) is a full :meth:`run` with its own
+        run folder, dataset, fit and TIMESTAMP, stamped with
+        ``(campaign, repeat_idx, step_idx)``. Interleaved by construction — the
+        outer loop is the repeat — so every quantity within one repeat shares a
+        drift epoch and ``T1[k]`` is comparable with ``T2*[k]``. Returns the
+        manifest: status, counts, the per-(experiment, target, quantity)
+        statistics, and the repeat skeleton.
+
+        ``update`` defaults to ``"none"``, inverting :meth:`run`'s default
+        deliberately. Each child would store its OWN pending suggestion set, all
+        capturing the same ``before``; accepting repeat 0 moves the store, so
+        repeats 1..N-1 would every one report ``stale`` — N sets of undecidable
+        proposals. ``"suggest"`` is therefore REFUSED for more than one repeat.
+        ``"apply"`` is allowed with a warning: legitimate for a repeated
+        RE-TUNING campaign, but it moves the device under its own measurement
+        (so the statistic measures the feedback loop, not the qubit) and each
+        child's ``Store.save()`` rewrites the whole history sidecar.
+
+        PRE-FLIGHT: before repeat 0 every step's Parameters are constructed and
+        the roster target gate is run — both pre-hardware, no side effects. A
+        plan with a typo'd parameter or an off-roster target is REFUSED WHOLE,
+        with a per-step problem list, instead of failing identically N times.
+        Nothing is created on disk in that case.
+
+        A repeat counts as FAILED only when NO step in it produced a success —
+        the instrument-disconnected signature. One flaky estimator among four
+        steps shows up as ``n_missing`` in the statistics, not as a failed
+        repeat, so it cannot trip ``on_error`` or the consecutive-failure
+        breaker on an otherwise healthy overnight run.
+
+        Never raises once the plan is valid, including on ``KeyboardInterrupt``:
+        Ctrl-C finalizes the campaign with the repeats completed so far
+        (``status="stopped"``) and returns. The interrupted child's folder has no
+        ``record.json``, which reindex already skips as an incomplete run.
+
+        ``on_progress(event) -> str | None`` receives, in order per repeat:
+        ``cadence_wait`` (only when the period actually sleeps), ``repeat_start``,
+        one ``step_done`` per step, then ``repeat_done``. This method itself never
+        prints — the library stays renderer-free and the CLI does the rendering
+        (``scqo.cli._campaign.progress_lines``). A notebook can pass its own::
+
+            sess.run_campaign(plan, on_progress=lambda e: print(e["kind"]))
+
+        Returning ``"stop"`` ends the campaign, and is honoured **only** on
+        ``repeat_done``: stopping mid-repeat would leave a half-walked bundle
+        whose quantities no longer share a drift epoch, which is exactly the
+        invariant the interleaved ordering exists to protect.
+        """
+        import time
+
+        from .campaign import CampaignPlan, aggregate
+
+        plan = plan if isinstance(plan, CampaignPlan) else CampaignPlan(**dict(plan))
+        on_progress = _safe_progress(on_progress)
+        mode = {True: "apply", False: "none"}.get(update, update)
+        if mode not in ("suggest", "apply", "none"):
+            raise ValueError(
+                f"update must be 'suggest', 'apply' or 'none' (or a bool), "
+                f"got {update!r}")
+        if mode == "suggest" and plan.repeat != 1:
+            raise ValueError(
+                "update='suggest' is refused for a multi-repeat campaign: every "
+                "repeat would capture the same `before`, so accepting one makes "
+                "all the others stale and undecidable. Use update='none' (the "
+                "default) and write the aggregate with set_values(), or "
+                "update='apply' if you really mean a repeated re-tuning.")
+
+        started_at = _now()
+        started_mono = time.monotonic()
+        manifest: dict[str, Any] = {
+            "schema": 1,
+            "campaign_id": None,
+            "label": plan.label,
+            "device": self.datastore.device_name if self.datastore is not None else "",
+            "backend": self.backend_label,
+            "operator": _current_operator(),
+            "cooldown": "",
+            "setup": "",
+            "started_at": started_at,
+            "ended_at": None,
+            "status": "running",
+            "stop_reason": "",
+            "update_mode": mode,
+            "experiments": plan.experiments,
+            "targets": plan.targets(),
+            "repeat_planned": plan.repeat,
+            "repeat_done": 0,
+            "repeats_failed": 0,
+            "plan": plan.model_dump(mode="json"),
+            "statistics": {},
+            "tags": list(dict.fromkeys([*self.default_tags, *(tags or []), *plan.tags])),
+            "note": note or plan.note,
+            "path": None,
+        }
+
+        problems = self._preflight(plan)
+        if problems:
+            manifest["status"] = "failed"
+            manifest["stop_reason"] = "the plan was refused before any hardware"
+            manifest["ended_at"] = _now()
+            manifest["error"] = "; ".join(problems)
+            manifest["problems"] = problems
+            manifest["repeats"] = []
+            return manifest
+
+        campaign_id = campaign_dir = None
+        era: tuple[str, str] | None = None
+        if self.datastore is not None:
+            campaign_id, campaign_dir = self.datastore.new_campaign_dir(plan.label)
+            era = self.datastore.run_stamps()
+            manifest["campaign_id"] = campaign_id
+            manifest["cooldown"], manifest["setup"] = era
+            manifest["path"] = campaign_dir.relative_to(self.datastore.data_root).as_posix()
+            self.datastore.persist_campaign(
+                campaign_id=campaign_id, campaign_dir=campaign_dir, manifest=manifest)
+
+        rows: list[dict] = []
+        consecutive_failures = 0
+        stop_reason = ""
+        status = "complete"
+        repeat_idx = 0
+        while True:
+            if plan.repeat is not None and repeat_idx >= plan.repeat:
+                stop_reason = "repeat count reached"
+                break
+            # The budget gates CONTINUING, never starting: repeat 0 always runs, so
+            # a campaign never returns zero measurements for having been slow to set
+            # up. Checked BEFORE a repeat, so a repeat is never cut in half either.
+            elapsed = time.monotonic() - started_mono
+            if (repeat_idx and plan.max_duration_s is not None
+                    and elapsed >= plan.max_duration_s):
+                stop_reason = f"max_duration_s ({plan.max_duration_s:g} s) elapsed"
+                status = "stopped"
+                break
+            if consecutive_failures >= plan.max_consecutive_failures:
+                stop_reason = (f"{consecutive_failures} consecutive failed repeats "
+                               f"(max_consecutive_failures)")
+                status = "stopped"
+                break
+            # Era guard: statistics across cooldowns or setups are not mergeable
+            # (the same doctrine as accept()'s). Only reachable on an unbound
+            # notebook session, which is exactly where nothing else is guarding.
+            if era is not None and self.datastore.run_stamps() != era:
+                stop_reason = "the cooldown/setup changed mid-campaign"
+                status = "stopped"
+                break
+
+            # Cadence: gate the repeat START, so it throttles failed repeats too.
+            # A repeat that overran is RECORDED, never padded and never skipped
+            # to catch up — the period is a floor, not a schedule to hit.
+            overran_by_s = 0.0
+            if plan.period_s is not None and repeat_idx:
+                due = started_mono + repeat_idx * plan.period_s
+                wait = due - time.monotonic()
+                if wait > 0:
+                    # Announce the gap BEFORE sleeping: an unannounced five-minute
+                    # pause is indistinguishable from a hang.
+                    on_progress({"kind": "cadence_wait",
+                                        "repeat_idx": repeat_idx, "wait_s": wait})
+                    time.sleep(wait)
+                else:
+                    overran_by_s = -wait
+
+            # repeat_start fires AFTER the sleep, so its timestamp is the truth.
+            row = {
+                "repeat_idx": repeat_idx,
+                "started_at": _now(),
+                "elapsed_s": time.monotonic() - started_mono,
+                "overran_by_s": overran_by_s,
+                "steps": [],
+            }
+            on_progress({"kind": "repeat_start",
+                                "repeat_idx": repeat_idx,
+                                "repeat_planned": plan.repeat,
+                                "n_steps": len(plan.steps),
+                                "started_at": row["started_at"],
+                                "elapsed_s": row["elapsed_s"],
+                                "overran_by_s": overran_by_s,
+                                "durations_s": [r["duration_s"] for r in rows]})
+            interrupted = False
+            for step_idx, step in enumerate(plan.steps):
+                step_mono = time.monotonic()
+                try:
+                    payload = self.run(
+                        step.experiment,
+                        plan.step_params(step),
+                        update=mode,
+                        tags=[*(tags or []), *plan.tags, *step.tags],
+                        note=step.note or note or plan.note,
+                        skip_artifacts=plan.skip_artifacts,
+                        campaign=(campaign_id, repeat_idx, step_idx) if campaign_id else None,
+                    )
+                except KeyboardInterrupt:
+                    interrupted = True
+                    break
+                except Exception as err:  # a hard failure is a recorded step error,
+                    payload = {"outcomes": {}, "fit": {},  # never a lost campaign
+                               "error": f"{type(err).__name__}: {err}"}
+                outcomes = payload.get("outcomes") or {}
+                step_row = {
+                    "step_idx": step_idx,
+                    "experiment": step.experiment,
+                    "run_id": payload.get("run_id"),
+                    "outcomes": outcomes,
+                    "fit": payload.get("fit") or {},
+                    "error": payload.get("error") or payload.get("datastore_error"),
+                    "ok": any(str(o) == "successful" for o in outcomes.values()),
+                    "duration_s": time.monotonic() - step_mono,
+                }
+                row["steps"].append(step_row)
+                # Not stoppable: a half-walked bundle's quantities no longer share
+                # a drift epoch, which is the invariant interleaving exists for.
+                on_progress({"kind": "step_done", "repeat_idx": repeat_idx,
+                                    "n_steps": len(plan.steps), **step_row})
+            if interrupted:
+                stop_reason = "interrupted (Ctrl-C)"
+                status = "stopped"
+                break
+
+            row["ended_at"] = _now()
+            row["duration_s"] = time.monotonic() - started_mono - row["elapsed_s"]
+            washout = not any(s["ok"] for s in row["steps"])
+            row["failed"] = washout
+            rows.append(row)
+            repeat_idx += 1
+            consecutive_failures = consecutive_failures + 1 if washout else 0
+
+            manifest["repeat_done"] = len(rows)
+            manifest["repeats_failed"] = sum(1 for r in rows if r["failed"])
+            manifest["statistics"] = aggregate(rows)
+            if campaign_dir is not None:
+                self.datastore.append_campaign_repeat(campaign_dir, _repeat_skeleton(row))
+                self.datastore.persist_campaign(
+                    campaign_id=campaign_id, campaign_dir=campaign_dir, manifest=manifest)
+
+            if washout and plan.on_error == "stop":
+                stop_reason = "a repeat failed and on_error='stop'"
+                status = "stopped"
+                break
+            # The ONLY stoppable event: a repeat boundary is the only place where
+            # stopping leaves the collected statistics internally consistent.
+            if on_progress({"kind": "repeat_done",
+                                   "repeat_planned": plan.repeat, **row}) == "stop":
+                stop_reason = "the on_progress callback asked to stop"
+                status = "stopped"
+                break
+
+        manifest["status"] = status
+        manifest["stop_reason"] = stop_reason
+        manifest["ended_at"] = _now()
+        manifest["repeats"] = [_repeat_skeleton(r) for r in rows]
+        if campaign_dir is not None:
+            self.datastore.persist_campaign(
+                campaign_id=campaign_id, campaign_dir=campaign_dir,
+                manifest={k: v for k, v in manifest.items() if k != "repeats"})
+            manifest["data_path"] = str(campaign_dir)
+        return manifest
+
+    def check_campaign(self, plan: "CampaignPlan | dict") -> list[str]:
+        """Pre-flight a plan without running it: problem strings, ``[]`` when clear.
+
+        The same gate :meth:`run_campaign` runs before repeat 0, exposed for
+        ``scqo campaign --dry-run``. Touches no instrument and creates nothing."""
+        from .campaign import CampaignPlan
+
+        return self._preflight(
+            plan if isinstance(plan, CampaignPlan) else CampaignPlan(**dict(plan)))
+
+    def _preflight(self, plan) -> list[str]:
+        """Build every step's Parameters and run the roster gate — no hardware.
+
+        Returns problem strings naming the step, ``[]`` when the plan is clear."""
+        from pydantic import ValidationError
+
+        from . import experiments as registry
+
+        problems: list[str] = []
+        for step_idx, step in enumerate(plan.steps):
+            where = f"step {step_idx} ({step.experiment})"
+            try:
+                cls = registry.get(step.experiment)
+            except KeyError as err:
+                problems.append(f"{where}: {err}")
+                continue
+            defaults = self.parameter_defaults.get(step.experiment, {})
+            merged = {**defaults, **plan.step_params(step)}
+            try:
+                validated = cls.Parameters(**merged)
+            except ValidationError as err:
+                problems.append(f"{where}: invalid parameters: {err}")
+                continue
+            exp = cls(self.backend, validated)
+            gate_error = self._validate_targets(cls, exp)
+            if gate_error is not None:
+                problems.append(f"{where}: {gate_error.error}")
+        return problems
+
+    def find_campaigns(self, **filters: Any) -> list[dict]:
+        """Query saved campaigns (newest first); ``[]`` without a data_root."""
+        if self.datastore is None:
+            return []
+        return self.datastore.find_campaigns(**filters)
+
+    def load_campaign(self, campaign_id: str) -> dict:
+        """One campaign's manifest + repeat skeleton (see DataStore.load_campaign)."""
+        return self._require_datastore().load_campaign(campaign_id)
+
+    def campaign_runs(self, campaign_id: str) -> list[dict]:
+        """A campaign's children in execution order (repeat_idx, step_idx)."""
+        return self._require_datastore().campaign_runs(campaign_id)
 
     def _validate_targets(self, cls, exp):
         """Roster gate before any hardware: targets exist, their KIND is in

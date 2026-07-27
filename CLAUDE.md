@@ -15,6 +15,7 @@ The word **"protocol" is retired**; use these names across all repos.
 - **tool** / **fitter** — reusable helpers an estimator imports (`scqat.tools`); a fitter is the common case. Many-to-many; **tools never import estimators**.
 - **model** — the physics that predicts the signal; used *forward* by a simulated probe and *inverse* by an estimator. SCQ.jl builds/simulates models; scqat fits them.
 - **Parameters / Result / Backend / Session** — input schema / extracted output / instrument adapter (QM, Qblox, Simulated) / the orchestrator entry point (`catalog()` / `run()` / `device_state()`).
+- **campaign** — an ordered list of experiment STEPS walked N times (`CampaignPlan` / `Session.run_campaign()` / `campaign_id`). OUTER repetition: every (repeat, step) is a full `run()` with its own folder, dataset, fit and TIMESTAMP, stamped `campaign`/`repeat_idx`/`step_idx`; the campaign owns only the plan, the cadence, the stop conditions and the per-(experiment, target, quantity) statistics. Repeating ONE experiment is the degenerate 1-step case. Do NOT call it a *repetition* (scqat's `repetition_data` splitter, the drivers' HW-averaging loop and `pulse_repetitions` already own that word) nor a *series* (the /trends time series).
 
 The scqo stack uses this vocabulary throughout — **scqat** (`estimators/`, `tools/`, `BaseEstimator`), **SCQO** (`Experiment`, `scqo.experiments`, `probe()`, `estimate()`), and the drivers **LCHQBDriver** + **LCHQMDriver** (`probe()`-only experiments). scqat's estimator keeps its own orchestrator method `analyze()` (a different layer). LCHQMDriver's qualibrate calibration nodes keep qualibrate's own `node` framework and never import scqo (its scqo surface lives in `customized/scqo/`). (QBLOX_training documents Qblox's *own* `Experiment` ABC — a different class from this `Experiment`.)
 
@@ -110,15 +111,26 @@ scqo/
   checks.py       # doctor witnesses over the model, renderer-free (unreachable modes,
                   #   design coverage, lock drift, roster-vs-vendor inventory, wiring)
   report.py       # report rows behind `scqo state` / `scqo device` - renderer-free,
-                  #   JSON-able (CLI prints, viewer + AI loop consume the same shapes)
+                  #   JSON-able (CLI prints, viewer + AI loop consume the same shapes).
+                  #   Also the catalog-DERIVED field orders (never hand-kept lists):
+                  #   REPORTABLE_QUANTITIES (facts+monitors+knobs+fit-only) for the
+                  #   viewer's /trends menu, and MEASURED_QUANTITIES (no knobs - a
+                  #   knob is a setting and cannot drift) for the campaign progress line
+  campaign.py     # CampaignPlan/CampaignStep + the PURE aggregator (summarize /
+                  #   aggregate / stderr_twin / robust_summary) over fit dicts; no
+                  #   I/O, no orchestration. scatter_ratio = std / mean_stderr is
+                  #   the drift-vs-fit-noise question. The simulated backend is
+                  #   deterministic, so an OFFLINE campaign reports std == 0.0.
   contract.py     # DatasetContract per probing method: the explicit probe <-> estimator API
   backend.py      # Backend ABC: .device + .acquire(experiment) -> xarray.Dataset
   experiment.py   # Experiment ABC: physics half (define_sweep/simulate/estimate/update)
                   #   + backend half (probe); kind-based gating (target_kinds) +
                   #   validate_targets pre-probe hook; knobs via device.channel(t, kind)
   _scqat.py       # the one scqat import point (lazy): per-target split + analyze() loop
-  session.py      # Session: catalog() / run() / accept() / reject() / suggest() / set_values() /
-                  #   find_runs() / load_run() / tag_run() / device_state() / physical_state() /
+  session.py      # Session: catalog() / run() / run_campaign() / accept() / reject() /
+                  #   suggest() / set_values() / find_runs() / load_run() / tag_run() /
+                  #   find_campaigns() / load_campaign() / campaign_runs() / check_campaign() /
+                  #   device_state() / physical_state() /
                   #   qubit_state() / history(); qubit-closure addressing (q1.pi_amp -> q1_xy)
   datastore.py    # DataStore + RunRecord: every run saved to a folder, indexed in SQLite (rebuildable)
   labconfig.py    # ~/.scqo/config.toml -> LabConfig + make_session (students never edit repos)
@@ -127,8 +139,8 @@ scqo/
   browse.py       # `python -m scqo.browse` - datasette raw-SQL power tool over the index (8081)
   viewer/         # `python -m scqo.viewer` - the daily read-only GUI (8080)
   __main__.py     # `python -m scqo <data_root>` - rebuild the index from the run folders
-  cli/            # the `scqo` command (run/find/accept/suggest/set/tag/state/user/
-                  #   device/doctor): ONE engine, any-directory;
+  cli/            # the `scqo` command (run/campaign/find/accept/suggest/set/tag/state/
+                  #   user/device/doctor): ONE engine, any-directory;
                   #   the device's SELECTED named setup picks the backend, resolved via
                   #   the scqo.backends entry-point group; a factory is
                   #   build_backend(cfg, setup, roster) - a driver serves a view PER
@@ -189,6 +201,7 @@ scqo/
                                 #   on the COUPLER's flux channel (ZZ-off point) + zz_hz (pair fact)
 tests/test_model_run.py         # catalog -> run -> suggest -> accept, no hardware
 tests/test_datastore.py         # run folders + index + tags + reindex, no hardware
+tests/test_campaign.py          # the pure aggregator + run_campaign orchestration
 ```
 
 ### Datastore (the "find my measurement data" layer)
@@ -198,7 +211,23 @@ parameters/result/record JSONs, device before/after snapshots, and the scqat art
 `<data_root>/<device>/<YYYY-MM-DD>/<run_id>/`. The **run folder is the truth**;
 `<data_root>/index.sqlite` is a disposable cache (`python -m scqo <data_root>`
 rebuilds it). Query with `Session.find_runs(experiment=, target=, tag=, since=, outcome=,...)`,
-reload with `load_run(run_id)` / `datastore.open_dataset(run_id)`. Runs carry searchable
+reload with `load_run(run_id)` / `datastore.open_dataset(run_id)`. A **campaign**
+persists one extra folder, `<data_root>/<device>/campaigns/<campaign_id>/`
+(`campaign.json` = plan + status + statistics, rewritten per repeat; `repeats.jsonl` =
+append-only skeleton, run_ids and timing, never fit VALUES) — a sibling of the day
+folders because an overnight campaign crosses midnight, and invisible to every glob over
+the data root. Its children are ordinary runs stamped `campaign`/`repeat_idx`/`step_idx`
+in an INDEXED column (never a `campaign:<id>` tag — that would be an unindexed
+`json_each` scan and a second grouping authority); walk them with
+`campaign_runs(campaign_id)`, which is unlimited and in execution order, NOT
+`find_runs(campaign=...)`, which is newest-first and capped at 50.
+`run_campaign` never prints — it emits `cadence_wait`/`repeat_start`/`step_done`/
+`repeat_done` to an `on_progress` callback and the CLI renders
+(`cli/_campaign.py::progress_lines`). Those lines go to **stderr**, `#`-prefixed,
+ASCII, plain newlines and **never `\r`**: stdout must stay `| jq`-parseable, and on
+QM the vendor's `progress_counter` already rewrites a bar there. `"stop"` from the
+callback is honoured only at `repeat_done` — stopping mid-repeat would leave a
+half-walked bundle whose quantities no longer share a drift epoch. Runs carry searchable
 **tags** (`run(..., tags=[...])`, config `default_tags`, retroactive `tag_run`). Change
 history records the `run_id` that caused each device update. State authority:
 `state_sync="pull"` (default) seeds from the vendor at startup (safe when another tool also
@@ -251,6 +280,8 @@ Selection map for experiment work (`scqo/experiments/<name>.py`) — always the 
 | a `*_method` Literal | `tests/test_estimator_method_sync.py` |
 | a `catalog.py` FieldSpec | `tests/test_model_catalog.py` |
 | Parameters defaults/overlay plumbing | `tests/test_parameter_defaults.py` |
+| `campaign.py` / `run_campaign` / the campaign CLI | `tests/test_campaign.py` + `tests/test_cli_campaign.py` |
+| `report.py`'s catalog-derived field orders | **+ `tests/test_viewer.py`** — the viewer imports them |
 
 `-k` takes the **distinctive stem, not the registered name**: `-k ramsey` matches both
 `test_every_experiment_runs_clean[qubit_ramsey]` and `test_ramsey_writes_drive_freq_fact_twin_and_t2`,
@@ -284,7 +315,10 @@ full-suite command instead of spending the minutes unasked.
          runnable via `scqo run <name>`).
 
 **`scqo run <name>` is the single CLI entry point** — never add wrappers, launcher stubs,
-or per-command shims.
+or per-command shims. `scqo campaign <plan.toml>` is not an exception: it is a different
+verb over a different INPUT (a plan, not an experiment name), and it REFUSES a bare
+experiment name in code, pointing at `scqo run <name> --repeat N` — so "exactly one way
+to run one experiment" is a checked property, not a convention.
 
 ### The placement rule (digest — full text: TUTORIAL §10; bench: `scqo state --rule`)
 Classify each USE of a quantity, in order, first match wins:

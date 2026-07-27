@@ -1,0 +1,188 @@
+"""`scqo campaign` and `scqo run --repeat` end-to-end over the built-in simulated backend.
+
+Subprocess-based (python -m scqo.cli), cwd = an arbitrary tmp dir — the same temp-lab
+shape as tests/test_cli_run.py. Covers the rule-preserving guard too: `scqo campaign`
+must REFUSE a bare experiment name, so "there is exactly one way to run one experiment"
+is a checked property rather than a convention.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+_F01 = (3.8e9, 3.95e9)
+_FR = (5.95e9, 6.05e9)
+
+PLAN = """\
+label = "t1_stability"
+repeat = 2
+skip_artifacts = true
+tags = ["stability"]
+
+[defaults]
+targets = ["q0"]
+
+[[steps]]
+experiment = "qubit_relaxation"
+
+[[steps]]
+experiment = "qubit_echo"
+"""
+
+
+def _lab(tmp_path: Path) -> Path:
+    """A temp lab: device simdev on a simulated setup (see tests/test_cli_run.py)."""
+    data_root = tmp_path / "data"
+    (data_root / "simdev").mkdir(parents=True, exist_ok=True)
+    (data_root / "simdev" / "cooldowns.toml").write_text(
+        '[cd1]\nstart = 2026-07-01\n[cd1.setup.main]\nbackend = "simulated"\n',
+        encoding="utf-8")
+    blocks = ["schema = 3"]
+    for q in ("q0", "q1"):
+        blocks.append(f'[modes.{q}]\nkind = "transmon"')
+    blocks.append('[lines.fl]\nreadout = ["q0", "q1"]')
+    blocks.extend(f'[lines.{q}_xyl]\ndrive = ["{q}"]' for q in ("q0", "q1"))
+    (data_root / "simdev" / "components.toml").write_text(
+        "\n".join(blocks) + "\n", encoding="utf-8")
+    design = ["schema = 1"]
+    for i, q in enumerate(("q0", "q1")):
+        design.append(f"[{q}]\nf_01_hz = {_F01[i]:.6g}")
+        design.append(f"[{q}_res]\nf_r_hz = {_FR[i]:.6g}")
+    (data_root / "simdev" / "design.toml").write_text(
+        "\n".join(design) + "\n", encoding="utf-8")
+    config = tmp_path / "config.toml"
+    config.write_text(
+        f"[lab]\ndevice = \"simdev\"\ndata_root = '{data_root.as_posix()}'\n",
+        encoding="utf-8")
+    return config
+
+
+def _cli(tmp_path: Path, *args: str) -> subprocess.CompletedProcess:
+    config = tmp_path / "config.toml"
+    if not config.is_file():
+        config = _lab(tmp_path)
+    return subprocess.run(
+        [sys.executable, "-m", "scqo.cli", *args],
+        capture_output=True, text=True,
+        # SCQO_USER_CONFIG=none and an empty parameters file keep the runner's real
+        # ~/.scqo out of the test (a lab default could make a step fail here).
+        env={**os.environ, "SCQO_CONFIG": str(config), "SCQO_USER_CONFIG": "none",
+             "MPLBACKEND": "Agg"},
+        cwd=tmp_path,
+    )
+
+
+def _plan(tmp_path: Path, text: str = PLAN) -> str:
+    path = tmp_path / "plan.toml"
+    path.write_text(text, encoding="utf-8")
+    return str(path)
+
+
+def test_campaign_refuses_a_bare_experiment_name(tmp_path):
+    """The one-way-to-run-one-experiment rule, enforced in code."""
+    proc = _cli(tmp_path, "campaign", "qubit_relaxation")
+    assert proc.returncode != 0
+    assert "not an experiment name" in proc.stderr
+    assert "scqo run qubit_relaxation --repeat N" in proc.stderr
+
+
+def test_campaign_reports_a_missing_plan_file(tmp_path):
+    proc = _cli(tmp_path, "campaign", "no_such_plan.toml")
+    assert proc.returncode != 0
+    assert "campaign plan not found" in proc.stderr
+
+
+def test_dry_run_validates_and_creates_nothing(tmp_path):
+    proc = _cli(tmp_path, "campaign", _plan(tmp_path), "--dry-run")
+    assert proc.returncode == 0, proc.stderr
+    assert "would create 4 runs (2 repeats x 2 steps)" in proc.stdout
+    assert "plan is valid" in proc.stdout
+    assert "step 0  qubit_relaxation" in proc.stdout
+    # nothing ran: no day folder, no campaigns folder
+    assert not (tmp_path / "data" / "simdev" / "campaigns").exists()
+    assert not list((tmp_path / "data" / "simdev").glob("2*"))
+
+
+def test_dry_run_refuses_a_bad_target_before_any_hardware(tmp_path):
+    bad = PLAN.replace('targets = ["q0"]', 'targets = ["ghost"]')
+    proc = _cli(tmp_path, "campaign", _plan(tmp_path, bad), "--dry-run")
+    assert proc.returncode == 2
+    assert "REFUSED" in proc.stderr and "not in this device's roster" in proc.stderr
+
+
+def test_campaign_runs_and_prints_statistics(tmp_path):
+    proc = _cli(tmp_path, "campaign", _plan(tmp_path))
+    assert proc.returncode == 0, proc.stderr
+    assert "status: complete" in proc.stdout
+    assert "repeats   2/2" in proc.stdout
+    for quantity in ("t1_s", "t2_echo_s"):
+        assert quantity in proc.stdout
+    assert "std/err" in proc.stdout
+
+    listed = _cli(tmp_path, "campaign", "--list")
+    assert listed.returncode == 0, listed.stderr
+    assert "t1_stability" in listed.stdout and "complete" in listed.stdout
+
+    campaign_id = listed.stdout.split()[0]
+    shown = _cli(tmp_path, "campaign", "--show", campaign_id)
+    assert shown.returncode == 0, shown.stderr
+    assert "children (4, execution order):" in shown.stdout
+    # interleaved: relaxation, echo, relaxation, echo — not grouped by experiment
+    order = [line.split()[2] for line in shown.stdout.splitlines()
+             if line.startswith("  r")]
+    assert order == ["qubit_relaxation", "qubit_echo"] * 2
+
+    found = _cli(tmp_path, "find", "--campaign", campaign_id)
+    assert found.returncode == 0, found.stderr
+    assert "(4 run(s)" in found.stdout
+
+
+def test_campaign_json_output_is_the_manifest(tmp_path):
+    proc = _cli(tmp_path, "campaign", _plan(tmp_path), "--json", "--repeat", "1")
+    assert proc.returncode == 0, proc.stderr
+    manifest = json.loads(proc.stdout)
+    assert manifest["repeat_done"] == 1 and manifest["status"] == "complete"
+    assert manifest["statistics"]["qubit_relaxation"]["q0"]["t1_s"]["n"] == 1
+
+
+def test_list_says_so_when_there_are_no_campaigns(tmp_path):
+    proc = _cli(tmp_path, "campaign", "--list")
+    assert proc.returncode == 0, proc.stderr
+    assert "no campaigns yet" in proc.stdout
+
+
+def test_progress_goes_to_stderr_and_never_pollutes_stdout(tmp_path):
+    """The whole reason progress is on stderr: stdout stays machine-readable.
+
+    On QM the vendor already rewrites a \\r bar on stdout; ours must not join it."""
+    proc = _cli(tmp_path, "campaign", _plan(tmp_path), "--json")
+    assert proc.returncode == 0, proc.stderr
+
+    assert "# repeat    1/2" in proc.stderr
+    assert "# repeat    2/2" in proc.stderr
+    assert "qubit_relaxation" in proc.stderr and "t1_s=" in proc.stderr
+    assert "\r" not in proc.stderr
+
+    assert "# repeat" not in proc.stdout
+    manifest = json.loads(proc.stdout)  # still exactly the manifest, nothing else
+    assert manifest["repeat_done"] == 2
+
+
+def test_progress_shows_each_repeat_of_a_bare_repeat_run(tmp_path):
+    proc = _cli(tmp_path, "run", "qubit_relaxation", "--targets", "q0",
+                "--repeat", "3", "--skip-artifacts")
+    assert proc.returncode == 0, proc.stderr
+    starts = [ln for ln in proc.stderr.splitlines() if ln.startswith("# repeat ")]
+    assert len(starts) == 3
+    assert "eta " in starts[1]  # no history for repeat 0, then extrapolated
+    assert all(line.isascii() for line in proc.stderr.splitlines())
+
+
+def test_campaign_appears_in_the_command_list(tmp_path):
+    proc = _cli(tmp_path, "--help")
+    assert proc.returncode == 0
+    assert "campaign" in proc.stdout

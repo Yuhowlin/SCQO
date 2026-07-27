@@ -91,6 +91,26 @@ def run_experiment_cli(
                               help="apply all suggested updates immediately (unattended runs / AI loop)")
     update_group.add_argument("--no-update", action="store_true",
                               help="analyze only; do not even capture suggested updates")
+    # Repeating ONE experiment is still running one experiment, so it lives here
+    # rather than in a wrapper. An ordered BUNDLE of experiments is a different
+    # input and lives in `scqo campaign <plan.toml>`.
+    repeat_group = parser.add_argument_group(
+        "repeats", "run this experiment N times and report statistics over the fits "
+                   "(a 1-step campaign: every repeat is its own saved run with its own "
+                   "timestamp). For a bundle of different experiments: scqo campaign")
+    repeat_group.add_argument("--repeat", type=int, metavar="N",
+                              help="number of times to run it")
+    repeat_group.add_argument("--period", type=float, metavar="SECONDS",
+                              help="minimum wall-clock seconds between repeat STARTS; "
+                                   "a repeat that overruns is recorded, never padded")
+    repeat_group.add_argument("--max-duration", type=float, metavar="SECONDS",
+                              help="stop repeating after this much wall clock")
+    repeat_group.add_argument("--on-error", choices=["continue", "stop"], default="continue",
+                              help="what a failed repeat does (default: continue)")
+    repeat_group.add_argument("--skip-artifacts", action="store_true",
+                              help="write no analysis/ folder (no figures, no scqat "
+                                   "metadata or plotdata); dataset.nc and result.json still land")
+    repeat_group.add_argument("--label", help="campaign label (default: the experiment name)")
     parser.add_argument("--config", help="lab config path (default: $SCQO_CONFIG or ~/.scqo/config.toml)")
     args = parser.parse_args(argv)
     name = experiment or args.experiment
@@ -141,6 +161,29 @@ def run_experiment_cli(
     if applied:  # stderr: stdout stays parseable JSON (| jq etc.)
         print(f"# parameter defaults from {cfg.parameters_source} [{name}]: {', '.join(applied)}", file=sys.stderr)
     mode = "apply" if args.accept else ("none" if args.no_update else "suggest")
+
+    if args.repeat is not None or args.max_duration is not None:
+        from scqo import CampaignPlan
+
+        from ._campaign import execute
+
+        # A repeated run is a 1-step campaign, so "N times" and "a bundle N times"
+        # produce the same folders, the same stamps and the same statistics.
+        # update defaults to "none" here for the same reason run_campaign does:
+        # N pending suggestion sets are undecidable (accepting one staleness-blocks
+        # the rest), so only an explicit --accept opts into moving the device.
+        plan = CampaignPlan(
+            label=args.label or name,
+            steps=[{"experiment": name, "params": params}],
+            repeat=args.repeat,
+            period_s=args.period,
+            max_duration_s=args.max_duration,
+            on_error=args.on_error,
+            skip_artifacts=args.skip_artifacts,
+        )
+        return execute(sess, plan, update="apply" if args.accept else "none",
+                       tags=args.tags, note=args.note, as_json=False)
+
     result = sess.run(name, params, update=mode, tags=args.tags, note=args.note)
     print(json.dumps(result, indent=2))
     if "data_path" in result:

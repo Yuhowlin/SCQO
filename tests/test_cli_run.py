@@ -320,3 +320,27 @@ def test_device_sources_traces_current_values(tmp_path):
 
     # --sources is one table over both stores; combining is a usage error
     assert _run_cli(tmp_path, "state", "--sources", "--physical").returncode == 2
+
+
+def test_repeat_turns_a_run_into_a_one_step_campaign(tmp_path):
+    """Repeating ONE experiment stays on `scqo run` — it is still running one
+    experiment, not a wrapper. The bundle case is `scqo campaign <plan.toml>`."""
+    proc = _run_cli(tmp_path, "run", "qubit_relaxation", "--targets", "q0",
+                    "--repeat", "3", "--skip-artifacts")
+    assert proc.returncode == 0, proc.stderr
+    assert "repeats   3/3" in proc.stdout
+    assert "status: complete" in proc.stdout
+    t1_row = next(line for line in proc.stdout.splitlines() if " t1_s " in line)
+    assert t1_row.split()[3] == "3"  # n
+
+    listed = _run_cli(tmp_path, "campaign", "--list")
+    assert "qubit_relaxation" in listed.stdout and "3/3" in listed.stdout
+
+
+def test_run_without_repeat_still_prints_the_plain_json(tmp_path):
+    """--repeat is additive: the default output shape must not move."""
+    proc = _run_cli(tmp_path, "run", "qubit_relaxation", "--targets", "q0", "--no-update")
+    assert proc.returncode == 0, proc.stderr
+    result = _result(proc)
+    assert result["outcomes"]["q0"] == "successful"
+    assert "run_id" in result and "campaign" not in proc.stdout

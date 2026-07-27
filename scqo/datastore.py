@@ -12,10 +12,22 @@ The **run folder is the truth**: each ``Session.run`` writes a self-contained fo
         device_after.json    # snapshot after the run (differs only if updates were applied)
         analysis/<qubit>/    # scqat estimator artifacts (metadata / plotdata / figures)
 
+A **campaign** (``Session.run_campaign``: an ordered list of steps walked N times) adds
+one sibling folder per campaign — never a day folder, because an overnight campaign
+crosses midnight::
+
+    <data_root>/<device_name>/campaigns/<campaign_id>/
+        campaign.json        # plan + status + counts + the aggregate statistics
+        repeats.jsonl        # one line per COMPLETED repeat: run_ids + timing, no fit values
+
+Its children are ordinary runs in the ordinary day folders, each stamped with
+``campaign`` / ``repeat_idx`` / ``step_idx`` — so they are self-describing and the
+statistics are rebuildable from the children even if the manifest is lost.
+
 ``index.sqlite`` at ``data_root`` is a **disposable cache** over those folders: it makes
 ``find_runs`` fast but holds nothing the folders don't; :func:`reindex` rebuilds it from
 scratch by scanning for ``record.json`` files (folders without one are incomplete runs
-and are skipped). Deleting the index is always safe — remove all ``index.sqlite*`` files
+and are skipped) and then for ``campaign.json`` manifests. Deleting the index is always safe — remove all ``index.sqlite*`` files
 together (the ``-wal``/``-shm`` siblings too) and rerun ``python -m scqo <data_root>``.
 
 Concurrency note: on a local disk, WAL mode + the 10 s busy retry + short-lived
@@ -50,7 +62,7 @@ from pydantic import BaseModel, Field
 from ._state_io import _file_lock
 from .stores import _current_operator
 
-SCHEMA_VERSION = 8  # v8: component cutover — run targets column renamed from qubits
+SCHEMA_VERSION = 9  # v9: campaigns — run campaign/repeat_idx/step_idx + the campaigns table
 RECORD_FILE = "record.json"
 INDEX_FILE = "index.sqlite"
 DEVICES_FILE = "devices.toml"  # optional human-edited sample registry (see load_device_registry)
@@ -62,8 +74,12 @@ SCQO_SUBDIR = "scqo"  # per (device, cooldown, setup): <device>/<cooldown>/<setu
 BACKEND_CONFIG_SUBDIR = "backend_config"  # the vendor-config sibling: <cooldown>/<setup>/backend_config/
 SETUP_BACKENDS = ("qblox", "qm", "simulated")  # legal [<cycle>.setup.<name>] backend values
 SETUP_KEYS = ("backend", "note")  # the ONLY keys a setup table may carry (paths are DERIVED)
-# Setup names travel as CLI arguments, index values and URL query params — keep them plain.
-_SETUP_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+CAMPAIGNS_SUBDIR = "campaigns"  # per device: <device>/campaigns/<campaign_id>/ (see new_campaign_dir)
+CAMPAIGN_FILE = "campaign.json"  # the campaign manifest: plan + status + statistics
+CAMPAIGN_REPEATS_FILE = "repeats.jsonl"  # append-only per-repeat skeleton beside it
+# Cooldown ids, setup names and campaign labels all travel as CLI arguments, index
+# values, URL query params and path segments — keep them plain.
+SLUG_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -76,6 +92,9 @@ CREATE TABLE IF NOT EXISTS runs (
   operator       TEXT NOT NULL DEFAULT '',
   cooldown       TEXT NOT NULL DEFAULT '',
   setup          TEXT NOT NULL DEFAULT '',
+  campaign       TEXT NOT NULL DEFAULT '',
+  repeat_idx     INTEGER,
+  step_idx       INTEGER,
   targets        TEXT NOT NULL,
   outcome        TEXT NOT NULL,
   outcomes       TEXT NOT NULL,
@@ -98,7 +117,44 @@ DROP INDEX IF EXISTS idx_runs_device;  -- superseded by the composite below
 -- O(limit) regardless of how many runs THIS or any other sample has accumulated.
 CREATE INDEX IF NOT EXISTS idx_runs_device_started
   ON runs(device, started_at DESC, run_id DESC);
+-- A campaign's children in EXECUTION order, O(children) not O(table). This is why
+-- membership is an indexed COLUMN and not a `campaign:<id>` tag: a tag filter is an
+-- unindexed json_each scan, and a second grouping mechanism can disagree with this one.
+CREATE INDEX IF NOT EXISTS idx_runs_campaign
+  ON runs(campaign, repeat_idx, step_idx);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+
+-- One row per campaign. Mirrors `runs`: PK (id, device) and a composite
+-- device-scoped index, for the same reason (one data_root, many samples).
+-- No run_ids column — idx_runs_campaign already answers "which runs", in order,
+-- and a stored list would be a second authority that can disagree with it.
+CREATE TABLE IF NOT EXISTS campaigns (
+  campaign_id    TEXT NOT NULL,
+  device         TEXT NOT NULL,
+  label          TEXT NOT NULL,
+  started_at     TEXT NOT NULL,
+  ended_at       TEXT,
+  status         TEXT NOT NULL,              -- running | complete | stopped | failed
+  stop_reason    TEXT NOT NULL DEFAULT '',
+  backend        TEXT NOT NULL,
+  operator       TEXT NOT NULL DEFAULT '',
+  cooldown       TEXT NOT NULL DEFAULT '',
+  setup          TEXT NOT NULL DEFAULT '',
+  experiments    TEXT NOT NULL,              -- JSON list, step order
+  targets        TEXT NOT NULL,              -- JSON list, union over steps
+  repeat_planned INTEGER,                    -- NULL = open-ended
+  repeat_done    INTEGER NOT NULL DEFAULT 0,
+  repeats_failed INTEGER NOT NULL DEFAULT 0,
+  plan           TEXT NOT NULL,              -- JSON CampaignPlan
+  statistics     TEXT NOT NULL DEFAULT '{}', -- JSON aggregate
+  tags           TEXT NOT NULL DEFAULT '[]',
+  note           TEXT NOT NULL DEFAULT '',
+  path           TEXT NOT NULL,              -- campaign folder, relative to data_root
+  schema_version INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (campaign_id, device)
+);
+CREATE INDEX IF NOT EXISTS idx_campaigns_device_started
+  ON campaigns(device, started_at DESC, campaign_id DESC);
 """
 
 
@@ -112,6 +168,13 @@ class RunRecord(BaseModel):
     operator: str = ""  # OS login of whoever ran it (multi-user SSH provenance)
     cooldown: str = ""  # active cooldown-cycle id when the run started ("" = none declared)
     setup: str = ""  # NAME of the setup in effect ("" = none declared / ambiguous unbound)
+    #: Campaign membership ("" = a standalone run). The campaign folder's
+    #: campaign.json owns the plan and the aggregate; these three stamps make each
+    #: child SELF-DESCRIBING, so a run is never orphaned by a lost manifest and the
+    #: statistics are rebuildable from the children alone.
+    campaign: str = ""
+    repeat_idx: int | None = None  # 0-based walk of the plan's steps
+    step_idx: int | None = None  # 0-based position within one walk
     targets: list[str]
     started_at: str  # ISO-8601 local time with UTC offset (matches the folder dates)
     ended_at: str
@@ -132,6 +195,11 @@ class RunRecord(BaseModel):
     note: str = ""
     path: str  # run folder, relative to data_root (forward slashes)
     schema_version: int = SCHEMA_VERSION
+
+
+def _run_stamp(now: datetime) -> str:
+    """``YYYYmmdd-HHMMSS-mmm`` — the sortable prefix of a run_id / campaign_id."""
+    return now.strftime("%Y%m%d-%H%M%S-") + f"{now.microsecond // 1000:03d}"
 
 
 def _summarize(outcomes: dict[str, str]) -> str:
@@ -189,18 +257,43 @@ class DataStore:
         self.cooldown_id = cooldown or ""
         self.data_root.mkdir(parents=True, exist_ok=True)
         self._db_path = self.data_root / INDEX_FILE
+        # Read the stored version BEFORE creating anything. An index written by an
+        # older SCQO carries the old `runs` LAYOUT, and `CREATE TABLE IF NOT EXISTS`
+        # silently keeps it — so a new index or INSERT over a missing column raises
+        # ("no such column: campaign") before any version check could fire. The index
+        # is only a cache, so a stale version drops the tables outright and the
+        # rebuild below repopulates them from the run folders.
         with self._connect() as db:
+            db.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
+            stale = self._stale_layout(db)
+            if stale:
+                db.execute("DROP TABLE IF EXISTS runs")
+                db.execute("DROP TABLE IF EXISTS campaigns")
             db.executescript(_SCHEMA)
-            row = db.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
-        if row is None:
-            with self._connect() as db:
-                db.execute(
-                    "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
-                    (str(SCHEMA_VERSION),),
-                )
-        elif int(row["value"]) != SCHEMA_VERSION:
-            # Old index layout: the index is only a cache, so rebuild it from the folders.
+            db.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
+                (str(SCHEMA_VERSION),),
+            )
+        if stale:
             self.reindex()
+
+    @staticmethod
+    def _stale_layout(db: sqlite3.Connection) -> bool:
+        """Does this index predate the current SCHEMA_VERSION (so its tables must go)?
+
+        A brand-new file is not stale. An existing `runs` table with no recorded
+        version predates the meta row entirely, so it cannot be trusted either — and
+        an unparseable version is corruption, which a rebuild also fixes.
+        """
+        row = db.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+        if row is None:
+            return bool(db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'runs'"
+            ).fetchone())
+        try:
+            return int(row["value"]) != SCHEMA_VERSION
+        except (TypeError, ValueError):
+            return True
 
     # ------------------------------------------------------------------ folders
     def new_run_dir(self, experiment: str) -> tuple[str, Path]:
@@ -218,7 +311,14 @@ class DataStore:
         # discard the measurement as a datastore_error.)
         self.run_stamps()
         now = datetime.now()  # local wall-clock: humans browse folders by lab date
-        stamp = now.strftime("%Y%m%d-%H%M%S")
+        # MILLISECONDS, not just seconds: a campaign fires its children back to back,
+        # and at second resolution the 99-slot seq loop below is a HARD CAP that a
+        # repeat=100 offline campaign hits in well under a second — raising out of
+        # Session.run, which promises never to raise. With ms the seq loop is back to
+        # being what it was meant to be: a cross-PROCESS collision guard (two sessions,
+        # one device, the same millisecond). It also makes run_id a meaningful
+        # tiebreaker in idx_runs_device_started.
+        stamp = _run_stamp(now)
         day_dir = self.data_root / self.device_name / now.strftime("%Y-%m-%d")
         for seq in range(1, 100):
             run_id = f"{stamp}-{self.device_name}-{experiment}-{seq:02d}"
@@ -281,8 +381,14 @@ class DataStore:
         tags: list[str] | None = None,
         note: str = "",
         power_context: dict | None = None,
+        campaign: tuple[str, int, int] | None = None,
     ) -> RunRecord:
-        """Write the run folder (``record.json`` last) and upsert the index row."""
+        """Write the run folder (``record.json`` last) and upsert the index row.
+
+        ``campaign`` is ``(campaign_id, repeat_idx, step_idx)`` for a child of a
+        campaign. It lands in the FIRST ``record.json`` write rather than a second
+        patching pass, so the completion marker is complete the first time.
+        """
         params_dump = params.model_dump(mode="json") if hasattr(params, "model_dump") else dict(params)
         parameters = {"experiment": experiment, **params_dump}
 
@@ -303,6 +409,9 @@ class DataStore:
             operator=_current_operator(),
             cooldown=cooldown,
             setup=setup,
+            campaign=campaign[0] if campaign else "",
+            repeat_idx=campaign[1] if campaign else None,
+            step_idx=campaign[2] if campaign else None,
             targets=list(params_dump.get("targets", [])),
             started_at=started_at,
             ended_at=ended_at,
@@ -336,10 +445,15 @@ class DataStore:
         operator: str | None = None,
         cooldown: str | None = None,
         setup: str | None = None,
+        campaign: str | None = None,
         pending: bool | None = None,
         limit: int = 50,
     ) -> list[dict]:
-        """Query the index; newest first; rows as JSON-able dicts (RunRecord fields + fit)."""
+        """Query the index; newest first; rows as JSON-able dicts (RunRecord fields + fit).
+
+        ``campaign`` filters to one campaign's children, still newest-first and still
+        limited — to walk a campaign whole, in execution order, use
+        :meth:`campaign_runs` instead."""
         where, args = [], []
         if experiment is not None:
             where.append("experiment = ?")
@@ -373,6 +487,9 @@ class DataStore:
         if setup is not None:  # setup names are unique per cycle only — combine with cooldown
             where.append("setup = ?")
             args.append(setup)
+        if campaign is not None:
+            where.append("campaign = ?")
+            args.append(campaign)
         if pending is not None:  # True = runs with undecided suggestions, False = none left
             where.append("suggestions_pending > 0" if pending else "suggestions_pending = 0")
         sql = "SELECT * FROM runs"
@@ -485,6 +602,165 @@ class DataStore:
 
         return xr.load_dataset(self._run_dir(run_id) / "dataset.nc")
 
+    # ---------------------------------------------------------------- campaigns
+    def new_campaign_dir(self, label: str) -> tuple[str, Path]:
+        """Allocate a campaign_id and create ``<device>/campaigns/<campaign_id>/``.
+
+        Same shape and the same exclusive-mkdir guard as :meth:`new_run_dir`, and the
+        device name is embedded for the same reason (global uniqueness across samples
+        sharing one data_root).
+
+        Deliberately NOT under a ``<YYYY-MM-DD>`` day folder: an overnight campaign
+        crosses midnight, so filing its manifest under its start day would be a lie
+        about a container that spans two day folders. A flat ``campaigns/`` sibling
+        also cannot collide with a date folder or a run folder by construction, and it
+        is invisible to every glob over the data root — ``reindex``'s
+        ``*/*/*/record.json`` (a campaign folder has none) and the ``*/cooldowns.toml``
+        device enumeration (likewise).
+        """
+        if not label or not SLUG_RE.match(label):
+            raise ValueError(
+                f"campaign label {label!r} must be letters, digits, '_' or '-' only "
+                "(it becomes a folder name and an index value)")
+        self.run_stamps()  # validate the cooldown registry LOUDLY before repeat 0
+        now = datetime.now()
+        stamp = _run_stamp(now)
+        base = self.data_root / self.device_name / CAMPAIGNS_SUBDIR
+        for seq in range(1, 100):
+            campaign_id = f"{stamp}-{self.device_name}-{label}-{seq:02d}"
+            campaign_dir = base / campaign_id
+            try:
+                campaign_dir.mkdir(parents=True, exist_ok=False)
+            except FileExistsError:
+                continue
+            return campaign_id, campaign_dir
+        raise RuntimeError(f"could not allocate a unique campaign dir for {stamp}-{label}")
+
+    def persist_campaign(self, *, campaign_id: str, campaign_dir: Path, manifest: dict) -> None:
+        """Write ``campaign.json`` (whole-file, atomic) and upsert the index row.
+
+        Called at campaign START (``status="running"``) and again after EVERY repeat,
+        so an overnight campaign is inspectable at repeat 37 and a crash leaves a
+        readable, honestly-labelled partial. Unlike ``record.json`` this file is NOT a
+        completion marker — an absent ``ended_at`` is what says "unfinished".
+        """
+        manifest = dict(manifest)
+        manifest.setdefault("schema", 1)
+        manifest["campaign_id"] = campaign_id
+        manifest["device"] = self.device_name
+        manifest["path"] = campaign_dir.relative_to(self.data_root).as_posix()
+        _write_json(campaign_dir / CAMPAIGN_FILE, manifest)
+        with self._connect() as db:
+            self._upsert_campaign(db, manifest)
+
+    def append_campaign_repeat(self, campaign_dir: Path, repeat: dict) -> None:
+        """Append one completed repeat to ``repeats.jsonl`` (one compact line).
+
+        Append-only, so the per-repeat cost stays constant: rewriting the whole
+        manifest's repeat list every time would be O(N^2) bytes over a long campaign.
+        The line carries the run_id / outcome / timing SKELETON only, never fit
+        VALUES — the child's ``result.json`` stays the single truth for every number,
+        and the campaign's only derived numbers are the aggregate statistics, which
+        :meth:`reindex` can recompute from the children.
+        """
+        line = json.dumps(_scrub(repeat), separators=(",", ":"))
+        with (campaign_dir / CAMPAIGN_REPEATS_FILE).open("a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+
+    def read_campaign_repeats(self, campaign_dir: Path) -> list[dict]:
+        """Read ``repeats.jsonl``; torn or unparseable lines are skipped with a warning.
+
+        Same tolerance as the state stores' history sidecar: a half-written last line
+        after a hard kill must not make the whole campaign unreadable.
+        """
+        path = Path(campaign_dir) / CAMPAIGN_REPEATS_FILE
+        if not path.is_file():
+            return []
+        rows: list[dict] = []
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except ValueError:
+                print(f"scqo.datastore: skipping torn line {number} of {path}", file=sys.stderr)
+        return rows
+
+    def load_campaign(self, campaign_id: str) -> dict:
+        """``{"manifest", "repeats", "path"}`` for one campaign."""
+        campaign_dir = self._campaign_dir(campaign_id)
+        return {
+            "manifest": json.loads((campaign_dir / CAMPAIGN_FILE).read_text(encoding="utf-8")),
+            "repeats": self.read_campaign_repeats(campaign_dir),
+            "path": str(campaign_dir),
+        }
+
+    def find_campaigns(
+        self,
+        *,
+        device: str | None = None,
+        label: str | None = None,
+        status: str | None = None,
+        experiment: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        cooldown: str | None = None,
+        setup: str | None = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        """Query the campaigns index; newest first."""
+        where, args = [], []
+        if device is not None:
+            where.append("device = ?")
+            args.append(device)
+        if label is not None:
+            where.append("label = ?")
+            args.append(label)
+        if status is not None:
+            where.append("status = ?")
+            args.append(status)
+        if experiment is not None:
+            where.append("EXISTS (SELECT 1 FROM json_each(campaigns.experiments) WHERE value = ?)")
+            args.append(experiment)
+        if since is not None:
+            where.append("started_at >= ?")
+            args.append(since)
+        if until is not None:  # a bare date is day-INCLUSIVE (see find_runs)
+            where.append("started_at <= ?")
+            args.append(until + "T~" if len(until) == 10 else until)
+        if cooldown is not None:
+            where.append("cooldown = ?")
+            args.append(cooldown)
+        if setup is not None:
+            where.append("setup = ?")
+            args.append(setup)
+        sql = "SELECT * FROM campaigns"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY started_at DESC, campaign_id DESC LIMIT ?"
+        args.append(int(limit))
+        with self._connect() as db:
+            rows = db.execute(sql, args).fetchall()
+        return [self._campaign_row_to_dict(row) for row in rows]
+
+    def campaign_runs(self, campaign_id: str, *, device: str | None = None) -> list[dict]:
+        """A campaign's children in EXECUTION order (repeat_idx, step_idx).
+
+        Deliberately NOT ``find_runs(campaign=...)``: that is newest-first and capped
+        at ``limit=50``, and a 100-repeat 4-step campaign has 400 children — the wrong
+        order and a silent truncation. This walks ``idx_runs_campaign`` with no limit.
+        """
+        sql = "SELECT * FROM runs WHERE campaign = ?"
+        args: list[Any] = [campaign_id]
+        if device is not None:
+            sql += " AND device = ?"
+            args.append(device)
+        sql += " ORDER BY repeat_idx, step_idx, started_at, run_id"
+        with self._connect() as db:
+            rows = db.execute(sql, args).fetchall()
+        return [self._row_to_dict(row) for row in rows]
+
     # --------------------------------------------------------------------- tags
     def tag_run(
         self,
@@ -579,6 +855,7 @@ class DataStore:
         count = 0
         with self._connect() as db:
             db.execute("DROP TABLE IF EXISTS runs")
+            db.execute("DROP TABLE IF EXISTS campaigns")
             db.executescript(_SCHEMA)
             db.execute(
                 "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
@@ -601,6 +878,20 @@ class DataStore:
                     continue
                 self._upsert(db, record, parameters, result.get("fit") or {})
                 count += 1
+            # Second pass: the campaign manifests. A manifest still marked
+            # "running" is indexed verbatim — reindex cannot know whether it is
+            # live or was interrupted, and an absent ended_at already says so.
+            for manifest_path in sorted(
+                self.data_root.glob(f"*/{CAMPAIGNS_SUBDIR}/*/{CAMPAIGN_FILE}")
+            ):
+                try:
+                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    self._upsert_campaign(db, manifest)
+                except Exception as err:  # unreadable manifest: skip, keep indexing
+                    print(
+                        f"scqo.datastore: skipping {manifest_path.parent} ({err})",
+                        file=sys.stderr,
+                    )
         return count
 
     # ----------------------------------------------------------------- internal
@@ -631,14 +922,72 @@ class DataStore:
             )
         return self.data_root / rows[0]["path"]
 
+    def _campaign_dir(self, campaign_id: str) -> Path:
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT path FROM campaigns WHERE campaign_id = ?", (campaign_id,)
+            ).fetchall()
+        if not rows:
+            raise KeyError(
+                f"unknown campaign_id {campaign_id!r} (try reindex() if the folder exists)")
+        if len(rows) > 1:  # same millisecond + label on two devices sharing this data_root
+            raise KeyError(
+                f"campaign_id {campaign_id!r} exists on multiple devices: "
+                + ", ".join(sorted(r["path"] for r in rows))
+            )
+        return self.data_root / rows[0]["path"]
+
+    @staticmethod
+    def _upsert_campaign(db: sqlite3.Connection, manifest: dict) -> None:
+        db.execute(
+            "INSERT OR REPLACE INTO campaigns (campaign_id, device, label, started_at,"
+            " ended_at, status, stop_reason, backend, operator, cooldown, setup,"
+            " experiments, targets, repeat_planned, repeat_done, repeats_failed, plan,"
+            " statistics, tags, note, path, schema_version)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                manifest["campaign_id"],
+                manifest["device"],
+                manifest.get("label", ""),
+                manifest["started_at"],
+                manifest.get("ended_at"),
+                manifest.get("status", "running"),
+                manifest.get("stop_reason", ""),
+                manifest.get("backend", ""),
+                manifest.get("operator", ""),
+                manifest.get("cooldown", ""),
+                manifest.get("setup", ""),
+                json.dumps(manifest.get("experiments", [])),
+                json.dumps(manifest.get("targets", [])),
+                manifest.get("repeat_planned"),
+                int(manifest.get("repeat_done", 0)),
+                int(manifest.get("repeats_failed", 0)),
+                json.dumps(_scrub(manifest.get("plan", {}))),
+                json.dumps(_scrub(manifest.get("statistics", {}))),
+                json.dumps(manifest.get("tags", [])),
+                manifest.get("note", ""),
+                manifest["path"],
+                int(manifest.get("schema", 1)),
+            ),
+        )
+
+    @staticmethod
+    def _campaign_row_to_dict(row: sqlite3.Row) -> dict:
+        out = dict(row)
+        for key in ("experiments", "targets", "plan", "statistics", "tags"):
+            if out.get(key) is not None:
+                out[key] = json.loads(out[key])
+        return out
+
     @staticmethod
     def _upsert(db: sqlite3.Connection, record: RunRecord, parameters: dict, fit: dict) -> None:
         db.execute(
             "INSERT OR REPLACE INTO runs (run_id, started_at, ended_at, experiment, device,"
-            " backend, operator, cooldown, setup, targets, outcome, outcomes, fit, tags,"
+            " backend, operator, cooldown, setup, campaign, repeat_idx, step_idx,"
+            " targets, outcome, outcomes, fit, tags,"
             " note, error, parameters, updated_device, suggestions, suggestions_pending,"
             " path, schema_version)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 record.run_id,
                 record.started_at,
@@ -649,6 +998,9 @@ class DataStore:
                 record.operator,
                 record.cooldown,
                 record.setup,
+                record.campaign,
+                record.repeat_idx,
+                record.step_idx,
                 json.dumps(record.targets),
                 record.outcome,
                 json.dumps(record.outcomes),
@@ -754,7 +1106,7 @@ def load_cooldowns(data_root: str | Path, device: str) -> dict:
     for cid, cycle in cycles.items():
         if not isinstance(cycle, dict):
             raise ValueError(f"{path}: top-level keys must be cycle tables like [cd8]; {cid!r} is not")
-        if not _SETUP_NAME_RE.match(cid):
+        if not SLUG_RE.match(cid):
             # The cooldown id becomes a folder segment (<cooldown>/<setup>/scqo/) and
             # an index value, so it must be filename/query-safe like a setup name.
             raise ValueError(f"{path}: cooldown id {cid!r} must be letters/digits/_/- only "
@@ -781,7 +1133,7 @@ def load_cooldowns(data_root: str | Path, device: str) -> dict:
         # time with a message naming the hand-edit fix (the manager adds blocks later).
         names: dict[str, str] = {}
         for name, setup in setups.items():
-            if not _SETUP_NAME_RE.match(name):
+            if not SLUG_RE.match(name):
                 raise ValueError(f"{path}: setup name {name!r} in cycle {cid!r} must be "
                                  "letters/digits/_/- only (it becomes a CLI argument and an "
                                  "index value)")
@@ -880,9 +1232,9 @@ def resolve_setup(cycle: dict, name: str | None = None) -> tuple[str, dict]:
 def _setup_dir(data_root: str | Path, device: str, cooldown: str, setup_name: str) -> Path:
     """The one folder per (device, cooldown, setup): ``<data_root>/<device>/
     <cooldown>/<setup_name>/``. Both ``cooldown`` and ``setup_name`` become path
-    segments, so both must be filename-safe (``_SETUP_NAME_RE``)."""
+    segments, so both must be filename-safe (``SLUG_RE``)."""
     for part, what in ((cooldown, "cooldown id"), (setup_name, "setup name")):
-        if not part or not _SETUP_NAME_RE.match(part):
+        if not part or not SLUG_RE.match(part):
             raise ValueError(f"a setup path needs a {what} (letters/digits/_/- only), got {part!r}")
     return Path(data_root) / device / cooldown / setup_name
 

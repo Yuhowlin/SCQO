@@ -12,7 +12,7 @@ free of the analysis stack; the import only happens when analysis actually runs.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 import xarray as xr
 
@@ -63,3 +63,29 @@ def per_qubit_results(
                 plt.close(fig)
         out[qubit_name] = results
     return out
+
+
+def mad_outlier_mask(
+    values: Sequence[float | None], *, n_sigma: float = 3.0, rel_floor: float = 0.25
+) -> tuple[list[bool], float | None, float | None]:
+    """Robust (median / MAD) outlier flags over a 1-D value list.
+
+    The campaign aggregator's robust view. ``None`` entries are treated as
+    missing (never flagged, never judged); everything else follows scqat's
+    ``mad_outliers`` contract exactly — a point is an outlier only when it
+    deviates from the median both by more than ``n_sigma`` robust sigmas AND by
+    more than ``rel_floor`` times the median, and **nothing is flagged below 4
+    finite points**. Returns ``(mask, median, mad)`` with the mask as plain
+    bools so no numpy type escapes into JSON.
+    """
+    import numpy as np
+    from scqat.tools.robust import mad_outliers
+
+    array = np.array([np.nan if v is None else float(v) for v in values], dtype=float)
+    valid = np.isfinite(array)
+    mask, median, mad = mad_outliers(array, valid, n_sigma, rel_floor=rel_floor)
+    return (
+        [bool(flag) for flag in mask],
+        None if not np.isfinite(median) else float(median),
+        None if not np.isfinite(mad) else float(mad),
+    )

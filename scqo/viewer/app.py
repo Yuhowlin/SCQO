@@ -20,7 +20,6 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from .._state_io import read_history
-from ..catalog import CHANNELS, COMPOSITES, MODES
 from ..datastore import (
     STATE_FILE,
     DataStore,
@@ -30,35 +29,15 @@ from ..datastore import (
     setup_scqo_dir,
 )
 from ..provenance import live_run_map, live_sources, summarize_live
-from ..stores import PHYSICAL_FILE
-
-#: quantities never tracked as device state (instrument-dependent; recorded decision)
-_FIT_ONLY_TRENDS = ("p_e_given_g",)
-#: fit quantities offered as one-click trend links (free-text also accepted):
-#: measured physics first, then calibration knobs — derived from the kind
-#: catalogs by field ROLE (facts land in physical.json; knobs and monitors in
-#: scqo_state.json).
-def _catalog_fields(*roles: str) -> list[str]:
-    """Catalog field names of the given roles, in declaration order (deduped
-    across kinds)."""
-    out: list[str] = []
-    for kinds in (MODES, COMPOSITES, CHANNELS):
-        for spec in kinds.values():
-            for f, fs in spec.fields.items():
-                if fs.role in roles and f not in out:
-                    out.append(f)
-    return out
-
-
-PHYSICAL_FIELD_ORDER = _catalog_fields("fact")
-INSTRUMENT_FIELD_ORDER = _catalog_fields("knob", "monitor")
-
-TREND_QUANTITIES = (
-    *PHYSICAL_FIELD_ORDER,
-    *_catalog_fields("monitor"),
-    *_catalog_fields("knob"),
-    *_FIT_ONLY_TRENDS,
+# Catalog-derived field orders live in report.py (renderer-free, no fastapi), so
+# the CLI's campaign progress can pick its headline quantity from the SAME set
+# the /trends menu offers — one definition, two consumers.
+from ..report import (
+    INSTRUMENT_FIELD_ORDER,
+    PHYSICAL_FIELD_ORDER,
+    REPORTABLE_QUANTITIES,
 )
+from ..stores import PHYSICAL_FILE
 
 
 def create_app(
@@ -279,7 +258,7 @@ def create_app(
             request,
             "trends.html",
             {"target": target, "quantity": quantity, "rows": rows, "svg": svg,
-             "quantities": TREND_QUANTITIES, "device": dev,
+             "quantities": REPORTABLE_QUANTITIES, "device": dev,
              "devices": store.distinct_devices()},
         )
 
