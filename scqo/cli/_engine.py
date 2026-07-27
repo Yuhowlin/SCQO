@@ -157,11 +157,10 @@ def run_experiment_cli(
     if "targets" not in params and "targets" not in file_defaults:
         params["targets"] = default_targets(sess, name)
 
-    applied = sorted(k for k in file_defaults if k not in params)
-    if applied:  # stderr: stdout stays parseable JSON (| jq etc.)
-        print(f"# parameter defaults from {cfg.parameters_source} [{name}]: {', '.join(applied)}", file=sys.stderr)
     mode = "apply" if args.accept else ("none" if args.no_update else "suggest")
 
+    # The campaign branch first: `execute` prints the standing-defaults note in the
+    # per-step shape it shares with `scqo campaign`, so this must not print it too.
     if args.repeat is not None or args.max_duration is not None:
         from scqo import CampaignPlan
 
@@ -184,6 +183,9 @@ def run_experiment_cli(
         return execute(sess, plan, update="apply" if args.accept else "none",
                        tags=args.tags, note=args.note, as_json=False)
 
+    applied = sorted(k for k in file_defaults if k not in params)
+    if applied:  # stderr: stdout stays parseable JSON (| jq etc.)
+        print(f"# parameter defaults from {cfg.parameters_source} [{name}]: {', '.join(applied)}", file=sys.stderr)
     result = sess.run(name, params, update=mode, tags=args.tags, note=args.note)
     print(json.dumps(result, indent=2))
     if "data_path" in result:

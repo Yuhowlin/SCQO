@@ -42,7 +42,12 @@ from pathlib import Path
 from scqo import DataStore, load_campaign_plan, load_lab_config
 
 from ._backends import build_session
-from ._campaign import execute, format_statistics, format_summary
+from ._campaign import (
+    execute,
+    format_statistics,
+    format_summary,
+    parameter_default_lines,
+)
 
 
 def _refuse_experiment_name(plan_arg: str) -> None:
@@ -139,6 +144,10 @@ def _dry_run(sess, plan, cfg) -> int:
     for step_idx, step in enumerate(plan.steps):
         merged = {**sess.parameter_defaults.get(step.experiment, {}), **plan.step_params(step)}
         print(f"  step {step_idx}  {step.experiment:28s} {json.dumps(merged, sort_keys=True)}")
+    # ...and say which of those the plan did NOT supply, so the resolved dict above
+    # can be read as "plan" vs "lab file" rather than one undifferentiated blob.
+    for line in parameter_default_lines(sess, plan):
+        print(line)
     if plan.repeat is not None:
         total = plan.repeat * len(plan.steps)
         print(f"\nwould create {total} runs ({plan.repeat} repeats x {len(plan.steps)} steps)"

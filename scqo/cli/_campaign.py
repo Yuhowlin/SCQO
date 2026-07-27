@@ -219,6 +219,30 @@ def stderr_progress(plan):
     return emit
 
 
+def parameter_default_lines(sess, plan) -> list[str]:
+    """Which standing defaults each step picks up from the lab's parameters file.
+
+    The campaign twin of the note ``scqo run`` prints, one row per step: a plan
+    deliberately restates no physics, so without this the operator cannot tell
+    what a step will actually run without reaching for ``--dry-run``. A key the
+    plan supplies itself is NOT listed — the file no longer governs it.
+    """
+    source = getattr(sess, "parameter_defaults_source", None) or "the parameters file"
+    rows: list[tuple[str, list[str]]] = []
+    for step in plan.steps:
+        supplied = set(plan.step_params(step))
+        applied = sorted(k for k in (sess.parameter_defaults.get(step.experiment) or {})
+                         if k not in supplied)
+        if applied:
+            rows.append((step.experiment, applied))
+    if not rows:
+        return []
+    width = max(len(name) for name, _ in rows)
+    return [f"# parameter defaults from {source}:"] + [
+        f"#   {name:{width}s}  {', '.join(applied)}" for name, applied in rows
+    ]
+
+
 def format_summary(manifest: dict) -> str:
     """The one-block status header printed above the table."""
     planned = manifest.get("repeat_planned")
@@ -254,6 +278,8 @@ def execute(sess, plan, *, update: str, tags: list[str], note: str, as_json: boo
     under its own measurement, so its statistics describe the feedback loop, not
     the qubit.
     """
+    for line in parameter_default_lines(sess, plan):  # stderr: stdout stays parseable
+        print(line, file=sys.stderr)
     if update == "apply":
         print("# WARNING: --accept applies each repeat's updates, so the device MOVES\n"
               "#          between repeats. The resulting spread then describes the\n"
