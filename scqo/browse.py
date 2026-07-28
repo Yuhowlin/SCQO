@@ -2,7 +2,7 @@
 
 The daily GUI is ``python -m scqo.viewer`` (port 8080); this serves datasette on 8081
 for ad-hoc SQL, facets and CSV export, shipping canned queries (runs by tag / by
-qubit / failures / fitted-quantity trend) so nobody has to write JSON1 SQL by hand.
+target / failures / fitted-quantity trend) so nobody has to write JSON1 SQL by hand.
 
 Port convention: 8001 qualibrate / 8080 viewer / 8081 this datasette browser.
 """

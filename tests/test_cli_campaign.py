@@ -34,6 +34,18 @@ experiment = "qubit_echo"
 """
 
 
+#: Standing lab defaults the plan deliberately does NOT restate — the whole point
+#: of the note under test is that a reader cannot see these in the plan file.
+PARAMETERS_TOML = """\
+[qubit_relaxation]
+num_points = 41
+num_averages = 30
+
+[qubit_echo]
+num_averages = 30
+"""
+
+
 def _lab(tmp_path: Path) -> Path:
     """A temp lab: device simdev on a simulated setup (see tests/test_cli_run.py)."""
     data_root = tmp_path / "data"
@@ -54,9 +66,12 @@ def _lab(tmp_path: Path) -> Path:
         design.append(f"[{q}_res]\nf_r_hz = {_FR[i]:.6g}")
     (data_root / "simdev" / "design.toml").write_text(
         "\n".join(design) + "\n", encoding="utf-8")
+    params = tmp_path / "parameters.toml"
+    params.write_text(PARAMETERS_TOML, encoding="utf-8")
     config = tmp_path / "config.toml"
     config.write_text(
-        f"[lab]\ndevice = \"simdev\"\ndata_root = '{data_root.as_posix()}'\n",
+        f"[lab]\ndevice = \"simdev\"\ndata_root = '{data_root.as_posix()}'\n"
+        f"parameters_file = '{params.as_posix()}'\n",
         encoding="utf-8")
     return config
 
@@ -180,6 +195,100 @@ def test_progress_shows_each_repeat_of_a_bare_repeat_run(tmp_path):
     assert len(starts) == 3
     assert "eta " in starts[1]  # no history for repeat 0, then extrapolated
     assert all(line.isascii() for line in proc.stderr.splitlines())
+
+
+def test_standing_defaults_are_announced_per_step(tmp_path):
+    """A plan restates no physics, so without this note the operator cannot see
+    what a step will actually run. One row per step, on stderr like `scqo run`."""
+    proc = _cli(tmp_path, "campaign", _plan(tmp_path), "--json")
+    assert proc.returncode == 0, proc.stderr
+
+    assert "# parameter defaults from" in proc.stderr
+    row = next(ln for ln in proc.stderr.splitlines() if "qubit_relaxation" in ln
+               and ln.startswith("#   "))
+    assert "num_points" in row and "num_averages" in row
+    assert "# parameter defaults" not in proc.stdout
+    json.loads(proc.stdout)  # still exactly the manifest
+
+
+def test_a_key_the_plan_supplies_is_not_listed_as_a_default(tmp_path):
+    """Once the plan pins a key the lab file no longer governs it, so claiming it
+    came from the file would be a lie."""
+    pinned = PLAN.replace('experiment = "qubit_echo"',
+                          'experiment = "qubit_echo"\nparams = { num_averages = 55 }')
+    proc = _cli(tmp_path, "campaign", _plan(tmp_path, pinned), "--dry-run")
+    assert proc.returncode == 0, proc.stderr
+    # qubit_echo's only file default is now plan-supplied, so it drops off the note
+    note = [ln for ln in proc.stdout.splitlines() if ln.startswith("#   ")]
+    assert any("qubit_relaxation" in ln for ln in note)
+    assert not any("qubit_echo" in ln for ln in note)
+    assert '"num_averages": 55' in proc.stdout  # ...and the resolved dict shows the pin
+
+
+def test_repeat_run_announces_defaults_once_not_twice(tmp_path):
+    """`scqo run --repeat` goes through the campaign path, so only ONE note fires."""
+    proc = _cli(tmp_path, "run", "qubit_relaxation", "--targets", "q0",
+                "--repeat", "2", "--skip-artifacts")
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stderr.count("# parameter defaults from") == 1
+
+
+def test_a_finished_campaign_writes_its_figure(tmp_path):
+    """An overnight run ends at 4 a.m.; the figure must be waiting, not depend on
+    someone remembering to ask for it."""
+    proc = _cli(tmp_path, "campaign", _plan(tmp_path))
+    assert proc.returncode == 0, proc.stderr
+
+    png = next((tmp_path / "data" / "simdev" / "campaigns").glob("*/statistics.png"))
+    assert png.stat().st_size > 1000
+    # the path is ADVISORY, so stderr — stdout is the manifest under --json
+    assert "# figure:" in proc.stderr and "figure:" not in proc.stdout
+
+
+def test_a_broken_figure_never_fails_the_campaign(monkeypatch, capsys):
+    """Losing the picture must never lose the measurement.
+
+    In-process rather than a subprocess: the point is the guard inside
+    plot_statistics, and `render_statistics` is imported at CALL time so patching
+    the source module lands."""
+    import scqo.cli._campaign_plot as plot_module
+    from scqo.cli._campaign import plot_statistics
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("no display, no disk, no luck")
+
+    monkeypatch.setattr(plot_module, "render_statistics", boom)
+    manifest = {"campaign_id": "cid", "statistics": {"x": {"q0": {}}}, "path": "p"}
+    plot_statistics(object(), manifest)  # must not raise
+
+    err = capsys.readouterr().err
+    assert "statistics figure skipped" in err
+    assert "campaign itself is unaffected" in err
+
+
+def test_no_figure_is_attempted_when_there_is_nothing_to_draw(capsys):
+    """No data_root (no campaign_id) or no successful fit -> silence, not a warning."""
+    from scqo.cli._campaign import plot_statistics
+
+    plot_statistics(None, {"campaign_id": "cid", "statistics": {"x": {}}})
+    plot_statistics(object(), {"campaign_id": None, "statistics": {"x": {}}})
+    plot_statistics(object(), {"campaign_id": "cid", "statistics": {}})
+    assert capsys.readouterr().err == ""
+
+
+def test_show_plot_re_renders_without_re_running(tmp_path):
+    run = _cli(tmp_path, "campaign", _plan(tmp_path))
+    assert run.returncode == 0, run.stderr
+    campaign_id = _cli(tmp_path, "campaign", "--list").stdout.split()[0]
+    png = next((tmp_path / "data" / "simdev" / "campaigns").glob("*/statistics.png"))
+    before = png.stat().st_mtime_ns
+    day_folders = sorted((tmp_path / "data" / "simdev").glob("2*"))
+
+    proc = _cli(tmp_path, "campaign", "--show", campaign_id, "--plot")
+    assert proc.returncode == 0, proc.stderr
+    assert "# figure:" in proc.stderr
+    assert png.stat().st_mtime_ns != before                      # re-rendered
+    assert sorted((tmp_path / "data" / "simdev").glob("2*")) == day_folders  # nothing re-ran
 
 
 def test_campaign_appears_in_the_command_list(tmp_path):

@@ -219,6 +219,30 @@ def stderr_progress(plan):
     return emit
 
 
+def parameter_default_lines(sess, plan) -> list[str]:
+    """Which standing defaults each step picks up from the lab's parameters file.
+
+    The campaign twin of the note ``scqo run`` prints, one row per step: a plan
+    deliberately restates no physics, so without this the operator cannot tell
+    what a step will actually run without reaching for ``--dry-run``. A key the
+    plan supplies itself is NOT listed — the file no longer governs it.
+    """
+    source = getattr(sess, "parameter_defaults_source", None) or "the parameters file"
+    rows: list[tuple[str, list[str]]] = []
+    for step in plan.steps:
+        supplied = set(plan.step_params(step))
+        applied = sorted(k for k in (sess.parameter_defaults.get(step.experiment) or {})
+                         if k not in supplied)
+        if applied:
+            rows.append((step.experiment, applied))
+    if not rows:
+        return []
+    width = max(len(name) for name, _ in rows)
+    return [f"# parameter defaults from {source}:"] + [
+        f"#   {name:{width}s}  {', '.join(applied)}" for name, applied in rows
+    ]
+
+
 def format_summary(manifest: dict) -> str:
     """The one-block status header printed above the table."""
     planned = manifest.get("repeat_planned")
@@ -254,6 +278,8 @@ def execute(sess, plan, *, update: str, tags: list[str], note: str, as_json: boo
     under its own measurement, so its statistics describe the feedback loop, not
     the qubit.
     """
+    for line in parameter_default_lines(sess, plan):  # stderr: stdout stays parseable
+        print(line, file=sys.stderr)
     if update == "apply":
         print("# WARNING: --accept applies each repeat's updates, so the device MOVES\n"
               "#          between repeats. The resulting spread then describes the\n"
@@ -266,4 +292,27 @@ def execute(sess, plan, *, update: str, tags: list[str], note: str, as_json: boo
             print(f"  {problem}", file=sys.stderr)
         return 2
     render(manifest, as_json=as_json)
+    plot_statistics(sess.datastore, manifest)
     return 0 if manifest.get("status") == "complete" else 1
+
+
+def plot_statistics(store, manifest: dict, **kwargs) -> None:
+    """Write statistics.png into the campaign folder; never fail the campaign for it.
+
+    Losing the picture must never lose the measurement — the same doctrine as
+    `scqo._scqat`'s artifact fallback and `_safe_progress`. Also fires for a
+    stopped or partial campaign: you still want to see what you got.
+    """
+    if store is None or not manifest.get("campaign_id") or not manifest.get("statistics"):
+        return  # no data_root to write into, or nothing measured to draw
+    try:
+        from ._campaign_plot import render_statistics
+
+        path = render_statistics(store, manifest["campaign_id"], manifest, **kwargs)
+    except Exception as err:
+        print(f"# statistics figure skipped ({type(err).__name__}: {err}); "
+              f"the campaign itself is unaffected", file=sys.stderr)
+        return
+    if path is not None:
+        # stderr: stdout is the manifest under --json and must stay | jq safe.
+        print(f"# figure: {path}", file=sys.stderr)

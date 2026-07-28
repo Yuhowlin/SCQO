@@ -42,7 +42,13 @@ from pathlib import Path
 from scqo import DataStore, load_campaign_plan, load_lab_config
 
 from ._backends import build_session
-from ._campaign import execute, format_statistics, format_summary
+from ._campaign import (
+    execute,
+    format_statistics,
+    format_summary,
+    parameter_default_lines,
+    plot_statistics,
+)
 
 
 def _refuse_experiment_name(plan_arg: str) -> None:
@@ -76,6 +82,13 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
                         help="list recent campaigns instead of running one")
     parser.add_argument("--show", metavar="CAMPAIGN_ID",
                         help="print one campaign's plan, statistics and children")
+    parser.add_argument("--plot", action="store_true",
+                        help="with --show: re-render statistics.png (a finished "
+                             "campaign already wrote one)")
+    parser.add_argument("--recompute-readout", action="store_true", dest="refit",
+                        help="with --show --plot: re-derive the single_shot Gaussian "
+                             "populations from the saved dataset.nc, for campaigns run "
+                             "before pop_e_prep_g was recorded; no instrument is touched")
     parser.add_argument("--repeat", type=int, metavar="N", help="override the plan's repeat count")
     parser.add_argument("--period", type=float, metavar="SECONDS",
                         help="override the plan's minimum seconds between repeat starts")
@@ -139,6 +152,10 @@ def _dry_run(sess, plan, cfg) -> int:
     for step_idx, step in enumerate(plan.steps):
         merged = {**sess.parameter_defaults.get(step.experiment, {}), **plan.step_params(step)}
         print(f"  step {step_idx}  {step.experiment:28s} {json.dumps(merged, sort_keys=True)}")
+    # ...and say which of those the plan did NOT supply, so the resolved dict above
+    # can be read as "plan" vs "lab file" rather than one undifferentiated blob.
+    for line in parameter_default_lines(sess, plan):
+        print(line)
     if plan.repeat is not None:
         total = plan.repeat * len(plan.steps)
         print(f"\nwould create {total} runs ({plan.repeat} repeats x {len(plan.steps)} steps)"
@@ -171,6 +188,8 @@ def _read_only(args) -> int:
         print(format_summary({**manifest, "data_path": loaded["path"]}))
         print()
         print(format_statistics(manifest.get("statistics") or {}))
+        if args.plot:
+            plot_statistics(store, manifest, refit=args.refit)
         children = store.campaign_runs(args.show)
         print(f"\nchildren ({len(children)}, execution order):")
         for child in children:
