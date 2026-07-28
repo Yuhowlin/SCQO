@@ -42,10 +42,15 @@ def live_sources(values: dict, history: list[dict]) -> dict[str, dict[str, dict]
     """
     last: dict[tuple[str, str], dict] = {}
     for record in history:  # forward pass: dict overwrite == last record wins
-        last[(record["entity"], record["field"])] = record
+        if isinstance(record, dict) and "entity" in record and "field" in record:
+            last[(record["entity"], record["field"])] = record
 
     out: dict[str, dict[str, dict]] = {}
+    if not isinstance(values, dict):
+        return out
     for entity, fields in values.items():
+        if not isinstance(fields, dict):
+            continue
         for field, value in fields.items():
             if value is None:
                 continue
@@ -66,7 +71,7 @@ def live_sources(values: dict, history: list[dict]) -> dict[str, dict[str, dict]
                     info["status"] = "external"  # strict match: never credit a drifted value
                 elif record.get("run_id"):
                     info["status"] = "run"
-                    info["run_id"] = record["run_id"]
+                    info["run_id"] = record.get("run_id")
                 else:
                     info["status"] = "manual"
             out.setdefault(entity, {})[field] = info

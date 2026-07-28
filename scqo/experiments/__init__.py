@@ -138,6 +138,7 @@ from ._capabilities import (  # noqa: E402
     reset_wait_ns,
 )
 from .pair_zz_coupler import PairZZCoupler  # noqa: E402
+from .qubit_deterministic_benchmarking import QubitDeterministicBenchmarking  # noqa: E402
 from .qubit_drag_alternating import QubitDragAlternating  # noqa: E402
 from .qubit_drag_equator import QubitDragEquator  # noqa: E402
 from .qubit_echo import QubitEcho  # noqa: E402
@@ -168,7 +169,7 @@ from .single_shot_readout import SingleShotReadout  # noqa: E402
 __all__ = [
     "catalog", "get", "register",
     "QubitResetParameters", "reset_wait_ns",
-    "PairZZCoupler", "QubitDragAlternating", "QubitDragEquator", "QubitEcho",
+    "PairZZCoupler", "QubitDeterministicBenchmarking", "QubitDragAlternating", "QubitDragEquator", "QubitEcho",
     "QubitEchoFlux", "QubitPiPulseError", "QubitPowerRabi", "QubitRamsey",
     "QubitRelaxation", "QubitRelaxationFlux", "QubitSQRB",
     "QubitSpectroscopy", "QubitSpectroscopyFluxPulse", "QubitTomography",
@@ -176,3 +177,4 @@ __all__ = [
     "ResonatorSpectroscopyFlux", "ResonatorSpectroscopyPowerAmp",
     "ResonatorSpectroscopyPowerChain", "SingleShotReadout",
 ]
+

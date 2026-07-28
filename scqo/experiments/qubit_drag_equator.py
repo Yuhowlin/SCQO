@@ -29,6 +29,8 @@ class QubitDragEquatorParameters(TargetSelection, AveragingParameters, QubitRese
     max_beta: float = Field(0.5, description="Maximum DRAG beta coefficient.")
     num_beta_points: int = Field(41, gt=1, description="Number of beta sweep points.")
     pulse_repetitions: int = Field(3, gt=0, description="Number of alternating pi pulses. Must be odd.")
+    target_gate: str = Field("x180", description="Gate to calibrate: 'x180' or 'x90'.")
+
 
     @field_validator("pulse_repetitions")
     @classmethod
@@ -128,9 +130,24 @@ class QubitDragEquator(Experiment):
     def update(self) -> None:
         if self.result is None:
             return
+        target_gate = getattr(self.params, "target_gate", "x180")
         for qubit, fit in self.result.fit.items():
             if self.result.outcomes[qubit] is Outcome.SUCCESSFUL and fit.get("opt_beta") is not None:
-                self.device.channel(qubit, "drive").drag_beta = fit["opt_beta"]
+                chan = self.device.channel(qubit, "drive")
+                if target_gate == "x90":
+                    if hasattr(chan, "drag_beta_x90"):
+                        chan.drag_beta_x90 = fit["opt_beta"]
+                    elif hasattr(chan, "set_drag_beta"):
+                        chan.set_drag_beta(fit["opt_beta"], operation="x90", lock_x90=False)
+                else:
+                    chan.drag_beta = fit["opt_beta"]
+
+
+
+
+
+
+
 
     def probe(self):  # pragma: no cover - driver half
         raise NotImplementedError("a driver backend supplies probe()")
