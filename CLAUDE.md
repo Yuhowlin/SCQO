@@ -180,7 +180,15 @@ scqo/
     single_shot_readout.py      # per-shot IQ blobs (prepared_state x shot_idx) ->
                                 #   fidelity_g/fidelity_e monitors + pos_* blob centers on the
                                 #   readout channel; a discriminating driver also proposes
-                                #   readout_rotation_rad/readout_threshold/readout_rus_threshold
+                                #   readout_rotation_rad/readout_threshold/readout_rus_threshold.
+                                #   The leftover population is reported BOTH ways and they are
+                                #   NOT one quantity by two methods, so they never share a key
+                                #   (scqat's own multi-method rule): p_e_given_g/p_g_given_e are
+                                #   COUNTED (nearest-center assignment = population + overlap
+                                #   error), pop_e_prep_g/pop_g_prep_e are the FITTED blob weights
+                                #   (population alone, from scqat's gaussian_norms - amplitudes
+                                #   only, centers/widths pinned). Their difference ~ the
+                                #   discrimination error
     resonator_spectroscopy_flux.py   # 2D resonator flux map -> idle_flux + readout_freq_hz
                                 #   at the sweet spot; flux_offset/flux_per_phi0 (flux-channel
                                 #   facts) + f_r0_hz/g_hz (resonator facts)

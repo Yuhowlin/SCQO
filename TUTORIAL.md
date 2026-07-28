@@ -431,6 +431,41 @@ are the *measured* ones — settings you configured, like `drive_freq_hz`, are l
 out because they cannot drift. All of it goes to **stderr**, so stdout stays clean
 for `--json | jq`; silence it with `2>$null` or capture it with `2>run.log`.
 
+#### Which readout number to trust
+
+`single_shot_readout` reports the leftover excited population **two ways**, and they
+are not the same quantity:
+
+| | how | what it contains |
+|---|---|---|
+| `p_e_given_g` | **counted** — every shot assigned to its nearest blob centre | residual population **+ discrimination error** |
+| `pop_e_prep_g` | **fitted** — the weight of the excited blob in the fit | residual population **alone** |
+
+So the *gap between them* is roughly your discrimination error, and that is what
+makes the pair worth having. A real 20-repeat chipA campaign:
+
+- The count scattered by **125%** and spiked to 11.5% on one repeat. The fit sat at
+  0.98% ± 0.22 throughout. That spike was the **readout failing to separate the
+  blobs**, not the qubit suddenly becoming 11% excited.
+- Between two campaigns 1.7 h apart the count mean was flat (1.86% → 1.88%) while
+  the fit rose **48%** (0.98% → 1.45%). The count would have told you nothing had
+  changed.
+
+`pop_g_prep_e` is the mirror image — the ground-state leftover when you *prepare*
+excited. It runs ~8.5% against ~1% for the g side, which is expected: that is T1
+decay during the readout window, so it is a direct handle on how long your readout is.
+
+One caveat, because it decides how much to trust the number: the fit floats only the
+blob **amplitudes**. The centres and widths are pinned to a median/MAD seed, so a bad
+seed gives a bad population. It is not a free two-Gaussian fit.
+
+Campaigns you ran before this existed have no `pop_*` values stored — but the raw
+per-shot data does, so they can be recovered offline with no instrument:
+
+```bash
+scqo campaign --show <campaign_id> --plot --recompute-readout
+```
+
 Things worth knowing before you leave one running overnight:
 
 - **The device is not touched.** A campaign runs with updates off, because 100 repeats
@@ -904,8 +939,8 @@ same dip — two roles, two homes, on purpose).
    the next step → **role `monitor` → scqo_state.json, never pushed**
    (`fidelity_g`/`fidelity_e`, the blob positions — performance OF the current
    knobs, invalidated when they move). Only compared across runs → **run record
-   only** (`p_e_given_g`, `power_context`) — compare across instruments by
-   query, with backend provenance, never as state.
+   only** (`p_e_given_g`, `pop_e_prep_g`, `power_context`) — compare across
+   instruments by query, with backend provenance, never as state.
 6. **Everything else is the instrument's** → vendor config, vendor-native
    units, catalogued (`scqo state --fields`) when relevant, with a kind:
    `[realizer]` realizes a neutral field — change THAT field via `scqo set`;
