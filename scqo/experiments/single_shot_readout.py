@@ -111,10 +111,15 @@ class SingleShotReadout(Experiment):
             r = results[qubit]
             counts = np.asarray(r["direct_counts"], dtype=float)  # (prepared_state, label), rows sum to 1
             mean = np.asarray(r.get("trained_paras", {}).get("mean", []), dtype=float)  # (n_center, 2) IQ
+            # (prepared_state, center) fitted blob WEIGHTS. Same indexing as counts,
+            # so the one label mapping below serves both — a second mapping would be
+            # a second authority that can disagree.
+            norms = np.asarray(r.get("gaussian_norms", []), dtype=float)
             # The GMM's center order is not guaranteed to match the prepared-state
             # order; pick the label mapping that makes the diagonal the majority, and
             # map the same labels onto the g/e blob centers.
             (g_i, g_q), (e_i, e_q) = (nan, nan), (nan, nan)
+            pop_e_g = pop_g_e = nan
             if counts.shape == (2, 2):
                 direct = 0.5 * (counts[0, 0] + counts[1, 1])
                 swapped = 0.5 * (counts[0, 1] + counts[1, 0])
@@ -127,13 +132,27 @@ class SingleShotReadout(Experiment):
                 if mean.shape == (2, 2):
                     g_i, g_q = float(mean[g_label, 0]), float(mean[g_label, 1])
                     e_i, e_q = float(mean[e_label, 0]), float(mean[e_label, 1])
+                if norms.shape == (2, 2):
+                    pop_e_g = float(norms[0, e_label])
+                    pop_g_e = float(norms[1, g_label])
             else:  # degenerate fit (blobs merged into one component)
                 fidelity, p_e_g, p_g_e = nan, nan, nan
             outlier_p = float(np.mean(np.asarray(r["outlier_probability"], dtype=float)))
             result.fit[qubit] = {
+                # COUNTED confusion: every shot hard-assigned to its nearest blob
+                # center, so these fold the residual population together with the
+                # discrimination overlap error.
                 "readout_fidelity": float(fidelity),
                 "p_e_given_g": float(p_e_g),
                 "p_g_given_e": float(p_g_e),
+                # FITTED blob weights: the residual population with the overlap
+                # removed (all Gaussians share one width, so amplitude ratio =
+                # area ratio = mixture weight). p_e_given_g - pop_e_prep_g is
+                # roughly the discrimination error. NOT a free fit — the centers
+                # and widths are pinned to the MAD/mean-shift seeds and only the
+                # amplitudes float, so a bad seed makes a bad population.
+                "pop_e_prep_g": pop_e_g,
+                "pop_g_prep_e": pop_g_e,
                 "outlier_probability": outlier_p,
                 # measured blob centers (acquisition-frame units) — the input a
                 # driver's discriminator calibration consumes

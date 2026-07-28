@@ -221,9 +221,17 @@ in an INDEXED column (never a `campaign:<id>` tag — that would be an unindexed
 `json_each` scan and a second grouping authority); walk them with
 `campaign_runs(campaign_id)`, which is unlimited and in execution order, NOT
 `find_runs(campaign=...)`, which is newest-first and capped at 50.
-`run_campaign` never prints — it emits `cadence_wait`/`repeat_start`/`step_done`/
-`repeat_done` to an `on_progress` callback and the CLI renders
-(`cli/_campaign.py::progress_lines`). Those lines go to **stderr**, `#`-prefixed,
+The manifest is finalized in a `finally`, so it is written on EVERY exit path -
+normal stop, Ctrl-C anywhere (including the cadence sleep, which is where a
+`period_s` campaign spends most of its wall clock), or an unexpected error
+(`status="failed"`). An interrupted repeat KEEPS the steps that already ran, marked
+`partial` and counted in `repeats_partial`, never in `repeat_done` - the data is
+already on disk and campaign-stamped, so discarding it would leave `campaign_runs()`
+returning more children than the manifest admits. `run_campaign` never prints - it
+emits `cadence_wait`/`repeat_start`/`step_done`/`repeat_done` to an `on_progress`
+callback and the CLI renders (`cli/_campaign.py::progress_lines`), and
+`cli/_campaign_plot.py` writes `statistics.png` into the campaign folder on finalize
+(lazy Agg matplotlib; a figure failure warns and NEVER fails the campaign). Those lines go to **stderr**, `#`-prefixed,
 ASCII, plain newlines and **never `\r`**: stdout must stay `| jq`-parseable, and on
 QM the vendor's `progress_counter` already rewrites a bar there. `"stop"` from the
 callback is honoured only at `repeat_done` — stopping mid-repeat would leave a

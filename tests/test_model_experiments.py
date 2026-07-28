@@ -3,6 +3,9 @@ every registered experiment runs without error on the tunable demo device,
 and the re-homed writes of the load-bearing families land on the right
 entities."""
 
+import math
+
+import numpy as np
 import pytest
 
 from scqo import Session
@@ -67,6 +70,36 @@ def test_ramsey_writes_drive_freq_fact_twin_and_t2(session):
         ("q0_xy", "drive_freq_hz"), ("q0", "f_01_hz"), ("q0", "t2_star_s")}
 
 
+def test_ramsey_moves_the_drive_toward_the_qubit(session):
+    """The neutral sign convention every driver's probe() must realize.
+
+    A qubit sitting ``err`` ABOVE its drive must produce a fringe at
+    ``applied + err``, so the correction moves the drive UP by ``err``. A probe that
+    realizes the artificial detuning with the opposite handedness inverts this, and
+    every accepted update then DOUBLES the residual detuning instead of cancelling
+    it -- while the fit itself still looks perfectly clean. That is exactly what the
+    QM backend did until its frame ramp was negated (LCHQMDriver
+    customized/probes/qubit_ramsey.py), so pin the direction here.
+    """
+    import numpy as np
+
+    from scqo.experiments._sim import stable_seed
+
+    out = session.run("qubit_ramsey", {"targets": ["q0"]}, update="none")
+    assert out.get("error") is None, out.get("error")
+    fit = out["fit"]["q0"]
+
+    # reproduce the residual detuning simulate() drew for this seeded target
+    applied = 1.0e6  # QubitRamseyParameters.frequency_detuning_hz default
+    err = np.random.default_rng(stable_seed("qubit_ramsey", "q0")).uniform(-0.2, 0.2) * applied
+    assert err < 0, "guard: this target's seeded residual is negative, so sign is testable"
+
+    assert fit["detuning_error_hz"] == pytest.approx(err, rel=0.05, abs=0.02 * applied)
+    assert (fit["drive_freq_hz"] - fit["old_drive_freq_hz"]
+            == pytest.approx(fit["detuning_error_hz"]))
+    assert fit["f_01_hz"] == fit["drive_freq_hz"]  # the fact twin rides the same fit
+
+
 def test_flux_map_writes_the_sweet_spot_on_the_flux_channel(session):
     assert _suggest(session, "resonator_spectroscopy_flux") == {
         ("q0_z", "idle_flux"), ("q0_z", "flux_offset"),
@@ -88,6 +121,50 @@ def test_single_shot_proposes_monitors_never_the_aggregate(session):
             ("q0_ro", "pos_e_i"), ("q0_ro", "pos_e_q"),
             ("q0_ro", "fidelity_g"), ("q0_ro", "fidelity_e")} == proposed
     assert not any(f == "readout_fidelity" for _, f in proposed)
+
+
+def test_single_shot_reports_counted_and_fitted_populations(session):
+    """Two DIFFERENT quantities, never one key with two meanings.
+
+    `p_e_given_g` counts shots hard-assigned to the nearest blob center, so it
+    folds the residual population together with the discrimination overlap error.
+    `pop_e_prep_g` is the fitted blob WEIGHT, overlap removed. The fit can only
+    remove overlap, never add any, so it can never exceed the count."""
+    out = session.run("single_shot_readout", {"targets": ["q0"]}, update="none")
+    fit = out["fit"]["q0"]
+    for key in ("p_e_given_g", "pop_e_prep_g", "p_g_given_e", "pop_g_prep_e"):
+        assert math.isfinite(fit[key]), key
+        assert 0.0 <= fit[key] <= 1.0, key
+    assert fit["pop_e_prep_g"] <= fit["p_e_given_g"]
+    assert fit["pop_g_prep_e"] <= fit["p_g_given_e"]
+    # ...and they are reportable, so the progress line and /trends can offer them
+    from scqo.report import MEASURED_QUANTITIES
+
+    assert {"pop_e_prep_g", "pop_g_prep_e"} <= set(MEASURED_QUANTITIES)
+
+
+def test_single_shot_populations_are_nan_when_the_blobs_degenerate(session, monkeypatch):
+    """A one-component fit must yield NaN, not an IndexError, exactly as the
+    counted quantities already do."""
+    import scqo.experiments.single_shot_readout as module
+
+    real = module.per_qubit_results
+
+    def one_blob(*args, **kwargs):
+        out = real(*args, **kwargs)
+        for results in out.values():  # collapse to a single center
+            results["direct_counts"] = np.ones((2, 1))
+            results["gaussian_norms"] = np.ones((2, 1))
+        return out
+
+    monkeypatch.setattr(module, "per_qubit_results", one_blob)
+    out = session.run("single_shot_readout", {"targets": ["q0"]}, update="none")
+    fit = out["fit"]["q0"]
+    assert out.get("error") is None
+    # NaN, not None: model_dump(mode="json") keeps it: only the PERSISTED json is
+    # scrubbed to null (datastore._scrub). Both roads count as missing downstream.
+    assert all(math.isnan(fit[k]) for k in ("p_e_given_g", "pop_e_prep_g", "pop_g_prep_e"))
+    assert out["outcomes"]["q0"] == "failed"  # NaN fidelity fails the gate
 
 
 def test_arch_fit_writes_mode_facts_and_transfer_function(session):

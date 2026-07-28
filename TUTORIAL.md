@@ -438,8 +438,12 @@ Things worth knowing before you leave one running overnight:
   the mean off the table and write it deliberately: `scqo set q1.t1_s=41.31e-6`.
   (`--accept` does exist, for a deliberate repeated *re-tuning* — but then the device
   moves under its own measurement and the spread describes the tuning loop, not the qubit.)
-- **Ctrl-C is safe.** The campaign finalizes with the repeats already done and its
-  statistics are complete for those; nothing is lost.
+- **Ctrl-C is safe, at any moment.** Every repeat already done is saved, and the
+  repeat you interrupted keeps the steps that had already finished — they show up in
+  the statistics and are counted as `repeats_partial`, separately from the whole
+  repeats in `repeat_done`. Only the single step that was actually running is lost,
+  and its half-written folder is ignored (no `record.json`). This holds whether you
+  interrupt during a measurement or during a `period_s` wait.
 - **You can watch it from another terminal.** The manifest is rewritten after every
   repeat, so `scqo campaign --show <campaign_id>` gives live statistics while the
   campaign is still running.
@@ -511,6 +515,17 @@ overnight campaign crosses midnight:
 <data_root>/SQ_demo/campaigns/20260727-221503-472-SQ_demo-t1_stability-01/
     campaign.json        the plan, the status, and the statistics table
     repeats.jsonl        one line per completed repeat: which runs, when, outcome
+    statistics.png       histogram + drift trace per quantity, drawn when it finishes
+```
+
+`statistics.png` is written automatically — including for a campaign you stopped
+early, so an overnight run always has its picture waiting. Each row is one measured
+quantity: the histogram on the left, the value vs hours-since-start on the right
+with median/MAD outliers ringed, and a title carrying `n`, `mean`, `std`, the drift
+`slope` per hour and `std/err`. Re-draw an old one any time:
+
+```bash
+scqo campaign --show <campaign_id> --plot
 ```
 
 `repeats.jsonl` deliberately stores no fitted numbers — the child runs' `result.json`

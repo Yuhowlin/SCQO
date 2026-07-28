@@ -233,6 +233,64 @@ def test_repeat_run_announces_defaults_once_not_twice(tmp_path):
     assert proc.stderr.count("# parameter defaults from") == 1
 
 
+def test_a_finished_campaign_writes_its_figure(tmp_path):
+    """An overnight run ends at 4 a.m.; the figure must be waiting, not depend on
+    someone remembering to ask for it."""
+    proc = _cli(tmp_path, "campaign", _plan(tmp_path))
+    assert proc.returncode == 0, proc.stderr
+
+    png = next((tmp_path / "data" / "simdev" / "campaigns").glob("*/statistics.png"))
+    assert png.stat().st_size > 1000
+    # the path is ADVISORY, so stderr — stdout is the manifest under --json
+    assert "# figure:" in proc.stderr and "figure:" not in proc.stdout
+
+
+def test_a_broken_figure_never_fails_the_campaign(monkeypatch, capsys):
+    """Losing the picture must never lose the measurement.
+
+    In-process rather than a subprocess: the point is the guard inside
+    plot_statistics, and `render_statistics` is imported at CALL time so patching
+    the source module lands."""
+    import scqo.cli._campaign_plot as plot_module
+    from scqo.cli._campaign import plot_statistics
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("no display, no disk, no luck")
+
+    monkeypatch.setattr(plot_module, "render_statistics", boom)
+    manifest = {"campaign_id": "cid", "statistics": {"x": {"q0": {}}}, "path": "p"}
+    plot_statistics(object(), manifest)  # must not raise
+
+    err = capsys.readouterr().err
+    assert "statistics figure skipped" in err
+    assert "campaign itself is unaffected" in err
+
+
+def test_no_figure_is_attempted_when_there_is_nothing_to_draw(capsys):
+    """No data_root (no campaign_id) or no successful fit -> silence, not a warning."""
+    from scqo.cli._campaign import plot_statistics
+
+    plot_statistics(None, {"campaign_id": "cid", "statistics": {"x": {}}})
+    plot_statistics(object(), {"campaign_id": None, "statistics": {"x": {}}})
+    plot_statistics(object(), {"campaign_id": "cid", "statistics": {}})
+    assert capsys.readouterr().err == ""
+
+
+def test_show_plot_re_renders_without_re_running(tmp_path):
+    run = _cli(tmp_path, "campaign", _plan(tmp_path))
+    assert run.returncode == 0, run.stderr
+    campaign_id = _cli(tmp_path, "campaign", "--list").stdout.split()[0]
+    png = next((tmp_path / "data" / "simdev" / "campaigns").glob("*/statistics.png"))
+    before = png.stat().st_mtime_ns
+    day_folders = sorted((tmp_path / "data" / "simdev").glob("2*"))
+
+    proc = _cli(tmp_path, "campaign", "--show", campaign_id, "--plot")
+    assert proc.returncode == 0, proc.stderr
+    assert "# figure:" in proc.stderr
+    assert png.stat().st_mtime_ns != before                      # re-rendered
+    assert sorted((tmp_path / "data" / "simdev").glob("2*")) == day_folders  # nothing re-ran
+
+
 def test_campaign_appears_in_the_command_list(tmp_path):
     proc = _cli(tmp_path, "--help")
     assert proc.returncode == 0

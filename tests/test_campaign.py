@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import math
+import time
 from pathlib import Path
 
 import pytest
@@ -457,6 +458,77 @@ def test_a_partial_failure_is_not_a_failed_repeat(session, monkeypatch):
     # the flaky step shows up as missing values, which is what the operator needs
     assert out["statistics"]["qubit_echo"]["q0"] == {}
     assert out["statistics"]["qubit_relaxation"]["q0"]["t1_s"]["n"] == 3
+
+
+def test_interrupt_during_the_cadence_wait_still_finalizes(session, monkeypatch):
+    """The regression for the escape hatch: `time.sleep` sat outside every guard,
+    so Ctrl-C there propagated out of run_campaign and the manifest was left
+    status="running" with no ended_at — FOREVER. And with period_s set, the sleep
+    is where a campaign spends most of its wall clock, so it is the likely Ctrl-C."""
+    def interrupt(_seconds):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(time, "sleep", interrupt)
+    out = session.run_campaign(CampaignPlan(
+        label="sleepirq", repeat=4, period_s=5, defaults={"targets": ["q0"]},
+        skip_artifacts=True, steps=[{"experiment": "qubit_relaxation"}]))
+
+    assert out["status"] == "stopped" and out["stop_reason"] == "interrupted (Ctrl-C)"
+    assert out["repeat_done"] == 1  # repeat 0 ran; the wait before repeat 1 was cut
+    manifest = json.loads(
+        (Path(out["data_path"]) / "campaign.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == "stopped" and manifest["ended_at"]
+
+
+def test_interrupt_mid_repeat_keeps_the_steps_that_ran(session, monkeypatch):
+    """A half-walked repeat's completed steps already persisted their own run
+    folders and are already campaign-stamped; dropping them from the manifest would
+    leave campaign_runs() returning more children than repeat_done accounts for."""
+    real_run = Session.run
+    calls = {"n": 0}
+
+    def interrupt_on_the_fifth(self, experiment, params, update="suggest", **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 5:  # repeat 1, step 1 of a 3-step plan
+            raise KeyboardInterrupt
+        return real_run(self, experiment, params, update, **kwargs)
+
+    monkeypatch.setattr(Session, "run", interrupt_on_the_fifth)
+    steps = ["qubit_relaxation", "qubit_ramsey", "qubit_echo"]
+    out = session.run_campaign(CampaignPlan(
+        label="midirq", repeat=4, defaults={"targets": ["q0"]}, skip_artifacts=True,
+        steps=[{"experiment": name} for name in steps]))
+
+    assert out["status"] == "stopped"
+    assert out["repeat_done"] == 1 and out["repeats_partial"] == 1
+    assert [(r["repeat_idx"], len(r["steps"]), r.get("partial", False))
+            for r in out["repeats"]] == [(0, 3, False), (1, 1, True)]
+    # the partial repeat's T1 IS in the statistics — nothing measured is dropped
+    assert out["statistics"]["qubit_relaxation"]["q0"]["t1_s"]["n"] == 2
+    assert out["statistics"]["qubit_ramsey"]["q0"]["t2_star_s"]["n"] == 1
+    # ...and the child count reconciles: one whole repeat (3) + one partial step
+    assert len(session.campaign_runs(out["campaign_id"])) == 4
+
+
+def test_an_unexpected_error_still_leaves_a_readable_manifest(session, monkeypatch):
+    """A crash during an overnight run must not also lose the record of it."""
+    import scqo.campaign as module
+
+    def boom(_rows):
+        raise RuntimeError("aggregate exploded")
+
+    # run_campaign imports aggregate INSIDE the function, so the import resolves
+    # the module attribute on every call and patching the source module lands.
+    monkeypatch.setattr(module, "aggregate", boom)
+    out = session.run_campaign(CampaignPlan(
+        label="crash", repeat=3, defaults={"targets": ["q0"]}, skip_artifacts=True,
+        steps=[{"experiment": "qubit_relaxation"}]))
+
+    assert out["status"] == "failed"
+    assert "RuntimeError: aggregate exploded" in out["stop_reason"]
+    manifest = json.loads(
+        (Path(out["data_path"]) / "campaign.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == "failed" and manifest["ended_at"]
 
 
 def test_keyboard_interrupt_finalizes_instead_of_raising(session, monkeypatch):

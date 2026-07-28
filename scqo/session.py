@@ -347,10 +347,15 @@ class Session:
         repeat, so it cannot trip ``on_error`` or the consecutive-failure
         breaker on an otherwise healthy overnight run.
 
-        Never raises once the plan is valid, including on ``KeyboardInterrupt``:
-        Ctrl-C finalizes the campaign with the repeats completed so far
-        (``status="stopped"``) and returns. The interrupted child's folder has no
-        ``record.json``, which reindex already skips as an incomplete run.
+        Never raises once the plan is valid. The manifest is finalized in a
+        ``finally``, so it is written on EVERY exit path — a normal stop, Ctrl-C
+        anywhere (including the cadence sleep, where a campaign with ``period_s``
+        spends most of its wall clock), or an unexpected error (``status="failed"``
+        with the exception named). An interrupted repeat keeps whatever steps it
+        already completed, marked ``partial`` and counted in ``repeats_partial``
+        rather than in ``repeat_done``; nothing measured is dropped. The step that
+        was actually running leaves a folder with no ``record.json``, which reindex
+        already skips as an incomplete run.
 
         ``on_progress(event) -> str | None`` receives, in order per repeat:
         ``cadence_wait`` (only when the period actually sleeps), ``repeat_start``,
@@ -403,7 +408,8 @@ class Session:
             "experiments": plan.experiments,
             "targets": plan.targets(),
             "repeat_planned": plan.repeat,
-            "repeat_done": 0,
+            "repeat_done": 0,  # WHOLE repeats; a partial one is counted separately
+            "repeats_partial": 0,
             "repeats_failed": 0,
             "plan": plan.model_dump(mode="json"),
             "statistics": {},
@@ -438,142 +444,190 @@ class Session:
         stop_reason = ""
         status = "complete"
         repeat_idx = 0
-        while True:
-            if plan.repeat is not None and repeat_idx >= plan.repeat:
-                stop_reason = "repeat count reached"
-                break
-            # The budget gates CONTINUING, never starting: repeat 0 always runs, so
-            # a campaign never returns zero measurements for having been slow to set
-            # up. Checked BEFORE a repeat, so a repeat is never cut in half either.
-            elapsed = time.monotonic() - started_mono
-            if (repeat_idx and plan.max_duration_s is not None
-                    and elapsed >= plan.max_duration_s):
-                stop_reason = f"max_duration_s ({plan.max_duration_s:g} s) elapsed"
-                status = "stopped"
-                break
-            if consecutive_failures >= plan.max_consecutive_failures:
-                stop_reason = (f"{consecutive_failures} consecutive failed repeats "
-                               f"(max_consecutive_failures)")
-                status = "stopped"
-                break
-            # Era guard: statistics across cooldowns or setups are not mergeable
-            # (the same doctrine as accept()'s). Only reachable on an unbound
-            # notebook session, which is exactly where nothing else is guarding.
-            if era is not None and self.datastore.run_stamps() != era:
-                stop_reason = "the cooldown/setup changed mid-campaign"
-                status = "stopped"
-                break
+        row: dict | None = None  # the in-flight repeat, so an interrupt can keep it
 
-            # Cadence: gate the repeat START, so it throttles failed repeats too.
-            # A repeat that overran is RECORDED, never padded and never skipped
-            # to catch up — the period is a floor, not a schedule to hit.
-            overran_by_s = 0.0
-            if plan.period_s is not None and repeat_idx:
-                due = started_mono + repeat_idx * plan.period_s
-                wait = due - time.monotonic()
-                if wait > 0:
-                    # Announce the gap BEFORE sleeping: an unannounced five-minute
-                    # pause is indistinguishable from a hang.
-                    on_progress({"kind": "cadence_wait",
-                                        "repeat_idx": repeat_idx, "wait_s": wait})
-                    time.sleep(wait)
-                else:
-                    overran_by_s = -wait
+        def _keep_partial(pending: dict | None) -> None:
+            """Record a half-walked repeat instead of discarding what it measured.
 
-            # repeat_start fires AFTER the sleep, so its timestamp is the truth.
-            row = {
-                "repeat_idx": repeat_idx,
-                "started_at": _now(),
-                "elapsed_s": time.monotonic() - started_mono,
-                "overran_by_s": overran_by_s,
-                "steps": [],
-            }
-            on_progress({"kind": "repeat_start",
-                                "repeat_idx": repeat_idx,
-                                "repeat_planned": plan.repeat,
-                                "n_steps": len(plan.steps),
-                                "started_at": row["started_at"],
-                                "elapsed_s": row["elapsed_s"],
-                                "overran_by_s": overran_by_s,
-                                "durations_s": [r["duration_s"] for r in rows]})
-            interrupted = False
-            for step_idx, step in enumerate(plan.steps):
-                step_mono = time.monotonic()
-                try:
-                    payload = self.run(
-                        step.experiment,
-                        plan.step_params(step),
-                        update=mode,
-                        tags=[*(tags or []), *plan.tags, *step.tags],
-                        note=step.note or note or plan.note,
-                        skip_artifacts=plan.skip_artifacts,
-                        campaign=(campaign_id, repeat_idx, step_idx) if campaign_id else None,
-                    )
-                except KeyboardInterrupt:
-                    interrupted = True
+            Its completed steps already ran, already persisted their own run folders
+            and are already stamped with (campaign, repeat_idx, step_idx) — dropping
+            them from the manifest would leave campaign_runs() returning more
+            children than repeat_done accounts for, silently.
+
+            Safe because a partial repeat is always the LAST one: aggregate()
+            advances its per-experiment slot per (row, step) occurrence, so a short
+            row would misalign anything AFTER it, and there is nothing after it. The
+            steps that ran contribute their values; the rest contribute n_missing.
+            """
+            if not pending or not pending["steps"]:
+                return
+            try:
+                pending["ended_at"] = _now()
+                pending["duration_s"] = (time.monotonic() - started_mono
+                                         - pending["elapsed_s"])
+                pending["failed"] = not any(s["ok"] for s in pending["steps"])
+                pending["partial"] = True
+                rows.append(pending)
+                manifest["repeats_partial"] = 1
+                manifest["repeats_failed"] = sum(1 for r in rows if r["failed"])
+                manifest["statistics"] = aggregate(rows)
+                if campaign_dir is not None:
+                    self.datastore.append_campaign_repeat(
+                        campaign_dir, _repeat_skeleton(pending))
+            except Exception as err:  # this runs FROM an exception handler: if it
+                import sys  # raises, it replaces the real stop_reason with its own
+
+                print(f"scqo: could not record the partial repeat "
+                      f"({type(err).__name__}: {err})", file=sys.stderr)
+        try:
+            while True:
+                if plan.repeat is not None and repeat_idx >= plan.repeat:
+                    stop_reason = "repeat count reached"
                     break
-                except Exception as err:  # a hard failure is a recorded step error,
-                    payload = {"outcomes": {}, "fit": {},  # never a lost campaign
-                               "error": f"{type(err).__name__}: {err}"}
-                outcomes = payload.get("outcomes") or {}
-                step_row = {
-                    "step_idx": step_idx,
-                    "experiment": step.experiment,
-                    "run_id": payload.get("run_id"),
-                    "outcomes": outcomes,
-                    "fit": payload.get("fit") or {},
-                    "error": payload.get("error") or payload.get("datastore_error"),
-                    "ok": any(str(o) == "successful" for o in outcomes.values()),
-                    "duration_s": time.monotonic() - step_mono,
+                # The budget gates CONTINUING, never starting: repeat 0 always runs, so
+                # a campaign never returns zero measurements for having been slow to set
+                # up. Checked BEFORE a repeat, so a repeat is never cut in half either.
+                elapsed = time.monotonic() - started_mono
+                if (repeat_idx and plan.max_duration_s is not None
+                        and elapsed >= plan.max_duration_s):
+                    stop_reason = f"max_duration_s ({plan.max_duration_s:g} s) elapsed"
+                    status = "stopped"
+                    break
+                if consecutive_failures >= plan.max_consecutive_failures:
+                    stop_reason = (f"{consecutive_failures} consecutive failed repeats "
+                                   f"(max_consecutive_failures)")
+                    status = "stopped"
+                    break
+                # Era guard: statistics across cooldowns or setups are not mergeable
+                # (the same doctrine as accept()'s). Only reachable on an unbound
+                # notebook session, which is exactly where nothing else is guarding.
+                if era is not None and self.datastore.run_stamps() != era:
+                    stop_reason = "the cooldown/setup changed mid-campaign"
+                    status = "stopped"
+                    break
+
+                # Cadence: gate the repeat START, so it throttles failed repeats too.
+                # A repeat that overran is RECORDED, never padded and never skipped
+                # to catch up — the period is a floor, not a schedule to hit.
+                overran_by_s = 0.0
+                if plan.period_s is not None and repeat_idx:
+                    due = started_mono + repeat_idx * plan.period_s
+                    wait = due - time.monotonic()
+                    if wait > 0:
+                        # Announce the gap BEFORE sleeping: an unannounced five-minute
+                        # pause is indistinguishable from a hang.
+                        on_progress({"kind": "cadence_wait",
+                                            "repeat_idx": repeat_idx, "wait_s": wait})
+                        time.sleep(wait)
+                    else:
+                        overran_by_s = -wait
+
+                # repeat_start fires AFTER the sleep, so its timestamp is the truth.
+                row = {
+                    "repeat_idx": repeat_idx,
+                    "started_at": _now(),
+                    "elapsed_s": time.monotonic() - started_mono,
+                    "overran_by_s": overran_by_s,
+                    "steps": [],
                 }
-                row["steps"].append(step_row)
-                # Not stoppable: a half-walked bundle's quantities no longer share
-                # a drift epoch, which is the invariant interleaving exists for.
-                on_progress({"kind": "step_done", "repeat_idx": repeat_idx,
-                                    "n_steps": len(plan.steps), **step_row})
-            if interrupted:
-                stop_reason = "interrupted (Ctrl-C)"
-                status = "stopped"
-                break
+                on_progress({"kind": "repeat_start",
+                                    "repeat_idx": repeat_idx,
+                                    "repeat_planned": plan.repeat,
+                                    "n_steps": len(plan.steps),
+                                    "started_at": row["started_at"],
+                                    "elapsed_s": row["elapsed_s"],
+                                    "overran_by_s": overran_by_s,
+                                    "durations_s": [r["duration_s"] for r in rows]})
+                for step_idx, step in enumerate(plan.steps):
+                    step_mono = time.monotonic()
+                    try:
+                        payload = self.run(
+                            step.experiment,
+                            plan.step_params(step),
+                            update=mode,
+                            tags=[*(tags or []), *plan.tags, *step.tags],
+                            note=step.note or note or plan.note,
+                            skip_artifacts=plan.skip_artifacts,
+                            campaign=(campaign_id, repeat_idx, step_idx) if campaign_id else None,
+                        )
+                    except Exception as err:  # a hard failure is a recorded step error,
+                        payload = {"outcomes": {}, "fit": {},  # never a lost campaign
+                                   "error": f"{type(err).__name__}: {err}"}
+                    outcomes = payload.get("outcomes") or {}
+                    step_row = {
+                        "step_idx": step_idx,
+                        "experiment": step.experiment,
+                        "run_id": payload.get("run_id"),
+                        "outcomes": outcomes,
+                        "fit": payload.get("fit") or {},
+                        "error": payload.get("error") or payload.get("datastore_error"),
+                        "ok": any(str(o) == "successful" for o in outcomes.values()),
+                        "duration_s": time.monotonic() - step_mono,
+                    }
+                    row["steps"].append(step_row)
+                    # Not stoppable HERE: a deliberate stop mid-bundle would leave
+                    # quantities that no longer share a drift epoch. An INTERRUPT is
+                    # different — the data already exists, so _keep_partial records it.
+                    on_progress({"kind": "step_done", "repeat_idx": repeat_idx,
+                                        "n_steps": len(plan.steps), **step_row})
+                row["ended_at"] = _now()
+                row["duration_s"] = time.monotonic() - started_mono - row["elapsed_s"]
+                washout = not any(s["ok"] for s in row["steps"])
+                row["failed"] = washout
+                rows.append(row)
+                repeat_idx += 1
+                consecutive_failures = consecutive_failures + 1 if washout else 0
 
-            row["ended_at"] = _now()
-            row["duration_s"] = time.monotonic() - started_mono - row["elapsed_s"]
-            washout = not any(s["ok"] for s in row["steps"])
-            row["failed"] = washout
-            rows.append(row)
-            repeat_idx += 1
-            consecutive_failures = consecutive_failures + 1 if washout else 0
+                manifest["repeat_done"] = len(rows)
+                manifest["repeats_failed"] = sum(1 for r in rows if r["failed"])
+                manifest["statistics"] = aggregate(rows)
+                if campaign_dir is not None:
+                    self.datastore.append_campaign_repeat(campaign_dir, _repeat_skeleton(row))
+                    self.datastore.persist_campaign(
+                        campaign_id=campaign_id, campaign_dir=campaign_dir, manifest=manifest)
 
-            manifest["repeat_done"] = len(rows)
-            manifest["repeats_failed"] = sum(1 for r in rows if r["failed"])
-            manifest["statistics"] = aggregate(rows)
+                if washout and plan.on_error == "stop":
+                    stop_reason = "a repeat failed and on_error='stop'"
+                    status = "stopped"
+                    break
+                # The ONLY stoppable event: a repeat boundary is the only place where
+                # stopping leaves the collected statistics internally consistent.
+                if on_progress({"kind": "repeat_done",
+                                       "repeat_planned": plan.repeat, **row}) == "stop":
+                    stop_reason = "the on_progress callback asked to stop"
+                    status = "stopped"
+                    break
+
+        except KeyboardInterrupt:
+            # Ctrl-C anywhere in the loop, INCLUDING the cadence sleep, which is
+            # where a campaign with period_s spends most of its wall clock.
+            status, stop_reason = "stopped", "interrupted (Ctrl-C)"
+            _keep_partial(row)
+        except Exception as err:  # a crash must still leave a readable manifest
+            status = "failed"
+            stop_reason = f"{type(err).__name__}: {err}"
+            _keep_partial(row)
+        finally:
+            manifest["status"] = status
+            manifest["stop_reason"] = stop_reason
+            manifest["ended_at"] = _now()
+            manifest["repeats"] = [_repeat_skeleton(r) for r in rows]
             if campaign_dir is not None:
-                self.datastore.append_campaign_repeat(campaign_dir, _repeat_skeleton(row))
-                self.datastore.persist_campaign(
-                    campaign_id=campaign_id, campaign_dir=campaign_dir, manifest=manifest)
-
-            if washout and plan.on_error == "stop":
-                stop_reason = "a repeat failed and on_error='stop'"
-                status = "stopped"
-                break
-            # The ONLY stoppable event: a repeat boundary is the only place where
-            # stopping leaves the collected statistics internally consistent.
-            if on_progress({"kind": "repeat_done",
-                                   "repeat_planned": plan.repeat, **row}) == "stop":
-                stop_reason = "the on_progress callback asked to stop"
-                status = "stopped"
-                break
-
-        manifest["status"] = status
-        manifest["stop_reason"] = stop_reason
-        manifest["ended_at"] = _now()
-        manifest["repeats"] = [_repeat_skeleton(r) for r in rows]
-        if campaign_dir is not None:
-            self.datastore.persist_campaign(
-                campaign_id=campaign_id, campaign_dir=campaign_dir,
-                manifest={k: v for k, v in manifest.items() if k != "repeats"})
-            manifest["data_path"] = str(campaign_dir)
+                try:
+                    self._finalize_campaign(campaign_id, campaign_dir, manifest)
+                except Exception as err:  # a full disk must not replace the real
+                    manifest["persist_error"] = (  # stop_reason with its own
+                        f"{type(err).__name__}: {err}")
         return manifest
+
+    def _finalize_campaign(self, campaign_id, campaign_dir, manifest) -> None:
+        """The last manifest write. ``repeats`` is part of the RETURN value only —
+        the per-repeat skeletons already live in ``repeats.jsonl``, and duplicating
+        them into the manifest would be a second authority that can disagree."""
+        self.datastore.persist_campaign(
+            campaign_id=campaign_id, campaign_dir=campaign_dir,
+            manifest={k: v for k, v in manifest.items() if k != "repeats"})
+        manifest["data_path"] = str(campaign_dir)
 
     def check_campaign(self, plan: "CampaignPlan | dict") -> list[str]:
         """Pre-flight a plan without running it: problem strings, ``[]`` when clear.

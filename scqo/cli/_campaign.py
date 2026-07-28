@@ -292,4 +292,27 @@ def execute(sess, plan, *, update: str, tags: list[str], note: str, as_json: boo
             print(f"  {problem}", file=sys.stderr)
         return 2
     render(manifest, as_json=as_json)
+    plot_statistics(sess.datastore, manifest)
     return 0 if manifest.get("status") == "complete" else 1
+
+
+def plot_statistics(store, manifest: dict, **kwargs) -> None:
+    """Write statistics.png into the campaign folder; never fail the campaign for it.
+
+    Losing the picture must never lose the measurement — the same doctrine as
+    `scqo._scqat`'s artifact fallback and `_safe_progress`. Also fires for a
+    stopped or partial campaign: you still want to see what you got.
+    """
+    if store is None or not manifest.get("campaign_id") or not manifest.get("statistics"):
+        return  # no data_root to write into, or nothing measured to draw
+    try:
+        from ._campaign_plot import render_statistics
+
+        path = render_statistics(store, manifest["campaign_id"], manifest, **kwargs)
+    except Exception as err:
+        print(f"# statistics figure skipped ({type(err).__name__}: {err}); "
+              f"the campaign itself is unaffected", file=sys.stderr)
+        return
+    if path is not None:
+        # stderr: stdout is the manifest under --json and must stay | jq safe.
+        print(f"# figure: {path}", file=sys.stderr)
