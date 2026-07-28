@@ -343,9 +343,18 @@ CHANNELS: dict[str, ChannelKind] = {
             "pi_amp": FieldSpec(
                 "", "Calibrated pi (x180) pulse amplitude.",
                 role="knob", portable=False),
+            "pi_amp_x90": FieldSpec(
+                "", "Calibrated pi/2 (x90) pulse amplitude. Independent of "
+                    "pi_amp: the pi/2 is calibrated in its own right, not "
+                    "derived as half the pi.",
+                role="knob", portable=False),
             "drag_beta": FieldSpec(
-                "", "DRAG coefficient (QM DragCosine coefficient, Qblox "
-                    "rxy.beta).", role="knob", portable=False),
+                "", "DRAG coefficient for the pi gate (QM DragCosine "
+                    "coefficient, Qblox rxy.beta).", role="knob", portable=False),
+            "drag_beta_x90": FieldSpec(
+                "", "DRAG coefficient for the pi/2 gate (QM DragCosine "
+                    "coefficient on the x90 storage node).",
+                role="knob", portable=False),
             "pi_duration_s": FieldSpec(
                 "s", "Calibrated pi pulse length.", role="knob"),
             "thermalization_time_s": FieldSpec(

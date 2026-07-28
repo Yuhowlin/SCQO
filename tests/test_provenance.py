@@ -52,6 +52,18 @@ def test_manual_and_unrecorded_and_none_values():
     assert "fidelity_g" not in sources["q0_ro"]  # None values are skipped
 
 
+def test_live_sources_handles_records_missing_entity_or_field():
+    values = {"q0_xy": {"pi_amp": 0.31}}
+    history = [
+        {"timestamp": "2026-07-12T10:00:00+08:00", "invalid_key": "val"},  # no entity/field
+        {"timestamp": "2026-07-12T10:00:00+08:00", "entity": "q0_xy"},      # no field
+        _rec("q0_xy", "pi_amp", 0.31, run_id="run-1"),
+    ]
+    sources = live_sources(values, history)
+    assert sources["q0_xy"]["pi_amp"]["status"] == "run"
+    assert sources["q0_xy"]["pi_amp"]["run_id"] == "run-1"
+
+
 def test_operator_suggested_value_credits_the_run(tmp_path):
     """End-to-end crediting chain: a value suggested by a HUMAN against a run and
     then accepted traces back to that run — status "run", not "manual" (the run's

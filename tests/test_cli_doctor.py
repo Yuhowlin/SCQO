@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -60,7 +61,14 @@ def test_healthy_simulated_setup_passes(tmp_path):
     assert "'sim_main' (auto)" in proc.stdout  # single-setup cycle auto-selects
     # the per-(cooldown, setup) state file: named even before its first save
     assert "sim_main" in proc.stdout and "scqo_state.json (not created yet)" in proc.stdout
-    assert "21 experiment(s)" in proc.stdout  # simulated fills the catalog driver-less
+    # simulated fills the catalog driver-less. A FLOOR, not an exact count: the
+    # point is that doctor reports a populated catalog with no driver installed,
+    # and an exact number has to be bumped by every PR that adds an experiment.
+    # It cannot be derived from the in-process registry either — this doctor runs
+    # in a SUBPROCESS, whose discovery legitimately differs from the test session's.
+    n_reported = re.search(r"catalog\s+(\d+) experiment\(s\)", proc.stdout)
+    assert n_reported, proc.stdout
+    assert int(n_reported.group(1)) >= 20, proc.stdout
 
 
 def test_missing_registry_or_setup_fails(tmp_path):

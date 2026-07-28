@@ -30,6 +30,7 @@ class QubitDragAlternatingParameters(TargetSelection, AveragingParameters, Qubit
     num_beta_points: int = Field(41, gt=1, description="Number of beta sweep points.")
     max_pulses: int = Field(20, gt=0, description="Maximum number of alternating pulses.")
     num_pulse_points: int = Field(10, gt=1, description="Number of pulse sweep points.")
+    target_gate: str = Field("x180", description="Gate to calibrate: 'x180' or 'x90'.")
 
 
 class QubitDragAlternatingResult(Result):
@@ -38,13 +39,13 @@ class QubitDragAlternatingResult(Result):
 
 @register
 class QubitDragAlternating(Experiment):
-    """Calibrate DRAG parameter using the alternating pulse (180/-180) error amplification method."""
+    """Calibrate DRAG parameter using the alternating pulse method."""
 
     name: ClassVar[str] = "qubit_drag_alternating"
     description: ClassVar[str] = (
-        "Sweep DRAG beta coefficient and play alternating pulse sequences (x180 -x180) "
-        "repeated N times. The DRAG value that minimizes error accumulation (stays flat "
-        "at ground state) is the optimal calibration point."
+        "Sweep DRAG beta coefficient and play alternating pulse sequences. "
+        "The DRAG value that minimizes error accumulation (stays flat at "
+        "ground state) is the optimal calibration point."
     )
     Parameters: ClassVar[type] = QubitDragAlternatingParameters
     Result: ClassVar[type] = QubitDragAlternatingResult
@@ -53,9 +54,10 @@ class QubitDragAlternating(Experiment):
         sweep_units=("", ""),
         variables=("I", "Q"),
     )
-    required_operations: ClassVar[tuple[str, ...]] = ("rx", "readout")
 
     params: QubitDragAlternatingParameters
+
+    required_operations: ClassVar[tuple[str, ...]] = ("rx", "readout")
 
     def define_sweep(self) -> dict[str, np.ndarray]:
         beta = np.linspace(
@@ -63,39 +65,36 @@ class QubitDragAlternating(Experiment):
             self.params.max_beta,
             self.params.num_beta_points,
         )
-        nb_pulses = np.linspace(
-            1,
+        nb_of_pulses = np.linspace(
+            2,
             self.params.max_pulses,
             self.params.num_pulse_points,
             dtype=int,
         )
         return {
-            "nb_of_pulses": nb_pulses,
+            "nb_of_pulses": nb_of_pulses,
             "beta": beta,
         }
 
     def simulate(self, coords: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
-        npi = coords["nb_of_pulses"]
+        nb_of_pulses = coords["nb_of_pulses"]
         beta = coords["beta"]
         qubits = self.params.targets
 
         n_qubits = len(qubits)
-        n_npi = len(npi)
+        n_pulses = len(nb_of_pulses)
         n_beta = len(beta)
 
-        i_data = np.zeros((n_qubits, n_npi, n_beta))
-        q_data = np.zeros((n_qubits, n_npi, n_beta))
+        i_data = np.zeros((n_qubits, n_pulses, n_beta))
+        q_data = np.zeros((n_qubits, n_pulses, n_beta))
 
         rng = np.random.default_rng(stable_seed("qubit_drag_alternating", *qubits))
         for k, qubit in enumerate(qubits):
-            opt_beta = rng.uniform(-0.5, 0.5)
-            noise = 0.015
-
-            for p_idx, p_count in enumerate(npi):
-                # Error scales with pulse count * offset from opt_beta
-                error_phase = p_count * (beta - opt_beta) * 0.15
-                population = 1.0 - (np.sin(error_phase) ** 2)
-                i_data[k, p_idx] = population + rng.normal(0, noise, n_beta)
+            opt_beta = rng.uniform(-1.0, 1.0)
+            noise = 0.02
+            for p_idx, n_p in enumerate(nb_of_pulses):
+                decay = np.exp(-0.05 * n_p)
+                i_data[k, p_idx] = 0.5 * (1 - decay * np.cos(n_p * (beta - opt_beta))) + rng.normal(0, noise, n_beta)
                 q_data[k, p_idx] = rng.normal(0, noise, n_beta)
 
         return {"I": i_data, "Q": q_data}
@@ -126,9 +125,21 @@ class QubitDragAlternating(Experiment):
     def update(self) -> None:
         if self.result is None:
             return
+        target_gate = getattr(self.params, "target_gate", "x180")
         for qubit, fit in self.result.fit.items():
             if self.result.outcomes[qubit] is Outcome.SUCCESSFUL and fit.get("opt_beta") is not None:
-                self.device.channel(qubit, "drive").drag_beta = fit["opt_beta"]
+                chan = self.device.channel(qubit, "drive")
+                if target_gate == "x90":
+                    if hasattr(chan, "drag_beta_x90"):
+                        chan.drag_beta_x90 = fit["opt_beta"]
+                    elif hasattr(chan, "set_drag_beta"):
+                        chan.set_drag_beta(fit["opt_beta"], operation="x90", lock_x90=False)
+                else:
+                    chan.drag_beta = fit["opt_beta"]
+
+
+
+
 
     def probe(self):  # pragma: no cover - driver half
         raise NotImplementedError("a driver backend supplies probe()")
