@@ -9,19 +9,19 @@
       "queries": {
         "runs_by_tag": {
           "title": "Runs by tag (e.g. cooldown1, bringup)",
-          "sql": "SELECT run_id, started_at, experiment, qubits, outcome, tags, note, path FROM runs WHERE EXISTS (SELECT 1 FROM json_each(runs.tags) WHERE value = :tag) ORDER BY started_at DESC"
+          "sql": "SELECT run_id, started_at, experiment, targets, outcome, tags, note, path FROM runs WHERE EXISTS (SELECT 1 FROM json_each(runs.tags) WHERE value = :tag) ORDER BY started_at DESC"
         },
-        "runs_by_qubit": {
-          "title": "Runs that measured a given qubit",
-          "sql": "SELECT run_id, started_at, experiment, outcome, tags, path FROM runs WHERE EXISTS (SELECT 1 FROM json_each(runs.qubits) WHERE value = :qubit) ORDER BY started_at DESC"
+        "runs_by_target": {
+          "title": "Runs that measured a given target (qubit or pair)",
+          "sql": "SELECT run_id, started_at, experiment, outcome, tags, path FROM runs WHERE EXISTS (SELECT 1 FROM json_each(runs.targets) WHERE value = :target) ORDER BY started_at DESC"
         },
         "failed_runs": {
           "title": "Recent non-successful runs (debugging)",
-          "sql": "SELECT run_id, started_at, experiment, qubits, outcome, error, path FROM runs WHERE outcome != 'successful' ORDER BY started_at DESC LIMIT 100"
+          "sql": "SELECT run_id, started_at, experiment, targets, outcome, error, path FROM runs WHERE outcome != 'successful' ORDER BY started_at DESC LIMIT 100"
         },
         "fit_trend": {
-          "title": "Fitted quantity vs time (qubit=q1, quantity=t2_star_s / readout_freq_hz / pi_amp ...)",
-          "sql": "SELECT started_at, run_id, experiment, json_extract(fit, '$.' || :qubit || '.' || :quantity) AS value FROM runs WHERE json_extract(fit, '$.' || :qubit || '.' || :quantity) IS NOT NULL ORDER BY started_at"
+          "title": "Fitted quantity vs time (target=q1, quantity=t2_star_s / readout_freq_hz / pi_amp ...)",
+          "sql": "SELECT started_at, run_id, experiment, json_extract(fit, '$.' || :target || '.' || :quantity) AS value FROM runs WHERE json_extract(fit, '$.' || :target || '.' || :quantity) IS NOT NULL ORDER BY started_at"
         }
       }
     }
