@@ -7,11 +7,9 @@ and calibrate gate pulse amplitudes.
 
 from __future__ import annotations
 
-from typing import ClassVar, Dict, Any, Optional, List
+from typing import ClassVar, List, Optional
 
 import numpy as np
-import matplotlib.pyplot as plt
-from scipy.optimize import curve_fit
 from pydantic import Field
 
 from .._scqat import per_qubit_results
@@ -21,17 +19,24 @@ from ._capabilities.state_readout import (
     STATE_ALT,
     StateReadoutParameters,
     readout_vars,
+    signal_rename,
     state_row,
 )
+from ._sim import iq_from_population, stable_seed
 from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
 from ..experiment import Experiment
 from . import register
 
+#: the pi/2 gates. Their amplitude lives on the x90 storage node (y90/-y90 are
+#: reference aliases that follow it), so they calibrate `pi_amp_x90`; everything
+#: else is a pi gate and calibrates `pi_amp`.
+X90_GATES = frozenset({"x90", "-x90", "y90", "-y90"})
 
-def damped_cosine_zero_phase(N: np.ndarray, A: float, gamma: float, omega: float, C: float) -> np.ndarray:
-    """Damped cosine model with fixed zero initial phase (phi_0 = 0)."""
-    return A * np.exp(-gamma * N) * np.cos(omega * N) + C
+
+def amp_knob(target_gate: str) -> str:
+    """Which neutral drive-channel knob this target gate calibrates."""
+    return "pi_amp_x90" if str(target_gate).strip().lower() in X90_GATES else "pi_amp"
 
 
 class QubitDeterministicBenchmarkingParameters(
@@ -56,10 +61,6 @@ class QubitDeterministicBenchmarkingParameters(
     repetitions: Optional[List[int]] = Field(
         None,
         description="Optional explicit array of repetition counts N.",
-    )
-    use_state_discrimination: bool = Field(
-        True,
-        description="Default True: use FPGA state discrimination to measure P1/P0.",
     )
     min_amp_factor: float = Field(
         0.9,
@@ -100,8 +101,11 @@ class QubitDeterministicBenchmarkingParameters(
 
 
 class QubitDeterministicBenchmarkingResult(Result):
-    """Result of QubitDeterministicBenchmarking."""
-    pass
+    """``fit[qubit]``: ``opt_factor`` (the amplitude MULTIPLIER where the rotation
+    error crosses zero), ``opt_amp`` (that factor applied to the live amplitude),
+    plus the calibrated knob and its previous value under their own names —
+    ``pi_amp``/``old_pi_amp`` for a pi gate, ``pi_amp_x90``/``old_pi_amp_x90`` for
+    a pi/2 one. ``update()`` writes the knob the benchmarked gate belongs to."""
 
 
 @register
@@ -110,7 +114,15 @@ class QubitDeterministicBenchmarking(Experiment):
 
     name: ClassVar[str] = "qubit_deterministic_benchmarking"
     description: ClassVar[str] = (
-        "Deterministic Benchmarking by repeatedly applying a target gate across amplitudes to measure overrotation/underrotation error accumulation."
+        "Amplitude error amplification: plays ONE target gate N times and sweeps N, "
+        "so a small per-gate over/under-rotation accumulates into a resolvable "
+        "fringe. Repeated across an amplitude-scale sweep, the fringe rate crosses "
+        "zero at the correct amplitude. Calibrates whichever gate is benchmarked — "
+        "pi (x180/y180) proposes pi_amp, pi/2 (x90/y90/-x90/-y90) proposes "
+        "pi_amp_x90 — so it is how the pi/2 gets calibrated in its own right rather "
+        "than assumed to be half the pi. Far more sensitive than power Rabi, which "
+        "sees the rotation error once; use it after power Rabi has the amplitude "
+        "roughly right."
     )
     Parameters: ClassVar[type[QubitDeterministicBenchmarkingParameters]] = QubitDeterministicBenchmarkingParameters
     Result: ClassVar[type[QubitDeterministicBenchmarkingResult]] = QubitDeterministicBenchmarkingResult
@@ -130,220 +142,77 @@ class QubitDeterministicBenchmarking(Experiment):
             "repetitions": np.array(self.params.get_repetitions(), dtype=int),
         }
 
+    def simulate(self, coords: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+        """Repeated-gate error accumulation: an amplitude factor off the ideal one
+        leaves a fixed per-gate over/under-rotation, so the population oscillates in
+        the REPETITION count at a rate proportional to (a - a_ideal), under a
+        depolarizing envelope. At N=0 nothing has been played, so P(excited) = 0."""
+        amp = coords["amp_factor"]
+        reps = coords["repetitions"].astype(float)
+        targets = self.params.targets
+        rng = np.random.default_rng(stable_seed("qubit_deterministic_benchmarking", *targets))
+        use_state = self.params.use_state_discrimination
+        # a pi/2 gate accumulates half the rotation error per repetition of a pi gate
+        per_factor = np.pi / 2 if amp_knob(self.params.target_gate) == "pi_amp_x90" else np.pi
+        i_data = np.empty((len(targets), amp.size, reps.size))
+        q_data = np.empty_like(i_data)
+        state = np.empty_like(i_data)
+        for k in range(len(targets)):
+            a_ideal = rng.uniform(0.97, 1.03)  # the factor a perfect pulse would need
+            decay = rng.uniform(2e-3, 8e-3)    # per-gate depolarization
+            for j, a in enumerate(amp):
+                omega = per_factor * (float(a) - a_ideal)
+                population = 0.5 - 0.45 * np.exp(-decay * reps) * np.cos(omega * reps)
+                if use_state:
+                    state[k, j] = state_row(population, rng)
+                else:
+                    i_data[k, j], q_data[k, j] = iq_from_population(population, rng)
+        return readout_vars(use_state, state, i_data, q_data)
+
     def estimate(self) -> QubitDeterministicBenchmarkingResult:
         assert self.dataset is not None, "run() populates self.dataset before estimate()"
-        data = self.dataset
+        from scqat.estimators.qubit_deterministic_benchmarking import (
+            QubitDeterministicBenchmarkingEstimator,
+        )
+
+        # scqat's contract: coord `repetition` (singular), and either a pre-reduced
+        # `signal` or raw I/Q that it reduces onto the |0>-|1> axis. It returns
+        # `opt_factor` — the MULTIPLIER on the current amplitude, never an absolute
+        # amplitude, so applying it against the live knob is ours to do.
+        rename = signal_rename(self.dataset, {"repetitions": "repetition"})
+        prepared = self.dataset.rename(rename).transpose("target", "amp_factor", "repetition")
+        results = per_qubit_results(
+            prepared, QubitDeterministicBenchmarkingEstimator(), artifact_dir=self.artifact_dir
+        )
+
+        knob = amp_knob(self.params.target_gate)
         result = QubitDeterministicBenchmarkingResult()
-        qubits = list(self.params.targets)
-        reps = np.asarray(data.coords["repetitions"].values, dtype=float)
-        amp_factors = np.asarray(data.coords["amp_factor"].values, dtype=float)
-        num_amps = len(amp_factors)
-
-        for i_q, qubit in enumerate(qubits):
-            var_state = f"state{i_q + 1}" if f"state{i_q + 1}" in data.data_vars else ("state" if "state" in data.data_vars else None)
-            var_i = f"I{i_q + 1}" if f"I{i_q + 1}" in data.data_vars else ("I" if "I" in data.data_vars else None)
-            var_q = f"Q{i_q + 1}" if f"Q{i_q + 1}" in data.data_vars else ("Q" if "Q" in data.data_vars else None)
-
-            # Helper to safely select target and transpose to (amp_factor, repetitions)
-            def _extract_2d(var_name: str) -> np.ndarray:
-                da = data[var_name]
-                if "target" in da.dims:
-                    da = da.sel(target=qubit)
-                elif "qubit" in da.dims:
-                    da = da.sel(qubit=qubit)
-
-                if "amp_factor" in da.dims and "repetitions" in da.dims:
-                    da = da.transpose("amp_factor", "repetitions")
-                elif "repetitions" in da.dims and "amp_factor" not in da.dims:
-                    da = da.expand_dims("amp_factor", axis=0)
-
-                arr = np.asarray(da.values, dtype=float)
-                arr = np.squeeze(arr)
-                if arr.ndim == 1:
-                    arr = arr.reshape((1, -1))
-                return arr
-
-            if var_state and var_state in data:
-                raw_p1 = _extract_2d(var_state)  # P1 in [0, 1]
-                # P0 population: P0 = 1 - P1 (scale 0.0 to 1.0)
-                pz_data = 1.0 - raw_p1
-                ylabel = "Ground State Population P0"
-                unit_str = "P0"
-            elif var_i and var_q and var_i in data and var_q in data:
-                arr_i = _extract_2d(var_i)
-                arr_q = _extract_2d(var_q)
-                raw_sig = np.hypot(arr_i, arr_q)
-                s_min, s_max = np.min(raw_sig), np.max(raw_sig)
-                denom = (s_max - s_min) if (s_max - s_min) > 1e-12 else 1.0
-                pz_data = (raw_sig - s_min) / denom
-                ylabel = "Normalized Signal P0 (0.0 to 1.0)"
-                unit_str = "P0"
-            elif var_i and var_i in data:
-                raw_sig = _extract_2d(var_i)
-                s_min, s_max = np.min(raw_sig), np.max(raw_sig)
-                denom = (s_max - s_min) if (s_max - s_min) > 1e-12 else 1.0
-                pz_data = (raw_sig - s_min) / denom
-                ylabel = "Normalized Voltage I [V] (0.0 to 1.0)"
-                unit_str = "P0"
-            else:
-                pz_data = np.ones((num_amps, len(reps)))
-                ylabel = "P0"
-                unit_str = "P0"
-
-            # Fit damped cosine with zero initial phase to each amplitude trajectory (in 0.0 to 1.0 scale)
-            omegas = []
-            signed_omegas = []
-            gammas = []
-
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5), dpi=150)
-            colors = plt.cm.viridis(np.linspace(0.15, 0.85, num_amps))
-
-            for i_a, a_val in enumerate(amp_factors):
-                pz_curve = pz_data[i_a]
-                ax1.plot(reps, pz_curve, "o", color=colors[i_a], label=f"amp factor = {a_val:.3f}")
-
-                # Initial guess for P0 scale [0, 1]: A=0.45, gamma=0.01, omega=0.05, C=0.5
-                p0_guess = [0.45, 0.01, 0.05, 0.5]
-                try:
-                    popt, _ = curve_fit(
-                        damped_cosine_zero_phase,
-                        reps,
-                        pz_curve,
-                        p0=p0_guess,
-                        bounds=([0.0, 0.0, 0.0, 0.0], [0.6, 0.5, np.pi, 1.0]),
-                        maxfev=2000,
-                    )
-                    A_fit, gamma_fit, omega_fit, C_fit = popt
-                    reps_fine = np.linspace(reps.min(), reps.max(), 200)
-                    curve_fine = damped_cosine_zero_phase(reps_fine, *popt)
-                    ax1.plot(reps_fine, curve_fine, "-", color=colors[i_a], alpha=0.8)
-
-                    w_val = float(omega_fit)
-                    # Sign convention: positive for a > 1.0 (overrotation), negative for a < 1.0 (underrotation)
-                    s_w = w_val if a_val >= 1.0 else -w_val
-                    omegas.append(w_val)
-                    signed_omegas.append(s_w)
-                    gammas.append(float(gamma_fit))
-                except Exception:
-                    omegas.append(0.0)
-                    signed_omegas.append(0.0)
-                    gammas.append(0.0)
-
-            # Estimate optimal amplitude scaling factor a_opt where omega(a_opt) = 0
-            if num_amps > 1 and len(set(amp_factors)) > 1:
-                try:
-                    poly = np.polyfit(amp_factors, signed_omegas, 1)
-                    k_slope, b_intercept = poly[0], poly[1]
-                    if abs(k_slope) > 1e-6:
-                        a_opt = float(-b_intercept / k_slope)
-                    else:
-                        a_opt = float(amp_factors[np.argmin(omegas)])
-                except Exception:
-                    a_opt = 1.0
-            else:
-                a_opt = 1.0
-
-            a_opt = float(np.clip(a_opt, 0.5, 1.5))
-
-            ax1.set_xlabel("Number of Gate Repetitions N")
-            ax1.set_ylabel(ylabel)
-            ax1.set_ylim(-0.05, 1.05)
-            ax1.set_title(f"DB Trajectories: {qubit} - {self.params.target_gate}")
-            ax1.grid(True, alpha=0.3)
-            ax1.legend(loc="best", fontsize="small")
-
-            # Plot 2: Oscillation Frequency omega vs Amplitude Scale Factor a
-            ax2.plot(amp_factors, omegas, "o", color="#1f77b4", markersize=7, label="Measured \u03c9")
-            if num_amps > 1 and len(set(amp_factors)) > 1:
-                a_fine = np.linspace(min(amp_factors.min(), a_opt - 0.02), max(amp_factors.max(), a_opt + 0.02), 100)
-                try:
-                    poly = np.polyfit(amp_factors, signed_omegas, 1)
-                    fit_w_fine = np.abs(poly[0] * a_fine + poly[1])
-                    ax2.plot(a_fine, fit_w_fine, "--", color="gray", alpha=0.7, label="Linear Fit |\u03a9(a)|")
-                except Exception:
-                    pass
-
-            ax2.axvline(a_opt, color="crimson", linestyle=":", label=f"Opt Factor ({a_opt:.4f})")
-            ax2.axhline(0.0, color="black", linestyle="-", alpha=0.3)
-            ax2.plot(a_opt, 0.0, "*", color="crimson", markersize=12, label=f"Optimum a_opt={a_opt:.4f}")
-            ax2.set_xlabel("Amplitude Scaling Factor a")
-            ax2.set_ylabel("Oscillation Frequency \u03c9 [rad / gate count]")
-            ax2.set_title(f"Frequency vs Amp Factor\nOptimal Scale Factor a_opt = {a_opt:.4f}")
-            ax2.grid(True, alpha=0.3)
-            ax2.legend(loc="best", fontsize="small")
-
-            fig.tight_layout()
-
-            # Retrieve current amplitude
-            tg = str(self.params.target_gate).strip().lower()
-            try:
-                from customized import quam_fields
-                q_obj = self.backend.machine.qubits[qubit]
-                if tg in ("x90", "-x90", "y90", "-y90"):
-                    old_amp = quam_fields.get_pi_amp(q_obj, operation="x90")
-                else:
-                    old_amp = quam_fields.get_pi_amp(q_obj, operation="x180")
-            except Exception:
-                chan = self.device.channel(qubit, "drive")
-                old_amp = float(chan.pi_amp / 2.0) if tg in ("x90", "-x90", "y90", "-y90") else float(chan.pi_amp)
-
-            opt_amp = float(old_amp * a_opt)
-
-            fit_dict = {
+        for qubit in self.params.targets:
+            a_opt = float(results[qubit]["opt_factor"])
+            old_amp = float(getattr(self.device.channel(qubit, "drive"), knob))
+            opt_amp = old_amp * a_opt
+            result.fit[qubit] = {
                 "opt_factor": a_opt,
                 "opt_amp": opt_amp,
-                "old_amp": old_amp,
-                "pi_amp_factor": a_opt,
-                "repetitions": [int(x) for x in reps],
-                "amp_factors": [float(x) for x in amp_factors],
-                "omegas": omegas,
-                "gammas": gammas,
-                "unit": unit_str,
+                knob: opt_amp,
+                f"old_{knob}": old_amp,
+                "unit": results[qubit]["unit"],
             }
-
-            if tg in ("x90", "-x90"):
-                fit_dict["pi_amp_x90"] = opt_amp
-                fit_dict["old_pi_amp_x90"] = old_amp
-            else:
-                fit_dict["pi_amp"] = opt_amp
-                fit_dict["old_pi_amp"] = old_amp
-
-            result.fit[qubit] = fit_dict
             result.outcomes[qubit] = Outcome.SUCCESSFUL
-
-            # Save figure artifact if artifact_dir is configured
-            if self.artifact_dir is not None:
-                try:
-                    out_q_dir = self.artifact_dir / str(qubit)
-                    out_q_dir.mkdir(parents=True, exist_ok=True)
-                    fig.savefig(out_q_dir / "qubit_deterministic_benchmarking.png")
-                except Exception:
-                    pass
-                finally:
-                    plt.close(fig)
-            else:
-                plt.close(fig)
-
         return result
 
     def update(self) -> None:
-        """Update pulse amplitude via self.device.channel so SCQO SuggestionCapture generates CLI prompts."""
+        """Propose the rescaled amplitude on the target's DRIVE channel. Which knob
+        it lands on depends only on whether the benchmarked gate is a pi or a pi/2
+        rotation — `amp_knob` is the single place that decides, shared with
+        estimate() so the read and the write can never disagree."""
         if self.result is None:
             return
-        tg = str(self.params.target_gate).strip().lower()
-
+        knob = amp_knob(self.params.target_gate)
         for qubit, fit in self.result.fit.items():
-            if self.result.outcomes[qubit] is Outcome.SUCCESSFUL and fit.get("opt_amp") is not None:
-                opt_amp = fit["opt_amp"]
-                chan = self.device.channel(qubit, "drive")
-                if tg in ("x180", "x", "pi", "y180", "y"):
-                    chan.pi_amp = opt_amp
-                elif tg in ("x90", "-x90", "y90", "-y90"):
-                    chan.pi_amp_x90 = opt_amp
-
-
-
-
+            if self.result.outcomes[qubit] is not Outcome.SUCCESSFUL:
+                continue
+            setattr(self.device.channel(qubit, "drive"), knob, fit["opt_amp"])
 
     def probe(self):  # pragma: no cover - driver half
         raise NotImplementedError("a driver backend supplies probe()")
