@@ -8,6 +8,12 @@ under their new names (``v_offset_v`` -> ``flux_offset``,
 two channel knobs (``idle_flux`` on the flux channel, ``readout_freq_hz``
 on the readout channel), and the dispersive physics (``f_r0_hz``,
 ``g_hz``) goes on the attached RESONATOR mode.
+
+FRAME (no ``_pulse`` in the name, plain ``FluxSweepParameters``): the probe
+SETS the line's DC offset to each swept value, so the window is ABSOLUTE DAC
+volts and its fitted ``flux_offset`` is already an absolute set-point — the
+plane the ``_pulse`` experiments re-reference themselves onto. See
+:mod:`._capabilities.flux`.
 """
 
 from __future__ import annotations
@@ -22,6 +28,7 @@ from ..contract import DatasetContract
 from ._capabilities.flux import (
     NUM_FLUX_DESC,
     FluxSweepParameters,
+    flux_anchor_v,
     flux_sweep,
     foreign_flux_source,
 )
@@ -96,13 +103,18 @@ class ResonatorSpectroscopyFlux(Experiment):
 
     name: ClassVar[str] = "resonator_spectroscopy_flux"
     description: ClassVar[str] = (
-        "2D resonator spectroscopy vs flux bias: tracks the dip at every flux and fits "
+        "2D resonator spectroscopy vs ABSOLUTE flux bias (the probe sets the line's "
+        "DC offset per point, so the window is DAC volts, not an excursion from "
+        "idle_flux): tracks the dip at every flux and fits "
         "its flux dependence with a selectable model (analysis_method='dispersive' or "
         "'sine'); proposes the sweet-spot flux (flux_offset) + flux period "
         "(flux_per_phi0) as physical facts on the qubit's flux channel, and "
         "sets the operating point at the sweet spot (the flux channel's "
         "idle_flux = flux_offset, the readout channel's readout_freq_hz = "
-        "resonator dip there) — plus bare f_r0_hz and coupling g_hz on the "
+        "resonator dip there). This is the BRING-UP seed for idle_flux, found "
+        "without needing a prior operating point; once the qubit answers, "
+        "qubit_spectroscopy_flux_pulse is the authority for that knob. "
+        "Plus bare f_r0_hz and coupling g_hz on the "
         "attached resonator mode "
         "when the dispersive method ran with f_q_max_hz supplied (an unconstrained fit "
         "only ASSUMES f_q_max; assumptions are not recorded as physics)."
@@ -188,6 +200,12 @@ class ResonatorSpectroscopyFlux(Experiment):
                 "flux_per_phi0": float(disp["dv_phi0"]),
                 "n_good_flux": int(vs["n_good"]),
                 "old_readout_freq_hz": old_freqs[qubit],
+                # The frame origin, 0.0 here: this probe SETS the DC offset, so
+                # the window is measured from the DAC zero and whatever the line
+                # was parked at is overridden point by point. Recorded anyway so
+                # `flux_offset == old_idle_flux + <fitted in frame>` is one
+                # invariant across the whole flux capability, both frames.
+                "old_idle_flux": flux_anchor_v(self, qubit),
             }
             # Dispersive-only physics — the sine method produces no f_r0/g/f_q_max.
             for src, dst in (("f_r0", "f_r0_hz"), ("g", "g_hz"), ("f_q_max", "f_q_max_hz")):

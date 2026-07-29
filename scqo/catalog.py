@@ -438,11 +438,18 @@ CHANNELS: dict[str, ChannelKind] = {
                 "source-native",
                 "Standing bias set-point in the flux source's native unit "
                 "(volts for an AWG line, amperes for a coil). A coupler's "
-                "decouple point IS this knob on its own flux channel.",
+                "decouple point IS this knob on its own flux channel. It is "
+                "also the ORIGIN a '_pulse' flux experiment's swept window is "
+                "measured from (its probe plays on top of this bias).",
                 role="knob", portable=False),
             "flux_offset": FieldSpec(
                 "source-native", "Sweet-spot offset of the transfer function "
-                                 "flux/Phi0 = (x - flux_offset)/flux_per_phi0.",
+                                 "flux/Phi0 = (x - flux_offset)/flux_per_phi0, "
+                                 "where x is the ABSOLUTE set-point on the same "
+                                 "plane as idle_flux. An experiment whose sweep "
+                                 "axis is relative to idle_flux re-references "
+                                 "(absolute = idle_flux_at_run + fitted) before "
+                                 "writing here.",
                 role="fact", portable=False),
             "flux_per_phi0": FieldSpec(
                 "source-native", "Source units per flux quantum on this "

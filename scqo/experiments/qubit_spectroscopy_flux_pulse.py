@@ -9,6 +9,12 @@ the arch facts (``ej_sum_hz``, ``f_q_max_hz``) land on the target mode, and
 the volts-to-flux transfer function lands on the target's FLUX CHANNEL as
 ``flux_offset`` / ``flux_per_phi0`` (formerly ``v_offset_v`` /
 ``v_per_phi0_v`` on the ZControl component).
+
+FRAME (``_pulse`` in the name, ``FluxPulseSweepParameters`` in the schema):
+the flux is a PULSE the DAC adds to the standing bias, so the window is
+measured from the channel's ``idle_flux`` and 0 means "stay parked".
+``estimate()`` re-references the fitted excursion to an absolute set-point
+before writing ``flux_offset`` — see :mod:`._capabilities.flux`.
 """
 
 from __future__ import annotations
@@ -22,7 +28,8 @@ from .._scqat import per_qubit_results
 from ..contract import DatasetContract
 from ._capabilities.flux import (
     NUM_FLUX_DESC,
-    FluxSweepParameters,
+    FluxPulseSweepParameters,
+    flux_anchor_v,
     flux_sweep,
     foreign_flux_source,
 )
@@ -36,9 +43,13 @@ from ._flux_component import FluxComponentParameters
 
 
 class QubitSpectroscopyFluxPulseParameters(
-    TargetSelection, AveragingParameters, FluxSweepParameters, FluxComponentParameters
+    TargetSelection, AveragingParameters, FluxPulseSweepParameters, FluxComponentParameters
 ):
-    """Inputs for the qubit-frequency-vs-flux map."""
+    """Inputs for the qubit-frequency-vs-flux map.
+
+    The flux window is RELATIVE to the swept channel's ``idle_flux`` (the probe
+    plays a z pulse on top of the standing bias), so 0 means "stay parked".
+    """
 
     frequency_span_hz: float = Field(400e6, gt=0, description="Total drive-detuning span around the current drive_freq.")
     num_freq_points: int = Field(101, gt=1, description="Number of frequency points.")
@@ -58,7 +69,18 @@ class QubitSpectroscopyFluxPulseResult(Result):
     """``fit[target]``: ``flux_offset``, ``f01_at_sweet_spot_hz``,
     ``flux_per_phi0``, ``ej_sum_hz`` (+ stderrs). ``update()`` proposes them
     as physical facts: ej_sum_hz/f_q_max_hz on the target mode,
-    flux_offset/flux_per_phi0 on the target's flux channel."""
+    flux_offset/flux_per_phi0 on the target's flux channel — plus ``idle_flux``
+    on that channel, the one knob.
+
+    The window is idle-relative, so the sweet spot is reported TWICE, in the
+    two frames, exactly as ``qubit_ramsey`` reports old/delta/new for the drive
+    frequency: ``old_idle_flux`` (the standing bias the pulse rode on),
+    ``flux_offset_from_idle`` (the fitted excursion, this run's own frame) and
+    ``flux_offset = old_idle_flux + flux_offset_from_idle`` (ABSOLUTE — the
+    value written to the fact and proposed as the new ``idle_flux``).
+    ``flux_per_phi0`` is a period and every frequency is frame-invariant, so
+    neither is re-referenced.
+    """
 
 
 @register
@@ -69,10 +91,16 @@ class QubitSpectroscopyFluxPulse(Experiment):
     description: ClassVar[str] = (
         "2D qubit spectroscopy vs PULSED flux (bias applied only during the drive; "
         "readout at idle flux every slice, reduced against one global IQ reference): "
-        "finds the 0-1 peak at every flux and fits the transmon arch; proposes sweet "
-        "spot (flux_offset), flux period (flux_per_phi0) on the target's flux "
+        "finds the 0-1 peak at every flux and fits the transmon arch. The flux "
+        "window is RELATIVE to the channel's idle_flux (0 = stay parked), so a "
+        "well-tuned qubit maps an arch centred on 0. Proposes sweet spot "
+        "(flux_offset, absolute), flux period (flux_per_phi0) on the target's flux "
         "channel and ej_sum_hz/f_q_max_hz on the target mode as physical facts "
-        "(the Phase-3 EJ/EC inference inputs — no instrument knob). A foreign "
+        "(the Phase-3 EJ/EC inference inputs), plus idle_flux on the flux channel "
+        "— accepting it RE-PARKS the qubit at the measured sweet spot, so the next "
+        "map centres at 0. On a flux-tunable qubit this experiment is the "
+        "AUTHORITY for idle_flux (it measures the qubit itself); "
+        "resonator_spectroscopy_flux only seeds it during bring-up. A foreign "
         "flux_component (another qubit's z, a coupler's z) makes the run a "
         "RECORD-ONLY crosstalk/coupler-shift map — fits saved, zero "
         "suggestions."
@@ -119,7 +147,10 @@ class QubitSpectroscopyFluxPulse(Experiment):
         q_data = np.empty_like(i_data)
         for k, q in enumerate(targets):
             # hidden arch: sweet spot inside the swept window, top of the arch at
-            # the current drive_freq (detuning 0) so the peak stays in-window
+            # the current drive_freq (detuning 0) so the peak stays in-window.
+            # The window is idle-relative, so `sweet` reads as "this far from the
+            # standing bias" — a qubit parked slightly off its sweet spot, which
+            # is exactly the condition this experiment exists to correct.
             f01_now = float(self.device.channel(q, "drive").drive_freq_hz)
             sweet = rng.uniform(0.3 * flux.min(), 0.3 * flux.max())
             period = rng.uniform(1.5, 2.5) * (flux.max() - flux.min())
@@ -143,6 +174,9 @@ class QubitSpectroscopyFluxPulse(Experiment):
         # (the arch model is absolute-scale), vars I/Q; dims (flux_bias, detuning).
         targets = list(self.dataset["target"].values)
         old_freqs = {q: float(self.device.channel(q, "drive").drive_freq_hz) for q in targets}
+        # The window rode on this standing bias (0.0 would be the absolute frame);
+        # it is what turns the fitted excursion back into an absolute set-point.
+        old_idle = {q: flux_anchor_v(self, q) for q in targets}
         prepared = self.dataset.rename({"flux_bias_v": "flux_bias", "detuning_hz": "detuning"})
         prepared = prepared.transpose("target", "flux_bias", "detuning")
         detuning = prepared["detuning"].values
@@ -165,7 +199,9 @@ class QubitSpectroscopyFluxPulse(Experiment):
             arch = results[qubit]["arch"]
             fit: dict[str, float] = {"ec_ghz_assumed": float(arch["ec_ghz"])}
             for src, dst in (
-                ("sweet_spot_flux", "flux_offset"),
+                # the estimator fits in the SWEPT frame, so its sweet spot is an
+                # excursion from the standing bias until re-referenced below
+                ("sweet_spot_flux", "flux_offset_from_idle"),
                 ("flux_period", "flux_per_phi0"),
                 ("f01_max_hz", "f01_at_sweet_spot_hz"),
                 ("offset_stderr", "flux_offset_stderr"),
@@ -178,17 +214,30 @@ class QubitSpectroscopyFluxPulse(Experiment):
             if "ej_sum_stderr_ghz" in arch:
                 fit["ej_sum_stderr_hz"] = float(arch["ej_sum_stderr_ghz"]) * 1e9
             fit["old_drive_freq_hz"] = old_freqs[qubit]
+            # The frame declaration, as a number: unconditional, so a run always
+            # says where it was parked even when the arch fit found nothing.
+            fit["old_idle_flux"] = old_idle[qubit]
+            if "flux_offset_from_idle" in fit:  # the arch keys are conditional
+                fit["flux_offset"] = old_idle[qubit] + fit["flux_offset_from_idle"]
             result.fit[qubit] = fit
             result.outcomes[qubit] = Outcome.SUCCESSFUL if bool(arch["success"]) else Outcome.FAILED
         return result
 
     def update(self) -> None:
-        """Propose the arch parameters as PHYSICAL facts (sample physics, no vendor).
+        """Propose the arch parameters as PHYSICAL facts, then re-park the qubit.
 
         ``ej_sum_hz`` and ``f01_at_sweet_spot_hz`` (as ``f_q_max_hz``) land on the
         target mode; the volts-to-flux transfer quantities ``flux_offset`` /
         ``flux_per_phi0`` land on the target's flux channel (the same
         quantities the resonator flux map measures).
+
+        Facts first, then the one KNOB: ``idle_flux`` takes the same number as
+        ``flux_offset``, because the measured sweet spot IS where the qubit
+        should stand — the identical move ``resonator_spectroscopy_flux`` makes.
+        Accepting therefore re-parks the operating point, and the next run of
+        this experiment maps an arch centred on 0. Both are absolute (the
+        re-reference happened in ``estimate()``), so the knob and the fact stay
+        on one plane.
         """
         if self.result is None:
             return
@@ -209,6 +258,9 @@ class QubitSpectroscopyFluxPulse(Experiment):
             for field in ("flux_offset", "flux_per_phi0"):
                 if field in fit:
                     setattr(flux_view, field, fit[field])
+            # ... and the operating point itself: park at the measured sweet spot.
+            if "flux_offset" in fit:
+                flux_view.idle_flux = fit["flux_offset"]
 
     def probe(self):  # pragma: no cover - driver half
         raise NotImplementedError("a driver backend supplies probe()")

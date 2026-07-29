@@ -10,7 +10,13 @@ from __future__ import annotations
 import pytest
 
 from scqo import ContractError, DatasetContract
-from scqo.experiments import QubitPowerRabi, QubitRamsey, ResonatorSpectroscopy
+from scqo.experiments import (
+    PairSwapChevron,
+    PairSwapFluxMap,
+    QubitPowerRabi,
+    QubitRamsey,
+    ResonatorSpectroscopy,
+)
 from scqo.testing import InMemoryDevice, SimulatedBackend, demo_device
 
 
@@ -120,6 +126,40 @@ def test_alt_variables_failure_lists_all_accepted_sets():
         _Ram.Contract.validate(bogus)
     msg = str(err.value)
     assert "('I', 'Q')" in msg and "('state',)" in msg
+
+
+class _Chev(PairSwapChevron):
+    def probe(self):
+        return None
+
+
+class _Map(PairSwapFluxMap):
+    def probe(self):
+        return None
+
+
+@pytest.mark.parametrize("cls, sweeps", [
+    (_Chev, ("flux_amp_v", "swap_time_ns")),
+    (_Map, ("qubit_flux_v", "coupler_flux_v")),
+])
+def test_multi_variable_contract(cls, sweeps):
+    """A contract may require MORE than one variable, and every one of them is
+    held to the same dims rigor. The swap maps need three: two role-named
+    marginals (an excitation that left one qubit must be seen arriving at the
+    other) plus the |ee> witness that separates a swap from heating."""
+    backend = SimulatedBackend(demo_device(tunable=True)[2])
+    exp = cls(backend, cls.Parameters(targets=["q0_q1"]))
+    exp.sweep_axes = exp.define_sweep()
+    ds = backend.acquire(exp)
+
+    assert cls.Contract.sweeps == sweeps
+    assert cls.Contract.variables == ("p_high", "p_low", "p_ee")
+    cls.Contract.validate(ds)  # does not raise
+
+    with pytest.raises(ContractError):
+        cls.Contract.validate(ds.drop_vars("p_ee"))  # every variable is required
+    with pytest.raises(ContractError):
+        cls.Contract.validate(ds.isel({sweeps[0]: 0}, drop=True))  # dims rigor
 
 
 def test_two_axis_contract():

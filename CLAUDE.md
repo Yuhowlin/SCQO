@@ -149,7 +149,16 @@ scqo/
   experiments/    # the registry lives in __init__.py: @register / get / catalog (the
                   #   AI's menu; maturity core|contrib + DERIVED capability tags)
     _capabilities/  # one module per capability: the canonical Parameters mixin + contract
-                    #   fragment + sim/estimate helpers (state_readout.py, flux.py,
+                    #   fragment + sim/estimate helpers (state_readout.py,
+                    #   flux.py = the swept flux window in TWO FRAMES sharing one axis
+                    #   key (flux_bias_v): FluxSweepParameters is ABSOLUTE DAC volts
+                    #   (probe sets the DC offset) and FluxPulseSweepParameters is
+                    #   RELATIVE to the channel's idle_flux (probe plays on top of the
+                    #   standing bias). Frame follows MECHANISM and must show in the
+                    #   NAME - a relative carrier ends in `_pulse` (checked, not a
+                    #   convention) - and every carrier records `old_idle_flux` so
+                    #   `flux_offset = old_idle_flux + <fitted>` is one invariant; the
+                    #   flux_offset FACT is absolute in both frames,
                     #   qubit_reset.py = reset_method 'thermal'|'active' + the thermal
                     #   wait, resolved for both drivers by the ONE helper
                     #   reset_wait_ns; a backend that cannot realize a method must
@@ -175,8 +184,12 @@ scqo/
     qubit_power_rabi.py         # amplitude sweep, cosine fit -> pi_amp (drive channel)
     qubit_relaxation.py         # pi + swept wait, exp-decay fit -> t1_s (mode fact)
     qubit_echo.py               # Hahn echo, exp-envelope fit -> t2_echo_s (mode fact)
-    qubit_spectroscopy_flux_pulse.py  # 2D flux x detuning arch -> ej_sum_hz/f_q_max_hz (mode
-                                #   facts) + flux_offset/flux_per_phi0 (flux-channel facts)
+    qubit_spectroscopy_flux_pulse.py  # 2D flux x detuning arch, window RELATIVE to
+                                #   idle_flux -> ej_sum_hz/f_q_max_hz (mode facts) +
+                                #   flux_offset/flux_per_phi0 (flux-channel facts, absolute
+                                #   after re-referencing) + idle_flux (the one knob: accepting
+                                #   re-parks at the sweet spot, so the next map centres on 0).
+                                #   THE authority for idle_flux on a flux-tunable qubit
     single_shot_readout.py      # per-shot IQ blobs (prepared_state x shot_idx) ->
                                 #   fidelity_g/fidelity_e monitors + pos_* blob centers on the
                                 #   readout channel; a discriminating driver also proposes
@@ -201,10 +214,16 @@ scqo/
     qubit_pi_pulse_error.py     # pi-amplitude error amplification -> pi_amp (drive channel)
     qubit_drag_equator.py       # 3-line symmetric DRAG calibration -> drag_beta (drive channel)
     qubit_drag_alternating.py   # alternating-pulse DRAG calibration -> drag_beta (drive channel)
-    qubit_relaxation_flux.py    # T1 vs swept z bias - record-only diagnostic (per-flux fits in result.fit)
-    qubit_echo_flux.py          # T2_echo vs swept z bias - record-only diagnostic
+    qubit_relaxation_flux_pulse.py  # T1 vs swept z PULSE (idle-relative) - record-only
+                                #   diagnostic (per-flux fits in result.fit)
+    qubit_echo_flux_pulse.py    # T2_echo vs swept z PULSE (idle-relative) - record-only
     qubit_sqrb.py               # single-qubit randomized benchmarking - record-only gate fidelities
     qubit_tomography.py         # state tomography (custom contract) - record-only
+    pair_swap_chevron.py        # single-excitation swap chevron: flux amplitude (absolute V) x
+                                #   pulse duration on one member's flux line - record-only 2D map
+    pair_swap_flux_map.py       # fixed-duration coupler-flux x member-flux swap spot - record-only.
+                                #   Both precede pair_zz_coupler at bring-up: find where the pair
+                                #   swaps, then where it decouples
     pair_zz_coupler.py          # residual ZZ vs coupler bias (echo fringe per bias) -> idle_flux
                                 #   on the COUPLER's flux channel (ZZ-off point) + zz_hz (pair fact)
 tests/test_model_run.py         # catalog -> run -> suggest -> accept, no hardware

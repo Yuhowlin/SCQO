@@ -50,6 +50,22 @@ def test_flux_channel_spans_both_stores():
     assert roles["flux_per_phi0"] == "fact"
 
 
+def test_flux_offset_declares_its_reference_plane():
+    """``flux_offset`` is written by BOTH an absolute-frame experiment
+    (resonator_spectroscopy_flux, which sets the DC offset) and idle-relative
+    ones (the ``_pulse`` family, which play on top of the standing bias). One
+    slot, one plane — so the FieldSpec doc must say which, and say that a
+    relative carrier re-references before writing. Losing that sentence is how
+    the two frames silently start sharing a slot again."""
+    fields = CHANNELS["flux"].fields
+    offset_doc = fields["flux_offset"].doc
+    assert "ABSOLUTE" in offset_doc
+    assert "idle_flux" in offset_doc
+    assert "re-reference" in offset_doc
+    # and the knob names itself as the origin the relative frame measures from
+    assert "ORIGIN" in fields["idle_flux"].doc
+
+
 # ---------------------------------------------------------------- vocabulary
 
 def test_unit_suffix_convention_holds_and_is_enforced():

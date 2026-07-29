@@ -183,7 +183,8 @@ def _classify(value: Any) -> tuple[float | None, bool]:
       it) while a fit read back from JSON carries ``null``
       (``datastore._scrub``). This means the fit did not resolve.
     * NON-SCALAR — a list or dict. The record-only diagnostics
-      (``qubit_relaxation_flux``, ``qubit_echo_flux``, ``qubit_tomography``)
+      (``qubit_relaxation_flux_pulse``, ``qubit_echo_flux_pulse``,
+      ``qubit_tomography``)
       legitimately publish per-point ARRAYS in ``fit``. Those fits SUCCEEDED;
       there is simply no scalar to take a mean of.
     """

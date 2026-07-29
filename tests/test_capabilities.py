@@ -22,7 +22,9 @@ from scqo.experiments._capabilities import (
     ACTIVE_RESET_ROUNDS_DESC,
     FLUX_AXIS,
     MAX_FLUX_DESC,
+    MAX_FLUX_PULSE_DESC,
     MIN_FLUX_DESC,
+    MIN_FLUX_PULSE_DESC,
     NUM_FLUX_DESC,
     RESET_METHOD_DESC,
     THERMALIZATION_TIME_DESC,
@@ -42,28 +44,37 @@ def _catalog_by_name() -> dict[str, dict]:
     return {entry["name"]: entry for entry in catalog()}
 
 
-#: derivation order is fixed: state_readout, then flux, then qubit_reset
-#: (``scqo.experiments._derived_tags``)
+#: derivation order is fixed: state_readout, then flux, then qubit_reset, then
+#: flux_pulse (``scqo.experiments._derived_tags``). ``flux_pulse`` REFINES
+#: ``flux`` — a relative window measured from idle_flux — so it never appears
+#: without it, and its carriers' names all end in ``_pulse``.
 EXPECTED_TAGS = {
     "qubit_relaxation": ["state_readout", "qubit_reset"],
     "qubit_echo": ["state_readout", "qubit_reset"],
     "qubit_ramsey": ["state_readout", "qubit_reset"],
     "qubit_power_rabi": ["state_readout", "qubit_reset"],
     "qubit_sqrb": ["state_readout", "qubit_reset"],
-    "qubit_relaxation_flux": ["state_readout", "flux", "qubit_reset"],
-    "qubit_echo_flux": ["state_readout", "flux", "qubit_reset"],
+    "qubit_relaxation_flux_pulse": ["state_readout", "flux", "qubit_reset", "flux_pulse"],
+    "qubit_echo_flux_pulse": ["state_readout", "flux", "qubit_reset", "flux_pulse"],
     "resonator_spectroscopy_flux": ["flux"],
-    "qubit_spectroscopy_flux_pulse": ["flux"],
+    "qubit_spectroscopy_flux_pulse": ["flux", "flux_pulse"],
     # reset without discrimination: these pulse the qubit and read it out, so
     # shot independence needs a reset, but their probes do not return `state`
     # (pi_pulse_error's QM shell hardcodes discrimination off; the readout
     # trio works on raw per-shot IQ by construction).
     "qubit_pi_pulse_error": ["qubit_reset"],
     "pair_zz_coupler": ["qubit_reset"],
+    # the swap maps sweep FLUX but are not "flux"-tagged: that capability is
+    # the single-qubit z-bias sweep (FluxSweepParameters, contract axis
+    # flux_bias_v), and these sweep a pair's pulse amplitudes instead. Their
+    # probes hardcode discrimination, so no state_readout tag either.
+    "pair_swap_chevron": ["qubit_reset"],
+    "pair_swap_flux_map": ["qubit_reset"],
     "single_shot_readout": ["qubit_reset"],
     "readout_power": ["qubit_reset"],
     "readout_frequency": ["qubit_reset"],
     "qubit_spectroscopy": ["qubit_reset"],
+    "qubit_spectroscopy_overlap": ["qubit_reset"],
     "qubit_tomography": ["qubit_reset"],
     "qubit_drag_equator": ["qubit_reset"],
     "qubit_drag_alternating": ["qubit_reset"],
@@ -94,8 +105,8 @@ def test_tags_survive_session_catalog_overlay():
     for sess in (plain, overlaid):
         entries = {entry["name"]: entry for entry in sess.catalog()}
         assert entries["qubit_relaxation"]["tags"] == ["state_readout", "qubit_reset"]
-        assert entries["qubit_relaxation_flux"]["tags"] == [
-            "state_readout", "flux", "qubit_reset"]
+        assert entries["qubit_relaxation_flux_pulse"]["tags"] == [
+            "state_readout", "flux", "qubit_reset", "flux_pulse"]
 
 
 def test_canonical_field_text_never_drifts():
@@ -108,8 +119,13 @@ def test_canonical_field_text_never_drifts():
         if "state_readout" in entry["tags"]:
             assert props["use_state_discrimination"]["description"] == state_desc, name
         if "flux" in entry["tags"]:
-            assert props["min_flux_v"]["description"] == MIN_FLUX_DESC, name
-            assert props["max_flux_v"]["description"] == MAX_FLUX_DESC, name
+            # the window text is per-FRAME; num_flux_points carries no frame
+            # information and reuses the one constant in both
+            pulse = "flux_pulse" in entry["tags"]
+            assert props["min_flux_v"]["description"] == (
+                MIN_FLUX_PULSE_DESC if pulse else MIN_FLUX_DESC), name
+            assert props["max_flux_v"]["description"] == (
+                MAX_FLUX_PULSE_DESC if pulse else MAX_FLUX_DESC), name
             assert props["num_flux_points"]["description"].startswith(NUM_FLUX_DESC), name
         if "qubit_reset" in entry["tags"]:
             assert props["reset_method"]["description"] == RESET_METHOD_DESC, name
@@ -121,12 +137,54 @@ def test_canonical_field_text_never_drifts():
 
 def test_flux_axis_is_the_contract_axis():
     """Every flux-tagged experiment sweeps FLUX_AXIS as its first contract axis —
-    the probe-boundary name LCHQB/LCHQM emit and read."""
+    the probe-boundary name LCHQB/LCHQM emit and read.
+
+    Note this is now true of BOTH frames: the frame is an origin, not a
+    different quantity, so it is carried by the name and the recorded
+    ``old_idle_flux``, not by a second axis key. That makes
+    ``test_flux_pulse_names_carry_the_suffix`` below load-bearing rather than
+    decorative — it is the only check that a relative carrier announced itself.
+    """
     entries = _catalog_by_name()
     flux_tagged = [n for n, e in entries.items() if "flux" in e["tags"]]
     assert flux_tagged  # the tag exists
     for name in flux_tagged:
         assert get(name).Contract.sweeps[0] == FLUX_AXIS, name
+
+
+def test_the_two_flux_frames_say_different_things():
+    """The absolute and relative window texts must not converge.
+
+    They are the ONLY place the catalog states which origin a window is measured
+    from, and the catalog is what an AI loop reads to choose parameters. A
+    copy-paste that made them identical would erase the distinction while every
+    other test still passed.
+    """
+    assert MIN_FLUX_DESC != MIN_FLUX_PULSE_DESC
+    assert MAX_FLUX_DESC != MAX_FLUX_PULSE_DESC
+    assert "idle_flux" in MIN_FLUX_PULSE_DESC
+    assert "idle_flux" not in MIN_FLUX_DESC
+
+
+def test_flux_pulse_names_carry_the_suffix():
+    """The naming rule, as a checked property: a window measured from
+    ``idle_flux`` announces itself in the registered NAME.
+
+    Both frames share one axis key and one contract, so the name is what tells a
+    human (and an AI reading the catalog) that ``flux_bias_v = 0`` means "stay
+    parked" rather than "0 V on the line". Enforced in both directions, because
+    a plain-frame experiment wearing ``_pulse`` misleads exactly as badly as a
+    relative one without it.
+    """
+    entries = _catalog_by_name()
+    flux_tagged = {n: e for n, e in entries.items() if "flux" in e["tags"]}
+    assert flux_tagged
+    for name, entry in flux_tagged.items():
+        assert name.endswith("_pulse") == ("flux_pulse" in entry["tags"]), name
+    # and the refinement never floats free of the capability it refines
+    for name, entry in entries.items():
+        if "flux_pulse" in entry["tags"]:
+            assert "flux" in entry["tags"], name
 
 
 def test_reset_wait_precedence():
@@ -244,8 +302,8 @@ def test_foreign_flux_source_guard():
 
 @pytest.mark.parametrize("name,params", [
     ("qubit_sqrb", {"num_random_sequences": 5, "max_circuit_depth": 16}),
-    ("qubit_relaxation_flux", {"num_flux_points": 5, "num_wait_points": 11}),
-    ("qubit_echo_flux", {"num_flux_points": 5, "num_wait_points": 11}),
+    ("qubit_relaxation_flux_pulse", {"num_flux_points": 5, "num_wait_points": 11}),
+    ("qubit_echo_flux_pulse", {"num_flux_points": 5, "num_wait_points": 11}),
 ])
 def test_state_contract_accepted_for_newly_wired(name, params):
     """The newly wired carriers emit `state` (no I/Q) in discriminated mode and

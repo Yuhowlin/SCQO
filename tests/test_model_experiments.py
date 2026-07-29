@@ -21,8 +21,8 @@ from scqo.testing import (
 
 #: experiments whose update() is record-only (or has no simulator writes) —
 #: zero suggestions is their CORRECT outcome.
-RECORD_ONLY = {"qubit_sqrb", "qubit_tomography", "qubit_echo_flux",
-               "qubit_relaxation_flux"}
+RECORD_ONLY = {"qubit_sqrb", "qubit_tomography", "qubit_echo_flux_pulse",
+               "qubit_relaxation_flux_pulse", "pair_swap_chevron", "pair_swap_flux_map"}
 
 
 @pytest.fixture(scope="module")
@@ -58,6 +58,19 @@ def _suggest(session, name, target="q0"):
     out = session.run(name, {"targets": [target]})
     assert out.get("error") is None, out.get("error")
     return {(s["entity"], s["field"]) for s in out["suggestions"]}
+
+
+def _pair_target(name):
+    return "q0_q1" if registry.get(name).target_kinds == ("qubit_pair",) else "q0"
+
+
+@pytest.mark.parametrize("name", sorted(RECORD_ONLY))
+def test_record_only_experiments_propose_nothing(session, name):
+    """RECORD_ONLY is a CLAIM about these experiments, so check it rather than
+    just documenting it: a record-only diagnostic that grows an update() must
+    either leave the set or fail here."""
+    assert name in CORE, f"{name} is not in the core catalog"
+    assert _suggest(session, name, target=_pair_target(name)) == set()
 
 
 def test_qubit_spectroscopy_writes_channel_knob_and_mode_fact(session):
@@ -109,6 +122,55 @@ def test_flux_map_writes_the_sweet_spot_on_the_flux_channel(session):
 def test_pair_zz_writes_coupler_idle_and_pair_fact(session):
     assert _suggest(session, "pair_zz_coupler", target="q0_q1") == {
         ("q0_q1_c_z", "idle_flux"), ("q0_q1", "zz_hz")}
+
+
+@pytest.mark.parametrize("name,axes", [
+    ("pair_swap_chevron", ("flux_amp_v", "swap_time_ns")),
+    ("pair_swap_flux_map", ("qubit_flux_v", "coupler_flux_v")),
+])
+def test_pair_swap_maps_summarize_the_transfer(session, name, axes):
+    """The record-only payload: the peak of the UNDRIVEN member's population
+    and where on the 2D map it sits. Both maps default to drive_side='low', so
+    the transfer is read off p_high — reading the driven member instead would
+    report its own decay as a swap."""
+    out = session.run(name, {"targets": ["q0_q1"]}, update="none")
+    assert out.get("error") is None, out.get("error")
+    fit = out["fit"]["q0_q1"]
+    assert math.isfinite(fit["best_transfer"])
+    for axis in axes:
+        assert math.isfinite(fit[f"best_{axis}"]), axis
+        assert fit[f"n_{axis}"] > 4
+    # the simulated arch is resolvable by construction, so it must be FOUND
+    assert out["outcomes"]["q0_q1"] == "successful"
+    assert fit["p_ee_max"] < 0.1, "single excitation: |ee> stays thermal"
+
+
+def test_pair_swap_maps_refused_without_the_hardware_they_need(tmp_path):
+    """The 2D map rides the pair's tracked coupler on its x axis; the chevron
+    does NOT (its pulse rides a member's own flux line), so a coupler-less pair
+    refuses one and accepts the other."""
+    roster = demo_components(tunable=False)          # pair, NO coupler
+    design = demo_design(roster)
+    vendor = InMemoryDevice(roster, demo_vendor_state(roster, design))
+    s = Session(SimulatedBackend(vendor), roster, design=design,
+                scqo_dir=tmp_path / "scqo", device_name="chipT",
+                setup_name="sim", cooldown_id="cd1")
+    out = s.run("pair_swap_flux_map", {"targets": ["q0_q1"]})
+    assert "nothing to sweep on the x axis" in out["error"]
+    assert "target validation refused" in out["error"]
+
+
+def test_shaped_flux_pulse_refuses_a_duration_override():
+    """A raised-cosine plays its native length: overriding it truncates the
+    edges and changes the pulse area, so the combination is refused at
+    parameter-validation time rather than silently mis-shaping the pulse."""
+    from scqo.experiments.pair_swap_flux_map import PairSwapFluxMapParameters
+
+    PairSwapFluxMapParameters(targets=["q0_q1"], flux_pulse_shape="flattop_cosine")
+    PairSwapFluxMapParameters(targets=["q0_q1"], swap_time_ns=40.0)
+    with pytest.raises(ValueError, match="native length"):
+        PairSwapFluxMapParameters(targets=["q0_q1"], swap_time_ns=40.0,
+                                  flux_pulse_shape="flattop_cosine")
 
 
 def test_single_shot_proposes_monitors_never_the_aggregate(session):
@@ -172,6 +234,38 @@ def test_arch_fit_writes_mode_facts_and_transfer_function(session):
     assert ("q0", "ej_sum_hz") in proposed
     assert ("q0", "f_q_max_hz") in proposed
     assert ("q0_z", "flux_offset") in proposed
+    # ... and the operating point: without this the fit is bookkeeping only and
+    # accepting it can never re-centre the next map (the bug this frame work fixed).
+    assert ("q0_z", "idle_flux") in proposed
+
+
+def test_arch_fit_re_references_its_relative_window_to_absolute(session):
+    """The ``_pulse`` frame contract, end to end.
+
+    The window is measured from ``idle_flux``, so the estimator's sweet spot is
+    an EXCURSION; ``flux_offset`` (a chip fact, shared with the absolute
+    resonator map) and the proposed ``idle_flux`` must both be the re-referenced
+    ABSOLUTE set-point.
+
+    The nonzero seeding is the whole point: the demo device seeds
+    ``idle_flux = 0.0``, where ``0 + excursion == excursion`` and this test
+    would pass against the very bug it guards.
+    """
+    parked = 0.11
+    session.set_values({"q0_z.idle_flux": parked})
+    out = session.run("qubit_spectroscopy_flux_pulse", {"targets": ["q0"]})
+    assert out.get("error") is None, out.get("error")
+    fit = out["fit"]["q0"]
+
+    assert fit["old_idle_flux"] == pytest.approx(parked)
+    assert fit["flux_offset_from_idle"] != pytest.approx(0.0)  # guard: a real excursion
+    assert fit["flux_offset"] == pytest.approx(
+        fit["old_idle_flux"] + fit["flux_offset_from_idle"])
+
+    # the fact and the knob are one number on one plane
+    proposals = {(s["entity"], s["field"]): s["after"] for s in out["suggestions"]}
+    assert proposals[("q0_z", "idle_flux")] == pytest.approx(fit["flux_offset"])
+    assert proposals[("q0_z", "flux_offset")] == pytest.approx(fit["flux_offset"])
 
 
 def test_pair_zz_refused_on_a_coupler_less_pair(tmp_path):

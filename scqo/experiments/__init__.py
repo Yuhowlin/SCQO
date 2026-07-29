@@ -88,14 +88,15 @@ def _derived_tags(cls: type[Experiment]) -> list[str]:
     Experiments with no tags are legitimate (a new experiment may not be
     classifiable yet)."""
     from ._capabilities import (
+        FluxPulseSweepParameters,
         FluxSweepParameters,
         QubitResetParameters,
         StateReadoutParameters,
     )
 
     # Derivation order is fixed (tests pin the exact lists): the two original
-    # capabilities first, qubit_reset appended last so adding it did not
-    # reshuffle every existing entry.
+    # capabilities first, then each later addition appended at the END so it
+    # does not reshuffle every existing entry — qubit_reset, then flux_pulse.
     tags = []
     if issubclass(cls.Parameters, StateReadoutParameters):
         tags.append("state_readout")
@@ -103,6 +104,11 @@ def _derived_tags(cls: type[Experiment]) -> list[str]:
         tags.append("flux")
     if issubclass(cls.Parameters, QubitResetParameters):
         tags.append("qubit_reset")
+    # A REFINEMENT of "flux", not a sibling: the window is measured from the
+    # channel's idle_flux rather than from the DAC zero. Carriers must also end
+    # their name in "_pulse" (test_capabilities pins it).
+    if issubclass(cls.Parameters, FluxPulseSweepParameters):
+        tags.append("flux_pulse")
     return tags
 
 
@@ -137,21 +143,24 @@ from ._capabilities import (  # noqa: E402
     QubitResetParameters,
     reset_wait_ns,
 )
+from .pair_swap_chevron import PairSwapChevron  # noqa: E402
+from .pair_swap_flux_map import PairSwapFluxMap  # noqa: E402
 from .pair_zz_coupler import PairZZCoupler  # noqa: E402
 from .qubit_deterministic_benchmarking import QubitDeterministicBenchmarking  # noqa: E402
 from .qubit_drag_alternating import QubitDragAlternating  # noqa: E402
 from .qubit_drag_equator import QubitDragEquator  # noqa: E402
 from .qubit_echo import QubitEcho  # noqa: E402
-from .qubit_echo_flux import QubitEchoFlux  # noqa: E402
+from .qubit_echo_flux_pulse import QubitEchoFluxPulse  # noqa: E402
 from .qubit_pi_pulse_error import QubitPiPulseError  # noqa: E402
 from .qubit_power_rabi import QubitPowerRabi  # noqa: E402
 from .qubit_ramsey import QubitRamsey  # noqa: E402
 from .qubit_relaxation import QubitRelaxation  # noqa: E402
-from .qubit_relaxation_flux import QubitRelaxationFlux  # noqa: E402
+from .qubit_relaxation_flux_pulse import QubitRelaxationFluxPulse  # noqa: E402
 from .qubit_spectroscopy import QubitSpectroscopy  # noqa: E402
 from .qubit_spectroscopy_flux_pulse import (  # noqa: E402
     QubitSpectroscopyFluxPulse,
 )
+from .qubit_spectroscopy_overlap import QubitSpectroscopyOverlap  # noqa: E402
 from .qubit_sqrb import QubitSQRB  # noqa: E402
 from .qubit_tomography import QubitTomography  # noqa: E402
 from .readout_frequency import ReadoutFrequency  # noqa: E402
@@ -169,10 +178,12 @@ from .single_shot_readout import SingleShotReadout  # noqa: E402
 __all__ = [
     "catalog", "get", "register",
     "QubitResetParameters", "reset_wait_ns",
+    "PairSwapChevron", "PairSwapFluxMap",
     "PairZZCoupler", "QubitDeterministicBenchmarking", "QubitDragAlternating", "QubitDragEquator", "QubitEcho",
-    "QubitEchoFlux", "QubitPiPulseError", "QubitPowerRabi", "QubitRamsey",
-    "QubitRelaxation", "QubitRelaxationFlux", "QubitSQRB",
-    "QubitSpectroscopy", "QubitSpectroscopyFluxPulse", "QubitTomography",
+    "QubitEchoFluxPulse", "QubitPiPulseError", "QubitPowerRabi", "QubitRamsey",
+    "QubitRelaxation", "QubitRelaxationFluxPulse", "QubitSQRB",
+    "QubitSpectroscopy", "QubitSpectroscopyFluxPulse", "QubitSpectroscopyOverlap",
+    "QubitTomography",
     "ReadoutFrequency", "ReadoutPower", "ResonatorSpectroscopy",
     "ResonatorSpectroscopyFlux", "ResonatorSpectroscopyPowerAmp",
     "ResonatorSpectroscopyPowerChain", "SingleShotReadout",

@@ -80,10 +80,17 @@ CASES = [
     ("qubit_relaxation", {}),
     ("qubit_echo", {}),
     ("qubit_ramsey", {}),
-    ("qubit_relaxation_flux", {}),
-    ("qubit_echo_flux", {}),
+    ("qubit_relaxation_flux_pulse", {}),
+    ("qubit_echo_flux_pulse", {}),
     ("pair_zz_coupler", {}),
+    # explicit window: the chevron's own defaults (1, 100, 100) step by exactly
+    # 1.0 ns under the naive linspace, so they would pass with or without the
+    # fix — widen to 200 ns to keep this case honest.
+    ("pair_swap_chevron", {"min_swap_time_ns": 1.0, "max_swap_time_ns": 200.0,
+                           "num_time_points": 100}),
 ]
+#: pair_swap_flux_map is deliberately ABSENT: its duration is a fixed Parameter,
+#: not a swept axis, so it declares no *_ns axis for these rows to check.
 
 
 def _sweep(name, params):
@@ -129,6 +136,10 @@ def _raw_window(name, p):
         return p.min_idle_time_ns, p.max_idle_time_ns, p.num_points
     if name == "pair_zz_coupler":
         return 16, p.max_idle_time_ns, p.num_time_points
-    if name.endswith("_flux"):
+    if name == "pair_swap_chevron":
+        return p.min_swap_time_ns, p.max_swap_time_ns, p.num_time_points
+    # the flux-swept coherence pair, in EITHER frame: they name their time axis
+    # num_wait_points, unlike the plain coherence experiments' num_points
+    if name.endswith(("_flux", "_flux_pulse")):
         return p.min_wait_ns, p.max_wait_ns, p.num_wait_points
     return p.min_wait_ns, p.max_wait_ns, p.num_points

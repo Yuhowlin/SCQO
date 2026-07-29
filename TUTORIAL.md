@@ -69,18 +69,20 @@ scqo run                                         # no arguments = show the menu
 ```
 
 ```
+pair_swap_chevron                Single-excitation swap chevron: flux amplitude x pulse duration on one pair member (record-only 2D map).
+pair_swap_flux_map               Fixed-duration coupler-flux x member-flux swap spot (record-only 2D map).
 pair_zz_coupler                  Residual ZZ vs coupler standing bias ... proposes the coupler z channel's idle_flux (ZZ-off point) + the pair's zz_hz fact.
 qubit_drag_alternating           Sweep DRAG beta over alternating x180/-x180 trains ... calibrates drag_beta.
 qubit_drag_equator               Sweep DRAG beta over three equator sequences ... calibrates drag_beta.
 qubit_echo [state_readout]       Hahn echo ... proposes t2_echo_s (a sample fact).
-qubit_echo_flux [state_readout,flux]      T2-echo vs flux map (record-only spectrum).
+qubit_echo_flux_pulse [state_readout,flux,flux_pulse]  T2-echo vs flux-PULSE map, window relative to idle_flux (record-only spectrum).
 qubit_pi_pulse_error             Repeated-X180 error amplification ... refines pi_amp.
 qubit_power_rabi [state_readout] Sweep drive amplitude ... recalibrates pi_amp.
 qubit_ramsey [state_readout]     Two pi/2 pulses ... corrects drive_freq_hz and reports T2*.
 qubit_relaxation [state_readout] Pi pulse + swept wait ... proposes t1_s (a sample fact).
-qubit_relaxation_flux [state_readout,flux] T1 vs flux map (record-only spectrum).
+qubit_relaxation_flux_pulse [state_readout,flux,flux_pulse] T1 vs flux-PULSE map, window relative to idle_flux (record-only spectrum).
 qubit_spectroscopy               Sweep a weak saturation drive ... recalibrates drive_freq_hz.
-qubit_spectroscopy_flux_pulse [flux]      2D flux arch ... proposes flux_offset/flux_per_phi0 (z channel) + ej_sum_hz/f_q_max_hz (mode facts).
+qubit_spectroscopy_flux_pulse [flux,flux_pulse]  2D flux arch, window relative to idle_flux ... proposes flux_offset/flux_per_phi0 (z channel) + ej_sum_hz/f_q_max_hz (mode facts) + idle_flux (re-parks at the sweet spot).
 qubit_sqrb [state_readout]       Randomized benchmarking ... average gate fidelity.
 qubit_tomography                 State tomography ... populations + gate error trajectory.
 readout_frequency                Per-shot fidelity vs freq ... updates readout_freq_hz.
@@ -871,6 +873,19 @@ and per-gate operating points are the pair's per-operation knobs
 the decouple point: it maps the signed residual ZZ vs coupler bias (echo
 fringe) and proposes the zero crossing as the coupler z channel's `idle_flux`
 plus the residual `zz_hz` fact on the pair.
+
+Two record-only maps come BEFORE it at bring-up, when no two-qubit gate is
+defined yet: `pair_swap_chevron` excites one member and sweeps a flux pulse
+(absolute volts) against its duration, drawing the swap arch that locates the
+resonance amplitude and the full-swap time; `pair_swap_flux_map` then fixes the
+duration and sweeps the coupler flux against the member flux, showing the swap
+spot and how the coupler moves it. Both read BOTH members out and report the
+excitation transfer onto the UNDRIVEN one, plus `p_ee_max` — the |ee>
+population that separates a real swap from heating or a leak. Neither writes
+anything back: read the operating point off the map, then set the pair's
+per-operation knobs by hand. Both need a calibrated discriminator
+(`single_shot_readout`), and `pair_swap_flux_map` additionally needs the pair's
+tracked coupler.
 
 **Assignable flux source.** The flux-map experiments take `flux_component`:
 ANY entity with a flux channel (another qubit's z, a coupler's z) swept
