@@ -14,6 +14,18 @@ from pydantic import Field
 
 from .._scqat import per_qubit_results
 from ..contract import DatasetContract
+from ._capabilities.amplitude import (
+    ABS_AMP_COORD,
+    ABS_AMP_LABEL,
+    AMP_AXIS,
+    MAX_AMP_FACTOR_DESC,
+    MIN_AMP_FACTOR_DESC,
+    NUM_AMP_POINTS_OPTIONAL_DESC,
+    AmplitudeSweepParameters,
+    amp_anchor,
+    amp_sweep,
+    attach_absolute_amp,
+)
 from ._capabilities.qubit_reset import QubitResetParameters
 from ._capabilities.state_readout import (
     STATE_ALT,
@@ -40,7 +52,8 @@ def amp_knob(target_gate: str) -> str:
 
 
 class QubitDeterministicBenchmarkingParameters(
-    TargetSelection, AveragingParameters, StateReadoutParameters, QubitResetParameters
+    TargetSelection, AveragingParameters, StateReadoutParameters, QubitResetParameters,
+    AmplitudeSweepParameters,
 ):
     """Inputs for Qubit Deterministic Benchmarking."""
 
@@ -62,22 +75,15 @@ class QubitDeterministicBenchmarkingParameters(
         None,
         description="Optional explicit array of repetition counts N.",
     )
-    min_amp_factor: float = Field(
-        0.9,
-        description="Minimum amplitude scaling factor for sweep.",
-    )
-    max_amp_factor: float = Field(
-        1.1,
-        description="Maximum amplitude scaling factor for sweep.",
-    )
-    num_amp_points: int = Field(
-        1,
-        gt=0,
-        description="Number of amplitude scale points (set to 1 for single-amplitude sweep).",
-    )
-    amp_factors: Optional[List[float]] = Field(
+    min_amp_factor: float = Field(0.9, ge=0.0, description=MIN_AMP_FACTOR_DESC)
+    max_amp_factor: float = Field(1.1, gt=0.0, lt=2.0, description=MAX_AMP_FACTOR_DESC)
+    # the ONE carrier that legitimately allows a single point — benchmarking the
+    # CURRENT amplitude (no sweep, no amplitude fitted), hence its own gt=0 and text
+    num_amp_points: int = Field(1, gt=0, description=NUM_AMP_POINTS_OPTIONAL_DESC)
+    amp_prefactors: Optional[List[float]] = Field(
         None,
-        description="Optional explicit list of amplitude scale factors.",
+        description="Optional explicit list of amplitude factors, replacing the "
+                    "min/max/num window.",
     )
 
     def get_repetitions(self) -> list[int]:
@@ -92,20 +98,24 @@ class QubitDeterministicBenchmarkingParameters(
             st = 2
         return list(range(0, self.max_repetitions + 1, st))
 
-    def get_amp_factors(self) -> list[float]:
-        if self.amp_factors is not None:
-            return [float(x) for x in self.amp_factors]
+    def amp_values(self) -> np.ndarray:
+        """Overrides the mixin's plain linspace: an explicit list wins, and a
+        single point means "benchmark the CURRENT amplitude" (factor 1.0), not a
+        one-point window."""
+        if self.amp_prefactors is not None:
+            return np.asarray(self.amp_prefactors, dtype=float)
         if self.num_amp_points <= 1:
-            return [1.0]
-        return [float(x) for x in np.linspace(self.min_amp_factor, self.max_amp_factor, self.num_amp_points)]
+            return np.array([1.0])
+        return np.linspace(self.min_amp_factor, self.max_amp_factor,
+                           self.num_amp_points)
 
 
 class QubitDeterministicBenchmarkingResult(Result):
-    """``fit[qubit]``: ``opt_factor`` (the amplitude MULTIPLIER where the rotation
-    error crosses zero), ``opt_amp`` (that factor applied to the live amplitude),
-    plus the calibrated knob and its previous value under their own names —
-    ``pi_amp``/``old_pi_amp`` for a pi gate, ``pi_amp_x90``/``old_pi_amp_x90`` for
-    a pi/2 one. ``update()`` writes the knob the benchmarked gate belongs to."""
+    """``fit[qubit]``: ``opt_amp_prefactor`` (the amplitude MULTIPLIER where the
+    rotation error crosses zero), plus the calibrated knob and its previous value
+    under their own names — ``pi_amp``/``old_pi_amp`` for a pi gate,
+    ``pi_amp_x90``/``old_pi_amp_x90`` for a pi/2 one. ``update()`` writes the knob
+    the benchmarked gate belongs to."""
 
 
 @register
@@ -128,7 +138,7 @@ class QubitDeterministicBenchmarking(Experiment):
     Result: ClassVar[type[QubitDeterministicBenchmarkingResult]] = QubitDeterministicBenchmarkingResult
 
     Contract: ClassVar[DatasetContract] = DatasetContract(
-        sweeps=("amp_factor", "repetitions"),
+        sweeps=(AMP_AXIS, "repetitions"),
         sweep_units=("", ""),
         variables=("I", "Q"),
         alt_variables=(*STATE_ALT, ("I",)),
@@ -136,9 +146,19 @@ class QubitDeterministicBenchmarking(Experiment):
 
     required_operations: ClassVar[tuple[str, ...]] = ("rx", "readout")
 
+    def amp_reference_field(self) -> str:
+        """Whichever knob the benchmarked gate calibrates — the one place that
+        decides, shared with estimate()/update() so the read, the attached axis
+        and the write can never disagree."""
+        return amp_knob(self.params.target_gate)
+
+    def attach_acquisition_coords(self) -> None:
+        attach_absolute_amp(self)
+
     def define_sweep(self) -> dict[str, np.ndarray]:
+        # dict order IS the contract order: (AMP_AXIS, repetitions)
         return {
-            "amp_factor": np.array(self.params.get_amp_factors(), dtype=float),
+            **amp_sweep(self.params),
             "repetitions": np.array(self.params.get_repetitions(), dtype=int),
         }
 
@@ -147,7 +167,7 @@ class QubitDeterministicBenchmarking(Experiment):
         leaves a fixed per-gate over/under-rotation, so the population oscillates in
         the REPETITION count at a rate proportional to (a - a_ideal), under a
         depolarizing envelope. At N=0 nothing has been played, so P(excited) = 0."""
-        amp = coords["amp_factor"]
+        amp = coords[AMP_AXIS]
         reps = coords["repetitions"].astype(float)
         targets = self.params.targets
         rng = np.random.default_rng(stable_seed("qubit_deterministic_benchmarking", *targets))
@@ -180,20 +200,24 @@ class QubitDeterministicBenchmarking(Experiment):
         # `opt_factor` — the MULTIPLIER on the current amplitude, never an absolute
         # amplitude, so applying it against the live knob is ours to do.
         rename = signal_rename(self.dataset, {"repetitions": "repetition"})
-        prepared = self.dataset.rename(rename).transpose("target", "amp_factor", "repetition")
+        prepared = self.dataset.rename(rename).transpose("target", AMP_AXIS, "repetition")
         results = per_qubit_results(
-            prepared, QubitDeterministicBenchmarkingEstimator(), artifact_dir=self.artifact_dir
+            prepared, QubitDeterministicBenchmarkingEstimator(),
+            artifact_dir=self.artifact_dir,
+            twin_coord=ABS_AMP_COORD, twin_label=ABS_AMP_LABEL,
         )
 
         knob = amp_knob(self.params.target_gate)
         result = QubitDeterministicBenchmarkingResult()
         for qubit in self.params.targets:
             a_opt = float(results[qubit]["opt_factor"])
-            old_amp = float(getattr(self.device.channel(qubit, "drive"), knob))
+            # the SAME read the attached `digital_amp` axis used
+            old_amp = amp_anchor(self, qubit)
             opt_amp = old_amp * a_opt
+            # `opt_amp` is not a separate key: it IS <knob>, and two spellings of
+            # one number invite them to drift apart
             result.fit[qubit] = {
-                "opt_factor": a_opt,
-                "opt_amp": opt_amp,
+                "opt_amp_prefactor": a_opt,
                 knob: opt_amp,
                 f"old_{knob}": old_amp,
                 "unit": results[qubit]["unit"],
@@ -212,7 +236,7 @@ class QubitDeterministicBenchmarking(Experiment):
         for qubit, fit in self.result.fit.items():
             if self.result.outcomes[qubit] is not Outcome.SUCCESSFUL:
                 continue
-            setattr(self.device.channel(qubit, "drive"), knob, fit["opt_amp"])
+            setattr(self.device.channel(qubit, "drive"), knob, fit[knob])
 
     def probe(self):  # pragma: no cover - driver half
         raise NotImplementedError("a driver backend supplies probe()")

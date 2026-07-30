@@ -15,6 +15,18 @@ import numpy as np
 from pydantic import Field
 
 from ..contract import DatasetContract
+from ._capabilities.amplitude import (
+    ABS_AMP_COORD,
+    ABS_AMP_LABEL,
+    AMP_AXIS,
+    MAX_AMP_FACTOR_DESC,
+    MIN_AMP_FACTOR_DESC,
+    NUM_AMP_POINTS_DESC,
+    AmplitudeSweepParameters,
+    amp_anchor,
+    amp_sweep,
+    attach_absolute_amp,
+)
 from ._capabilities.qubit_reset import QubitResetParameters
 from ._sim import stable_seed
 from ..parameters import AveragingParameters, TargetSelection
@@ -23,12 +35,15 @@ from ..experiment import Experiment
 from . import register
 
 
-class QubitPiPulseErrorParameters(TargetSelection, AveragingParameters, QubitResetParameters):
+class QubitPiPulseErrorParameters(TargetSelection, AveragingParameters, QubitResetParameters,
+                                  AmplitudeSweepParameters):
     """Inputs for pi-pulse error amplification calibration."""
 
-    min_amp_factor: float = Field(0.90, ge=0, description="Minimum amplitude factor relative to current pi_amp.")
-    max_amp_factor: float = Field(1.10, gt=0, description="Maximum amplitude factor relative to current pi_amp.")
-    num_amp_points: int = Field(41, gt=1, description="Number of amplitude factor sweep points.")
+    # a TIGHT window around the standing amplitude: error amplification resolves a
+    # small over/under-rotation, it does not search for the pi pulse
+    min_amp_factor: float = Field(0.90, ge=0.0, description=MIN_AMP_FACTOR_DESC)
+    max_amp_factor: float = Field(1.10, gt=0.0, lt=2.0, description=MAX_AMP_FACTOR_DESC)
+    num_amp_points: int = Field(41, gt=1, description=NUM_AMP_POINTS_DESC)
     gate_counts: List[int] = Field(
         default_factory=lambda: [1, 3, 5, 7, 9, 11],
         description="List of odd gate counts (repetitions of X180).",
@@ -54,8 +69,8 @@ class QubitPiPulseError(Experiment):
     # `state` (the QM shell hardcodes use_state_discrimination=False), so the
     # contract truthfully omits it.
     Contract: ClassVar[DatasetContract] = DatasetContract(
-        sweeps=("gate_count", "amp_factor"),
-        sweep_units=("", "dimensionless"),
+        sweeps=("gate_count", AMP_AXIS),
+        sweep_units=("", ""),
         variables=("I", "Q"),
         alt_variables=(("I",),),
     )
@@ -64,19 +79,22 @@ class QubitPiPulseError(Experiment):
 
     required_operations: ClassVar[tuple[str, ...]] = ("rx", "readout")
 
+    def amp_reference_field(self) -> str:
+        return "pi_amp"
+
+    def attach_acquisition_coords(self) -> None:
+        attach_absolute_amp(self)
+
     def define_sweep(self) -> dict[str, np.ndarray]:
+        # dict order IS the contract order: (gate_count, AMP_AXIS)
         return {
             "gate_count": np.array(self.params.gate_counts, dtype=int),
-            "amp_factor": np.linspace(
-                self.params.min_amp_factor,
-                self.params.max_amp_factor,
-                self.params.num_amp_points,
-            ),
+            **amp_sweep(self.params),
         }
 
     def simulate(self, coords: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         gate_counts = coords["gate_count"]
-        amp_factors = coords["amp_factor"]
+        amp_factors = coords[AMP_AXIS]
         qubits = self.params.targets
 
         n_qubits = len(qubits)
@@ -102,12 +120,14 @@ class QubitPiPulseError(Experiment):
         result = QubitPiPulseErrorResult()
 
         ds = self.dataset
-        amp_factors = ds.coords["amp_factor"].values
+        amp_factors = ds.coords[AMP_AXIS].values
         gate_counts = ds.coords["gate_count"].values
 
         for qubit in self.params.targets:
             try:
-                var_name = "I" if "I" in ds.data_vars else "signal"
+                # this probe never returns a discriminated `state` (its contract
+                # accepts I/Q or a bare I), so `I` is the only source
+                var_name = "I"
                 if "target" in ds.dims:
                     data = ds[var_name].sel(target=qubit).values
                 else:
@@ -137,15 +157,17 @@ class QubitPiPulseError(Experiment):
                 # Clamp factor within sweep bounds
                 opt_factor = float(np.clip(opt_factor, amp_factors.min(), amp_factors.max()))
 
-                old_pi_amp = float(self.device.channel(qubit, "drive").pi_amp)
+                # the SAME read the attached `digital_amp` axis used
+                old_pi_amp = amp_anchor(self, qubit)
                 new_pi_amp = old_pi_amp * opt_factor
 
+                # scalars only: the swept axes already live on the dataset, and a
+                # list-valued fit entry counts as n_nonscalar in every campaign
+                # statistics table (campaign.summarize)
                 result.fit[qubit] = {
-                    "opt_amp_factor": opt_factor,
+                    "opt_amp_prefactor": opt_factor,
                     "pi_amp": new_pi_amp,
                     "old_pi_amp": old_pi_amp,
-                    "amp_factors": [float(x) for x in amp_factors],
-                    "gate_counts": [int(x) for x in gate_counts],
                 }
                 result.outcomes[qubit] = Outcome.SUCCESSFUL
 
@@ -172,20 +194,25 @@ class QubitPiPulseError(Experiment):
                                 alpha=0.85,
                             )
 
-                        ax.axvline(1.0, color="gray", linestyle=":", label="Current (1.00)")
+                        ax.axvline(1.0, color="gray", linestyle=":",
+                                   label="Current (1.00 x)")
                         ax.axvline(
                             opt_factor,
                             color="crimson",
                             linestyle="--",
-                            label=f"Optimum ({opt_factor:.3f})",
+                            label=f"Optimum ({opt_factor:.4f} x, {new_pi_amp:.6f} abs)",
                         )
+                        # pi_amp is DIMENSIONLESS (catalog unit ""): a normalized
+                        # fraction of full scale on both backends, never volts.
                         ax.set_title(
                             f"Pi-Pulse Error Amplification ({qubit})\n"
-                            f"Current pi_amp={old_pi_amp:.6f}V -> Opt pi_amp={new_pi_amp:.6f}V"
+                            f"pi_amp {old_pi_amp:.6f} -> {new_pi_amp:.6f} "
+                            f"(normalized amplitude)"
                         )
                         ax.set_xlabel("Amplitude Factor")
                         ax.set_ylabel("Readout Signal (I)")
                         ax.legend()
+                        self._add_absolute_axis(ax, qubit, amp_factors)
                         plt.tight_layout()
 
                         fig.savefig(out_q_dir / "qubit_pi_pulse_error.png", dpi=150)
@@ -196,6 +223,27 @@ class QubitPiPulseError(Experiment):
                 result.outcomes[qubit] = Outcome.FAILED
 
         return result
+
+    def _add_absolute_axis(self, ax, qubit: str, amp_factors) -> None:
+        """Draw the attached ``digital_amp`` row as a secondary top axis, so this
+        figure reads in absolute amplitude like its scqat-fitted siblings.
+
+        Reuses scqat's shared helper rather than a local ``secondary_xaxis`` so
+        there is ONE "second scale" implementation across the stack. The import
+        is lazy and this whole figure block is already wrapped in
+        ``except Exception: pass``, so an older scqat degrades to the primary
+        axis and never kills a run.
+        """
+        if self.dataset is None or ABS_AMP_COORD not in self.dataset.coords:
+            return
+        coord = self.dataset.coords[ABS_AMP_COORD]
+        values = coord.sel(target=qubit).values if "target" in coord.dims else coord.values
+        values = np.asarray(values, dtype=float)
+        if not np.isfinite(values).all():
+            return  # this target's reference knob was unreadable — primary axis only
+        from scqat.estimators._twin_axis import add_twin_axis
+
+        add_twin_axis(ax, np.asarray(amp_factors, dtype=float), values, ABS_AMP_LABEL)
 
     def update(self) -> None:
         if self.result is None:

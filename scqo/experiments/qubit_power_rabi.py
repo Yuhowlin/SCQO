@@ -16,6 +16,18 @@ from pydantic import Field
 
 from .._scqat import per_qubit_results
 from ..contract import DatasetContract
+from ._capabilities.amplitude import (
+    ABS_AMP_COORD,
+    ABS_AMP_LABEL,
+    AMP_AXIS,
+    MAX_AMP_FACTOR_DESC,
+    MIN_AMP_FACTOR_DESC,
+    NUM_AMP_POINTS_DESC,
+    AmplitudeSweepParameters,
+    amp_anchor,
+    amp_sweep,
+    attach_absolute_amp,
+)
 from ._capabilities.qubit_reset import QubitResetParameters
 from ._capabilities.state_readout import (
     STATE_ALT,
@@ -31,18 +43,22 @@ from ..experiment import Experiment
 from . import register
 
 
-class QubitPowerRabiParameters(TargetSelection, AveragingParameters, StateReadoutParameters, QubitResetParameters):
+class QubitPowerRabiParameters(TargetSelection, AveragingParameters, StateReadoutParameters,
+                               QubitResetParameters, AmplitudeSweepParameters):
     """Inputs for power Rabi."""
 
-    min_amp_factor: float = Field(0.0, ge=0, description="Lowest drive amplitude, as a factor of current pi_amp.")
-    max_amp_factor: float = Field(2.0, gt=0, description="Highest drive amplitude, as a factor of current pi_amp.")
-    num_points: int = Field(101, gt=1, description="Number of amplitude points.")
+    # a full Rabi arch from zero, so the first extremum IS the pi pulse. The top
+    # stops below 2.0: QUA's dynamic amplitude_scale is fixed-point on (-2, 2),
+    # so a sweep that INCLUDES 2.0 emits an unrepresentable last point.
+    min_amp_factor: float = Field(0.0, ge=0.0, description=MIN_AMP_FACTOR_DESC)
+    max_amp_factor: float = Field(1.9, gt=0.0, lt=2.0, description=MAX_AMP_FACTOR_DESC)
+    num_amp_points: int = Field(101, gt=1, description=NUM_AMP_POINTS_DESC)
 
 
 class QubitPowerRabiResult(Result):
     """Output of QubitPowerRabi.
 
-    ``fit[target]`` carries ``pi_amp`` (new absolute), ``pi_amp_factor``
+    ``fit[target]`` carries ``pi_amp`` (new absolute), ``opt_amp_prefactor``
     (recovered factor) and ``old_pi_amp``.
     """
 
@@ -62,24 +78,25 @@ class QubitPowerRabi(Experiment):
     Parameters: ClassVar[type] = QubitPowerRabiParameters
     Result: ClassVar[type] = QubitPowerRabiResult
     Contract: ClassVar[DatasetContract] = DatasetContract(
-        sweeps=("amp_factor",), sweep_units=("dimensionless",), variables=("I", "Q"),
+        sweeps=(AMP_AXIS,), sweep_units=("",), variables=("I", "Q"),
         alt_variables=STATE_ALT,
     )
     required_operations: ClassVar[tuple[str, ...]] = ("rx", "readout")
     #: stored blob centers ride the dataset -> axial axis = the measured g->e vector
     attach_readout_positions: ClassVar[bool] = True
-
     params: QubitPowerRabiParameters
 
+    def amp_reference_field(self) -> str:
+        return "pi_amp"
+
+    def attach_acquisition_coords(self) -> None:
+        attach_absolute_amp(self)
+
     def define_sweep(self) -> dict[str, np.ndarray]:
-        return {
-            "amp_factor": np.linspace(
-                self.params.min_amp_factor, self.params.max_amp_factor, self.params.num_points
-            )
-        }
+        return amp_sweep(self.params)
 
     def simulate(self, coords: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
-        factor = coords["amp_factor"]
+        factor = coords[AMP_AXIS]
         targets = self.params.targets
         rng = np.random.default_rng(stable_seed("qubit_power_rabi", *targets))
         use_state = self.params.use_state_discrimination
@@ -104,19 +121,26 @@ class QubitPowerRabi(Experiment):
         # onto the |0>-|1> axis and returns `opt_amp_prefactor` == the pi-pulse factor.
         # A discriminated probe returns the averaged `state` instead — the estimator's
         # pre-reduced `signal` input.
-        rename = signal_rename(self.dataset, {"amp_factor": "amp_prefactor"})
-        prepared = self.dataset.rename(rename)
+        # No axis rename: AMP_AXIS IS scqat's coord name (that is why it was the one
+        # chosen). `digital_amp` is a coord over the swept dim, so per_qubit_results'
+        # per-target split reduces it to the 1-D companion scale the estimator draws
+        # as a second x-axis.
+        prepared = self.dataset.rename(signal_rename(self.dataset))
 
-        results = per_qubit_results(prepared, PowerRabiEstimator(), artifact_dir=self.artifact_dir)
+        results = per_qubit_results(
+            prepared, PowerRabiEstimator(), artifact_dir=self.artifact_dir,
+            twin_coord=ABS_AMP_COORD, twin_label=ABS_AMP_LABEL,
+        )
 
         result = QubitPowerRabiResult()
         for qubit in self.params.targets:
             r = results[qubit]
             factor_pi = float(r["opt_amp_prefactor"])
-            old = float(self.device.channel(qubit, "drive").pi_amp)
+            # the SAME read the attached axis used, so the two cannot disagree
+            old = amp_anchor(self, qubit)
             result.fit[qubit] = {
                 "pi_amp": old * factor_pi,
-                "pi_amp_factor": factor_pi,
+                "opt_amp_prefactor": factor_pi,
                 "old_pi_amp": old,
             }
             result.outcomes[qubit] = Outcome.SUCCESSFUL if bool(r["success"]) else Outcome.FAILED

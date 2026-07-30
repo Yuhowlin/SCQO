@@ -29,8 +29,8 @@ from . import register
 class PairZZCouplerParameters(TargetSelection, AveragingParameters, QubitResetParameters):
     """Inputs for the ZZ-vs-coupler-bias map. ``targets`` are PAIR components."""
 
-    min_coupler_v: float = Field(-0.3, ge=-0.5, description="Lowest coupler standing bias (V; OPX DAC rail is +/-0.5 V).")
-    max_coupler_v: float = Field(0.3, le=0.5, description="Highest coupler standing bias (V).")
+    min_coupler_v: float = Field(-0.3, description="Lowest coupler standing bias (V; the usable range is the coupler port's, and the backend refuses past it).")
+    max_coupler_v: float = Field(0.3, description="Highest coupler standing bias (V).")
     num_coupler_points: int = Field(31, gt=4, description="Number of coupler bias points.")
     max_idle_time_ns: float = Field(4000, gt=0, description="Longest echo evolution time (ns; quantized to the instrument grid by the driver).")
     num_time_points: int = Field(41, gt=4, description="Number of evolution-time points.")

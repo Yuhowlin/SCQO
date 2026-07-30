@@ -53,10 +53,11 @@ class PairSwapChevronParameters(TargetSelection, AveragingParameters, QubitReset
     """Inputs for the swap chevron. ``targets`` are PAIR components."""
 
     min_flux_amp_v: float = Field(
-        0.0, ge=-0.5,
-        description="Lowest flux-pulse amplitude (V at the DAC; the OPX1000 rail is +/-0.5 V).")
+        0.0,
+        description="Lowest flux-pulse amplitude (V at the DAC; the usable range is "
+                    "the flux port's own, and the backend refuses past it).")
     max_flux_amp_v: float = Field(
-        0.3, le=0.5, description="Highest flux-pulse amplitude (V).")
+        0.3, description="Highest flux-pulse amplitude (V).")
     num_amp_points: int = Field(41, gt=4, description="Number of flux-amplitude points.")
     min_swap_time_ns: float = Field(
         1.0, ge=1.0,

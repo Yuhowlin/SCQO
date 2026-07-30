@@ -17,6 +17,18 @@ from pydantic import Field
 
 from .._scqat import per_qubit_results
 from ..contract import DatasetContract
+from ._capabilities.amplitude import (
+    ABS_AMP_COORD,
+    ABS_AMP_LABEL,
+    AMP_AXIS,
+    MAX_AMP_FACTOR_DESC,
+    MIN_AMP_FACTOR_DESC,
+    NUM_AMP_POINTS_DESC,
+    AmplitudeSweepParameters,
+    amp_anchor,
+    amp_sweep,
+    attach_absolute_amp,
+)
 from ._capabilities.qubit_reset import QubitResetParameters
 from ._sim import stable_seed
 from ..parameters import TargetSelection
@@ -25,17 +37,18 @@ from ..experiment import Experiment
 from . import register
 
 
-class ReadoutPowerParameters(TargetSelection, QubitResetParameters):
+class ReadoutPowerParameters(TargetSelection, QubitResetParameters, AmplitudeSweepParameters):
     """Inputs for fidelity-vs-readout-amplitude optimization."""
 
-    min_amp_factor: float = Field(0.4, gt=0, description="Lowest amplitude prefactor (x current readout_amp).")
-    max_amp_factor: float = Field(1.8, le=2.0, description="Highest prefactor (QUA amplitude_scale cap: 2).")
-    num_amp_points: int = Field(16, gt=2, description="Amplitude points (one Gaussian-mixture fit per point).")
+    min_amp_factor: float = Field(0.4, gt=0.0, description=MIN_AMP_FACTOR_DESC)
+    max_amp_factor: float = Field(1.8, gt=0.0, lt=2.0, description=MAX_AMP_FACTOR_DESC)
+    # one Gaussian-mixture fit per point, so this is the cost driver
+    num_amp_points: int = Field(16, gt=2, description=NUM_AMP_POINTS_DESC)
     num_shots: int = Field(1000, gt=99, description="Shots per prepared state per amplitude.")
 
 
 class ReadoutPowerResult(Result):
-    """``fit[target]``: ``readout_amp`` (new), ``best_amp_factor``,
+    """``fit[target]``: ``readout_amp`` (new), ``opt_amp_prefactor``,
     ``best_fidelity``, ``old_readout_amp``."""
 
 
@@ -52,23 +65,29 @@ class ReadoutPower(Experiment):
     Parameters: ClassVar[type] = ReadoutPowerParameters
     Result: ClassVar[type] = ReadoutPowerResult
     Contract: ClassVar[DatasetContract] = DatasetContract(
-        sweeps=("amp_prefactor", "prepared_state", "shot_idx"),
-        sweep_units=("x", "state", "shot"),
+        sweeps=(AMP_AXIS, "prepared_state", "shot_idx"),
+        sweep_units=("", "state", "shot"),
         variables=("I", "Q"),
     )
     required_operations: ClassVar[tuple[str, ...]] = ("readout",)
 
     params: ReadoutPowerParameters
 
+    def amp_reference_field(self) -> str:
+        return "readout_amp"
+
+    def attach_acquisition_coords(self) -> None:
+        attach_absolute_amp(self)
+
     def define_sweep(self) -> dict[str, np.ndarray]:
         return {
-            "amp_prefactor": np.linspace(self.params.min_amp_factor, self.params.max_amp_factor, self.params.num_amp_points),
+            **amp_sweep(self.params),
             "prepared_state": np.array([0, 1]),
             "shot_idx": np.arange(self.params.num_shots),
         }
 
     def simulate(self, coords: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
-        amps = coords["amp_prefactor"]
+        amps = coords[AMP_AXIS]
         n_shots = coords["shot_idx"].size
         targets = self.params.targets
         rng = np.random.default_rng(stable_seed("readout_power", *targets))
@@ -92,12 +111,13 @@ class ReadoutPower(Experiment):
         from scqat.estimators.readout_fidelity import ReadoutPowerFidelityEstimator
 
         # scqat's contract: I/Q over (amp_prefactor, prepared_state, shot_idx) — names match.
-        prepared = self.dataset.transpose("target", "amp_prefactor", "prepared_state", "shot_idx")
-        old_amps = {q: float(self.device.channel(q, "readout").readout_amp)
-                    for q in self.params.targets}
+        prepared = self.dataset.transpose("target", AMP_AXIS, "prepared_state", "shot_idx")
+        # the SAME read the attached `digital_amp` axis used, so the two cannot disagree
+        old_amps = {q: amp_anchor(self, q) for q in self.params.targets}
 
         results = per_qubit_results(
-            prepared, ReadoutPowerFidelityEstimator(), artifact_dir=self.artifact_dir
+            prepared, ReadoutPowerFidelityEstimator(), artifact_dir=self.artifact_dir,
+            twin_coord=ABS_AMP_COORD, twin_label=ABS_AMP_LABEL,
         )
 
         result = ReadoutPowerResult()
@@ -109,7 +129,7 @@ class ReadoutPower(Experiment):
             ok = bool(r.get("success")) and best is not None and np.isfinite(best)
             result.fit[qubit] = {
                 "readout_amp": old_amp * float(best) if ok else float("nan"),
-                "best_amp_factor": float(best) if best is not None else float("nan"),
+                "opt_amp_prefactor": float(best) if best is not None else float("nan"),
                 "best_fidelity": float(fidelity) if fidelity is not None else float("nan"),
                 "old_readout_amp": old_amp,
             }

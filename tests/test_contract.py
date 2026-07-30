@@ -47,7 +47,7 @@ class _PR(QubitPowerRabi):
 CASES = [
     (_Res, "detuning_hz"),
     (_Ram, "idle_time_ns"),
-    (_PR, "amp_factor"),
+    (_PR, "amp_prefactor"),
 ]
 
 

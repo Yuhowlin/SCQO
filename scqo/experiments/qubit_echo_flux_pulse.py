@@ -52,8 +52,8 @@ class QubitEchoFluxPulseParameters(
     max_wait_ns: float = Field(40000.0, gt=0.0, description="Maximum idle delay (total tau).")
     num_wait_points: int = Field(51, gt=1, description="Number of wait time points.")
     # capability defaults narrowed to the coherence window (canonical text constants)
-    min_flux_v: float = Field(-0.08, ge=-0.5, description=MIN_FLUX_PULSE_DESC)
-    max_flux_v: float = Field(0.08, le=0.5, description=MAX_FLUX_PULSE_DESC)
+    min_flux_v: float = Field(-0.08, description=MIN_FLUX_PULSE_DESC)
+    max_flux_v: float = Field(0.08, description=MAX_FLUX_PULSE_DESC)
 
 
 class QubitEchoFluxPulseResult(Result):

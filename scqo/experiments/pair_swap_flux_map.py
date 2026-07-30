@@ -44,16 +44,16 @@ class PairSwapFluxMapParameters(TargetSelection, AveragingParameters, QubitReset
     """Inputs for the fixed-time 2D swap map. ``targets`` are PAIR components."""
 
     min_coupler_flux_v: float = Field(
-        -0.15, ge=-0.5,
-        description="Lowest coupler flux-pulse amplitude (V at the DAC; the OPX1000 "
-                    "rail is +/-0.5 V).")
+        -0.15,
+        description="Lowest coupler flux-pulse amplitude (V at the DAC; the usable "
+                    "range is the coupler port's own, and the backend refuses past it).")
     max_coupler_flux_v: float = Field(
-        0.15, le=0.5, description="Highest coupler flux-pulse amplitude (V).")
+        0.15, description="Highest coupler flux-pulse amplitude (V).")
     num_coupler_points: int = Field(31, gt=4, description="Number of coupler-flux points (x axis).")
     min_qubit_flux_v: float = Field(
-        0.0, ge=-0.5, description="Lowest member flux-pulse amplitude (V).")
+        0.0, description="Lowest member flux-pulse amplitude (V).")
     max_qubit_flux_v: float = Field(
-        0.2, le=0.5, description="Highest member flux-pulse amplitude (V).")
+        0.2, description="Highest member flux-pulse amplitude (V).")
     num_qubit_points: int = Field(21, gt=4, description="Number of member-flux points (y axis).")
     swap_time_ns: float | None = Field(
         None, ge=16.0,

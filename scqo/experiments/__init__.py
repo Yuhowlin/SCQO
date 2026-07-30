@@ -88,6 +88,7 @@ def _derived_tags(cls: type[Experiment]) -> list[str]:
     Experiments with no tags are legitimate (a new experiment may not be
     classifiable yet)."""
     from ._capabilities import (
+        AmplitudeSweepParameters,
         FluxPulseSweepParameters,
         FluxSweepParameters,
         QubitResetParameters,
@@ -96,7 +97,8 @@ def _derived_tags(cls: type[Experiment]) -> list[str]:
 
     # Derivation order is fixed (tests pin the exact lists): the two original
     # capabilities first, then each later addition appended at the END so it
-    # does not reshuffle every existing entry — qubit_reset, then flux_pulse.
+    # does not reshuffle every existing entry — qubit_reset, then flux_pulse,
+    # then amplitude.
     tags = []
     if issubclass(cls.Parameters, StateReadoutParameters):
         tags.append("state_readout")
@@ -109,6 +111,10 @@ def _derived_tags(cls: type[Experiment]) -> list[str]:
     # their name in "_pulse" (test_capabilities pins it).
     if issubclass(cls.Parameters, FluxPulseSweepParameters):
         tags.append("flux_pulse")
+    # the swept amplitude window (a FACTOR of the target's standing amplitude);
+    # carriers also attach the absolute `digital_amp` axis
+    if issubclass(cls.Parameters, AmplitudeSweepParameters):
+        tags.append("amplitude")
     return tags
 
 

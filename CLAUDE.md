@@ -163,7 +163,27 @@ scqo/
                     #   wait, resolved for both drivers by the ONE helper
                     #   reset_wait_ns; a backend that cannot realize a method must
                     #   REFUSE it by name, never downgrade — 'active' is Qblox-only
-                    #   today and LCHQMDriver raises); catalog
+                    #   today and LCHQMDriver raises,
+                    #   amplitude.py = the swept amplitude window + the ABSOLUTE amplitude
+                    #   behind it. AmplitudeSweepParameters owns min/max_amp_factor +
+                    #   num_amp_points on ONE axis, AMP_AXIS = `amp_prefactor` (scqat and
+                    #   the QM probes already used that name, so nothing renames at the
+                    #   boundary). The window is a FACTOR of the target's stored
+                    #   pi_amp/pi_amp_x90/readout_amp ON PURPOSE — one array serves every
+                    #   target in a multiplexed run, which a shared absolute window
+                    #   cannot. attach_absolute_amp() adds the derived `digital_amp`
+                    #   coord (target x AMP_AXIS) in run()'s attach_acquisition_coords
+                    #   hook, so dataset.nc answers "what amplitude actually played?" on
+                    #   its own; scqat draws it as a SECONDARY axis. It is DIMENSIONLESS
+                    #   (0-1 of full scale, catalog unit "") — never volts, never dBm.
+                    #   A carrier declares only `amp_reference_field()` — a BARE field
+                    #   name, since catalog.py guarantees uniqueness across channel kinds,
+                    #   so the kind would be a second unchecked source of truth — and
+                    #   estimate() reads its `old_<knob>` through the same amp_anchor.
+                    #   The neutral bound is lt=2.0 (the widest ANY backend expresses);
+                    #   the real limit is factor x stored <= 1 and each driver refuses it
+                    #   BY NAME (LCHQM probes/_amp_limits, LCHQB experiments/_amp));
+                    #   catalog
                     #   `tags` are DERIVED from mixin subclassing — never declared strings,
                     #   zero tags legitimate (new experiments may be unclassifiable)
     _depletion.py               # the post-readout photon-depletion wait: THE precedence

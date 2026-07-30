@@ -19,15 +19,22 @@ from scqo.catalog import CHANNELS
 from scqo.experiments._depletion import depletion_time_s
 from scqo.cli._backends import ensure_demo_experiments
 from scqo.experiments._capabilities import (
+    ABS_AMP_COORD,
     ACTIVE_RESET_ROUNDS_DESC,
+    AMP_AXIS,
     FLUX_AXIS,
+    MAX_AMP_FACTOR_DESC,
     MAX_FLUX_DESC,
     MAX_FLUX_PULSE_DESC,
+    MIN_AMP_FACTOR_DESC,
     MIN_FLUX_DESC,
     MIN_FLUX_PULSE_DESC,
+    NUM_AMP_POINTS_DESC,
+    NUM_AMP_POINTS_OPTIONAL_DESC,
     NUM_FLUX_DESC,
     RESET_METHOD_DESC,
     THERMALIZATION_TIME_DESC,
+    AmplitudeSweepParameters,
     FluxComponentParameters,
     QubitResetParameters,
     StateReadoutParameters,
@@ -52,7 +59,8 @@ EXPECTED_TAGS = {
     "qubit_relaxation": ["state_readout", "qubit_reset"],
     "qubit_echo": ["state_readout", "qubit_reset"],
     "qubit_ramsey": ["state_readout", "qubit_reset"],
-    "qubit_power_rabi": ["state_readout", "qubit_reset"],
+    "qubit_power_rabi": ["state_readout", "qubit_reset", "amplitude"],
+    "qubit_deterministic_benchmarking": ["state_readout", "qubit_reset", "amplitude"],
     "qubit_sqrb": ["state_readout", "qubit_reset"],
     "qubit_relaxation_flux_pulse": ["state_readout", "flux", "qubit_reset", "flux_pulse"],
     "qubit_echo_flux_pulse": ["state_readout", "flux", "qubit_reset", "flux_pulse"],
@@ -62,7 +70,7 @@ EXPECTED_TAGS = {
     # shot independence needs a reset, but their probes do not return `state`
     # (pi_pulse_error's QM shell hardcodes discrimination off; the readout
     # trio works on raw per-shot IQ by construction).
-    "qubit_pi_pulse_error": ["qubit_reset"],
+    "qubit_pi_pulse_error": ["qubit_reset", "amplitude"],
     "pair_zz_coupler": ["qubit_reset"],
     # the swap maps sweep FLUX but are not "flux"-tagged: that capability is
     # the single-qubit z-bias sweep (FluxSweepParameters, contract axis
@@ -71,7 +79,7 @@ EXPECTED_TAGS = {
     "pair_swap_chevron": ["qubit_reset"],
     "pair_swap_flux_map": ["qubit_reset"],
     "single_shot_readout": ["qubit_reset"],
-    "readout_power": ["qubit_reset"],
+    "readout_power": ["qubit_reset", "amplitude"],
     "readout_frequency": ["qubit_reset"],
     "qubit_spectroscopy": ["qubit_reset"],
     "qubit_spectroscopy_overlap": ["qubit_reset"],
@@ -92,6 +100,30 @@ def test_tags_derived_from_mixins():
         assert entries[name]["tags"] == tags, f"{name}: {entries[name]['tags']}"
     # every catalog entry carries the key (possibly empty)
     assert all("tags" in entry for entry in entries.values())
+
+
+def test_every_experiment_is_pinned_here():
+    """The map is checked key-by-key, so an experiment MISSING from it has its
+    tags unpinned entirely — which is how qubit_deterministic_benchmarking went
+    unchecked. An entry of ``[]`` is still an entry, so this does not demand tag
+    completeness (zero tags stays legitimate); it demands that the DECISION was
+    written down.
+
+    Enumerated from the EXPORTED classes, not the live registry: other test
+    modules ``@register`` deliberately-broken fixtures (``broken_contract``,
+    ``update_explodes``, ...) which would otherwise make this fail on test
+    ORDER. Same reasoning, and the same selection-by-type, as
+    ``test_model_experiments.CORE``.
+    """
+    from scqo import experiments as registry
+    from scqo.experiment import Experiment
+
+    core = {obj.name for obj in (getattr(registry, n) for n in registry.__all__)
+            if isinstance(obj, type) and issubclass(obj, Experiment)}
+    assert core - set(EXPECTED_TAGS) == set(), (
+        "add these to EXPECTED_TAGS (use [] if they carry no capability): "
+        f"{sorted(core - set(EXPECTED_TAGS))}"
+    )
 
 
 def test_tags_survive_session_catalog_overlay():
@@ -127,6 +159,14 @@ def test_canonical_field_text_never_drifts():
             assert props["max_flux_v"]["description"] == (
                 MAX_FLUX_PULSE_DESC if pulse else MAX_FLUX_DESC), name
             assert props["num_flux_points"]["description"].startswith(NUM_FLUX_DESC), name
+        if "amplitude" in entry["tags"]:
+            # every carrier re-declares the window (each has its own defaults), so
+            # the TEXT is the only thing stopping four descriptions drifting apart
+            assert props["min_amp_factor"]["description"] == MIN_AMP_FACTOR_DESC, name
+            assert props["max_amp_factor"]["description"] == MAX_AMP_FACTOR_DESC, name
+            # deterministic_benchmarking allows a single point and says so
+            assert props["num_amp_points"]["description"] in (
+                NUM_AMP_POINTS_DESC, NUM_AMP_POINTS_OPTIONAL_DESC), name
         if "qubit_reset" in entry["tags"]:
             assert props["reset_method"]["description"] == RESET_METHOD_DESC, name
             assert (props["thermalization_time_ns"]["description"]
@@ -321,3 +361,117 @@ def test_state_contract_accepted_for_newly_wired(name, params):
         cls.Contract.validate(ds)
         assert ("state" in ds.data_vars) is use_state
         assert ("I" in ds.data_vars) is not use_state
+
+
+# --------------------------------------------------------------------------
+# amplitude capability: the absolute amplitude behind a swept RATIO
+# --------------------------------------------------------------------------
+#: (experiment, extra params, the knob each ratio multiplies). Every carrier
+#: sweeps the ONE canonical axis, AMP_AXIS — that is the point of the capability.
+AMPLITUDE_CARRIERS = [
+    ("qubit_power_rabi", {"num_amp_points": 21}, "pi_amp"),
+    ("qubit_pi_pulse_error", {"num_amp_points": 11}, "pi_amp"),
+    ("readout_power", {"num_amp_points": 5, "num_shots": 200}, "readout_amp"),
+    ("qubit_deterministic_benchmarking",
+     {"num_amp_points": 5, "target_gate": "x90", "max_repetitions": 20},
+     "pi_amp_x90"),
+]
+
+
+@pytest.mark.parametrize("name,params,knob", AMPLITUDE_CARRIERS)
+def test_amplitude_carriers_attach_the_absolute_axis(name, params, knob, tmp_path):
+    """Every ratio sweep also carries the ABSOLUTE amplitude it stood for.
+
+    Without this the absolute value exists only in the fit dict as
+    ``old_<knob> * factor``, so a saved dataset cannot be read without
+    separately recovering the device snapshot from the moment of the run.
+    """
+    import xarray as xr
+
+    ensure_demo_experiments()
+    roster, design, vendor = demo_device()
+    channel = "q0_ro" if knob == "readout_amp" else "q0_xy"
+    base = float(getattr(vendor.component(channel), knob))
+    sess = Session(SimulatedBackend(vendor), roster, design=design,
+                   scqo_dir=tmp_path / "scqo", data_root=tmp_path / "data")
+    out = sess.run(name, {"targets": ["q0"], **params})
+
+    with xr.open_dataset(f"{out['data_path']}/dataset.nc") as ds:
+        coord = ds[ABS_AMP_COORD]
+        assert coord.dims == ("target", AMP_AXIS)
+        # dimensionless (a fraction of full scale), NOT volts and NOT dBm
+        assert coord.attrs["units"] == ""
+        assert coord.attrs["reference_field"] == knob
+        ratios = ds.coords[AMP_AXIS].values.astype(float)
+        assert coord.sel(target="q0").values == pytest.approx(ratios * base)
+
+
+def test_absolute_axis_is_per_target_which_is_why_the_input_stays_a_ratio(tmp_path):
+    """THE property the design turns on: one shared ratio axis, a DIFFERENT
+    absolute axis per target. A single shared absolute input window could not
+    express this, which is why the parameter stays a ratio."""
+    import xarray as xr
+
+    ensure_demo_experiments()
+    roster, design, vendor = demo_device()
+    sess = Session(SimulatedBackend(vendor), roster, design=design,
+                   scqo_dir=tmp_path / "scqo", data_root=tmp_path / "data")
+    sess.set_values({"q0_xy.pi_amp": 0.15, "q1_xy.pi_amp": 0.35})
+    out = sess.run("qubit_power_rabi", {"targets": ["q0", "q1"], "num_amp_points": 21})
+
+    with xr.open_dataset(f"{out['data_path']}/dataset.nc") as ds:
+        coord = ds[ABS_AMP_COORD]
+        ratios = ds.coords[AMP_AXIS].values.astype(float)
+        assert coord.sel(target="q0").values == pytest.approx(ratios * 0.15)
+        assert coord.sel(target="q1").values == pytest.approx(ratios * 0.35)
+
+
+def test_an_unreadable_reference_never_fails_the_run(tmp_path):
+    """The axis is PROVENANCE: when a target's reference knob cannot be read the
+    coordinate is simply absent, never an exception. A measurement that already
+    reached the instrument must not die over a decoration."""
+    import xarray as xr
+
+    from scqo.experiments._capabilities.amplitude import attach_absolute_amp
+
+    ensure_demo_experiments()
+    roster, design, vendor = demo_device()
+    sess = Session(SimulatedBackend(vendor), roster, design=design,
+                   scqo_dir=tmp_path / "scqo", data_root=tmp_path / "data")
+    out = sess.run("qubit_power_rabi", {"targets": ["q0"], "num_amp_points": 11})
+
+    class Stub:
+        """An experiment whose reference knob does not resolve."""
+        dataset = xr.open_dataset(f"{out['data_path']}/dataset.nc").drop_vars(
+            ABS_AMP_COORD)
+
+        def amp_reference_field(self):
+            return "not_a_catalogued_field"
+
+    stub = Stub()
+    attach_absolute_amp(stub)  # must not raise
+    assert ABS_AMP_COORD not in stub.dataset.coords
+    stub.dataset.close()
+
+
+def test_every_amplitude_carrier_declares_its_reference_knob():
+    """A carrier that overrides the attach hook must also name the knob its ratio
+    multiplies — and it must be a real catalogued KNOB, resolvable from the bare
+    field name (catalog.py guarantees field names are unique across channel kinds,
+    which is why the declaration is a name and not a (kind, field) pair)."""
+    ensure_demo_experiments()
+    knob_fields = {f for kind in CHANNELS.values()
+                   for f, spec in kind.fields.items() if spec.role == "knob"}
+    for name, _params, knob in AMPLITUDE_CARRIERS:
+        cls = get(name)
+        assert knob in knob_fields, f"{name}: {knob} is not a catalogued knob"
+        # NOT always first: pi_pulse_error is ("gate_count", AMP_AXIS)
+        assert AMP_AXIS in cls.Contract.sweeps, f"{name}: {AMP_AXIS} is not a sweep"
+        assert issubclass(cls.Parameters, AmplitudeSweepParameters), name
+
+
+def test_the_amplitude_tag_is_derived_from_the_mixin():
+    """Every carrier of the window Parameters is tagged, and nothing else is."""
+    entries = _catalog_by_name()
+    tagged = {n for n, e in entries.items() if "amplitude" in e["tags"]}
+    assert tagged == {name for name, _p, _k in AMPLITUDE_CARRIERS}

@@ -162,11 +162,28 @@ class Experiment(ABC):
             for var, col in columns.items():
                 self.dataset[var] = ("target", col)
 
+    def attach_acquisition_coords(self) -> None:
+        """Hook: attach acquisition-time PROVENANCE coordinates to the acquired
+        dataset. Base is a no-op; a capability overrides it.
+
+        The point of the hook is that the values are snapshotted while the run's
+        device state is still current, so ``dataset.nc`` stays self-describing
+        after ``update()`` has moved the knobs (the discipline
+        ``_attach_reference_positions`` above already follows).
+
+        The body lives in the capability module, not here: importing
+        ``scqo.experiments._capabilities`` from this module would execute
+        ``scqo/experiments/__init__.py``, which imports every experiment module,
+        which imports this one — a cycle. Same lazy-import rule ``_capabilities/
+        flux.py`` states for ``session.py``.
+        """
+
     def run(self) -> Result:
         """define_sweep -> acquire -> verify contract -> estimate."""
         self.sweep_axes = self.define_sweep()
         self.dataset = self.backend.acquire(self)
         self.Contract.validate(self.dataset)
         self._attach_reference_positions()
+        self.attach_acquisition_coords()
         self.result = self.estimate()
         return self.result

@@ -3,7 +3,8 @@
 An experiment HAS this capability exactly when its Parameters subclass
 :class:`FluxSweepParameters`; the catalog derives the ``"flux"`` tag from that
 subclass relation (never from a declared string). The capability owns the window
-Parameters (canonical names + the ±0.5 V DAC-rail bounds), the canonical
+Parameters (canonical names; NOT a rail bound — see :class:`FluxSweepParameters`,
+the limit is the backend's, per port), the canonical
 sweep-axis name (``FLUX_AXIS`` — the probe boundary: LCHQB/LCHQM probes emit and
 read exactly this axis), the assignable foreign flux source
 (:class:`FluxComponentParameters`), and the record-only ``update()`` guard
@@ -82,16 +83,28 @@ MAX_FLUX_PULSE_DESC = "Highest flux-pulse amplitude (V) relative to idle_flux."
 
 
 class FluxSweepParameters(Parameters):
-    """Mixin: the swept flux-bias window in ABSOLUTE line volts (canonical
-    names, ±0.5 V rail bounds).
+    """Mixin: the swept flux-bias window in ABSOLUTE line volts (canonical names).
 
     For a probe that SETS the line's DC offset per point. A probe that plays a
     pulse on top of the standing bias takes :class:`FluxPulseSweepParameters`
     instead.
+
+    NO RAIL BOUND HERE — deliberately. This layer is vendor-neutral and cannot
+    know one: an OPX1000 LF-FEM port reaches ±0.5 V in ``direct`` mode and ±2.5 V
+    in ``amplified``, and a Qblox QCM is a different number again, so the limit is
+    a property of the PORT the run resolves to, not of the experiment. The bounds
+    used to be ``ge=-0.5``/``le=0.5``, which hardcoded one vendor's *direct-mode*
+    rail into the shared API: it fired at Parameters construction, before any
+    backend was consulted, so no driver-side fix could make an amplified-mode
+    sweep runnable at all.
+
+    The backend refuses what its port cannot emit, by name and with the remedy —
+    the same shape as ``reset_method="active"``, which the neutral layer offers
+    and a backend that cannot realize it refuses rather than downgrades.
     """
 
-    min_flux_v: float = Field(-0.3, ge=-0.5, description=MIN_FLUX_DESC)
-    max_flux_v: float = Field(0.3, le=0.5, description=MAX_FLUX_DESC)
+    min_flux_v: float = Field(-0.3, description=MIN_FLUX_DESC)
+    max_flux_v: float = Field(0.3, description=MAX_FLUX_DESC)
     num_flux_points: int = Field(21, gt=1, description=NUM_FLUX_DESC)
 
 
@@ -105,8 +118,8 @@ class FluxPulseSweepParameters(FluxSweepParameters):
     frame information and reuses ``NUM_FLUX_DESC``.
     """
 
-    min_flux_v: float = Field(-0.3, ge=-0.5, description=MIN_FLUX_PULSE_DESC)
-    max_flux_v: float = Field(0.3, le=0.5, description=MAX_FLUX_PULSE_DESC)
+    min_flux_v: float = Field(-0.3, description=MIN_FLUX_PULSE_DESC)
+    max_flux_v: float = Field(0.3, description=MAX_FLUX_PULSE_DESC)
 
 
 class FluxComponentParameters(Parameters):

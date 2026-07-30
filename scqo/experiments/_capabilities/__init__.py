@@ -7,6 +7,20 @@ Parameters subclass — a tag can therefore never lie or rot, and experiments wi
 no tags are legitimate (a new experiment may not be classifiable yet).
 """
 
+from .amplitude import (
+    ABS_AMP_COORD,
+    ABS_AMP_LABEL,
+    AMP_AXIS,
+    MAX_AMP_FACTOR_DESC,
+    MIN_AMP_FACTOR_DESC,
+    NUM_AMP_POINTS_DESC,
+    NUM_AMP_POINTS_OPTIONAL_DESC,
+    AmplitudeSweepParameters,
+    absolute_amps,
+    amp_anchor,
+    amp_sweep,
+    attach_absolute_amp,
+)
 from .flux import (
     FLUX_AXIS,
     FLUX_FRAME_ABSOLUTE,
@@ -40,8 +54,15 @@ from .state_readout import (
 )
 
 __all__ = [
+    "ABS_AMP_COORD",
+    "ABS_AMP_LABEL",
     "ACTIVE_RESET_ROUNDS_DESC",
+    "AMP_AXIS",
     "FLUX_AXIS",
+    "MAX_AMP_FACTOR_DESC",
+    "MIN_AMP_FACTOR_DESC",
+    "NUM_AMP_POINTS_DESC",
+    "NUM_AMP_POINTS_OPTIONAL_DESC",
     "FLUX_FRAME_ABSOLUTE",
     "FLUX_FRAME_RELATIVE",
     "MAX_FLUX_DESC",
@@ -55,8 +76,13 @@ __all__ = [
     "FluxComponentParameters",
     "FluxPulseSweepParameters",
     "FluxSweepParameters",
+    "AmplitudeSweepParameters",
     "QubitResetParameters",
     "StateReadoutParameters",
+    "absolute_amps",
+    "amp_anchor",
+    "amp_sweep",
+    "attach_absolute_amp",
     "flux_anchor_v",
     "flux_frame",
     "flux_sweep",

@@ -54,8 +54,9 @@ def state_row(
 
     The single-draw guarantee is load-bearing: per-target draw ordering (physics
     draws first, then readout draws) is part of the offline sims' stable_seed
-    contract — tests replay the stream (SCQO
-    ``tests/test_end_to_end.py::test_stored_positions_resolve_power_rabi_axis``).
+    contract — tests replay the stream (scqat
+    ``tests/test_stored_positions.py``; SCQO's old ``tests/test_end_to_end.py``
+    is gone).
     """
     population = np.asarray(population, dtype=float)
     return np.clip(population + rng.normal(0.0, noise, population.size), 0.0, 1.0)
