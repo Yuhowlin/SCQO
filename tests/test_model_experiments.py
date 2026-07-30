@@ -25,16 +25,28 @@ RECORD_ONLY = {"qubit_sqrb", "qubit_tomography", "qubit_echo_flux_pulse",
                "qubit_relaxation_flux_pulse", "pair_swap_chevron", "pair_swap_flux_map"}
 
 
+#: the readout reference an accepted single_shot_readout would have left behind.
+#: qubit_thermal_population REFUSES to run without it (one prepared state cannot
+#: locate |e> on its own), and seeding it also puts the five
+#: attach_readout_positions experiments on scqat's stored-axis reduction instead
+#: of PCA — the path the real instruments take, so the offline sweep exercises it.
+REFERENCE_BLOBS = {"pos_g_i": 0.0, "pos_g_q": 0.0, "pos_e_i": 4.0, "pos_e_q": 0.0}
+
+
 @pytest.fixture(scope="module")
 def session(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("gf5d")
     roster = demo_components(tunable=True)
     design = demo_design(roster)
     vendor = InMemoryDevice(roster, demo_vendor_state(roster, design))
-    return Session(SimulatedBackend(vendor), roster, design=design,
-                   scqo_dir=tmp / "scqo", data_root=tmp / "data",
-                   device_name="chipT", setup_name="sim",
-                   cooldown_id="cd1")
+    s = Session(SimulatedBackend(vendor), roster, design=design,
+                scqo_dir=tmp / "scqo", data_root=tmp / "data",
+                device_name="chipT", setup_name="sim",
+                cooldown_id="cd1")
+    s.set_values({f"{q}_ro.{field}": value
+                  for q in ("q0", "q1")
+                  for field, value in REFERENCE_BLOBS.items()})
+    return s
 
 
 #: the CORE catalog, taken from the exported classes rather than the live
@@ -227,6 +239,106 @@ def test_single_shot_populations_are_nan_when_the_blobs_degenerate(session, monk
     # scrubbed to null (datastore._scrub). Both roads count as missing downstream.
     assert all(math.isnan(fit[k]) for k in ("p_e_given_g", "pop_e_prep_g", "pop_g_prep_e"))
     assert out["outcomes"]["q0"] == "failed"  # NaN fidelity fails the gate
+
+
+def test_gef_proposes_three_state_monitors(session):
+    """Three blob centers and three per-state fidelities, all on the readout
+    channel. No discriminator knob: a scalar threshold on one rotated quadrature
+    cannot separate three blobs, so single_shot_readout keeps that job."""
+    proposed = _suggest(session, "single_shot_readout_gef")
+    assert {("q0_ro", f"pos_{letter}_{axis}")
+            for letter in ("g", "e", "f") for axis in ("i", "q")} | {
+        ("q0_ro", "fidelity_g"), ("q0_ro", "fidelity_e"), ("q0_ro", "fidelity_f")
+    } == proposed
+    assert not any(f.startswith("readout_") for _, f in proposed)
+
+
+def test_gef_reports_the_full_confusion_matrix_counted_and_fitted(session):
+    """Six off-diagonals, each counted and fitted — the same two-quantity rule the
+    two-state run follows, one matrix bigger. The fit only removes overlap, never
+    adds any, so no fitted weight can exceed its count."""
+    out = session.run("single_shot_readout_gef", {"targets": ["q0"]}, update="none")
+    fit = out["fit"]["q0"]
+    for prep in ("g", "e", "f"):
+        for assigned in ("g", "e", "f"):
+            if prep == assigned:
+                continue
+            counted, fitted = f"p_{assigned}_given_{prep}", f"pop_{assigned}_prep_{prep}"
+            assert math.isfinite(fit[counted]), counted
+            assert 0.0 <= fit[counted] <= 1.0, counted
+            assert math.isfinite(fit[fitted]), fitted
+            assert fit[fitted] <= fit[counted] + 1e-9, fitted
+    assert 0.5 < fit["readout_fidelity"] <= 1.0
+    assert out["outcomes"]["q0"] == "successful"
+
+
+def test_gef_confusion_is_nan_when_the_blobs_degenerate(session, monkeypatch):
+    """A collapsed fit must yield NaN and a failed outcome, not an IndexError —
+    the three-state twin of the two-state degenerate case."""
+    import scqo.experiments.single_shot_readout_gef as module
+
+    real = module.per_qubit_results
+
+    def one_blob(*args, **kwargs):
+        out = real(*args, **kwargs)
+        for results in out.values():  # collapse to a single center
+            results["direct_counts"] = np.ones((3, 1))
+            results["gaussian_norms"] = np.ones((3, 1))
+        return out
+
+    monkeypatch.setattr(module, "per_qubit_results", one_blob)
+    out = session.run("single_shot_readout_gef", {"targets": ["q0"]}, update="none")
+    fit = out["fit"]["q0"]
+    assert out.get("error") is None
+    assert all(math.isnan(fit[k]) for k in
+               ("p_e_given_g", "p_f_given_g", "pop_e_prep_g", "mean_f_i"))
+    assert out["outcomes"]["q0"] == "failed"
+
+
+def test_thermal_population_writes_the_mode_fact(session):
+    """n_th is a chip FACT: the population the qubit sits at in the dark, with no
+    instrument setting realizing it. Nothing else is proposed — the readout's own
+    overlap error belongs to the current knobs, not to the sample."""
+    assert _suggest(session, "qubit_thermal_population") == {("q0", "n_th")}
+
+
+def test_thermal_population_recovers_the_planted_population(session):
+    """The pinned-center fit must return the population the simulator planted,
+    and re-derive the blob width from the data rather than assuming one."""
+    from scqo.experiments._sim import stable_seed
+
+    planted = np.random.default_rng(
+        stable_seed("qubit_thermal_population", "q0")).uniform(0.01, 0.05)
+    out = session.run("qubit_thermal_population", {"targets": ["q0"]}, update="none")
+    fit = out["fit"]["q0"]
+    assert fit["pop_e_prep_g"] == pytest.approx(planted, abs=0.015)
+    assert fit["pop_e_prep_g"] <= fit["p_e_given_g"]  # counted folds in the overlap
+    assert fit["blob_std"] == pytest.approx(1.0, rel=0.3)
+    assert out["outcomes"]["q0"] == "successful"
+
+
+def test_thermal_population_refused_without_a_stored_reference(tmp_path):
+    """One prepared state cannot say where |e> is, so a device with no stored
+    blob centers is refused BEFORE any hardware runs, naming the prerequisite."""
+    roster = demo_components(tunable=True)
+    design = demo_design(roster)
+    vendor = InMemoryDevice(roster, demo_vendor_state(roster, design))
+    s = Session(SimulatedBackend(vendor), roster, design=design,
+                scqo_dir=tmp_path / "scqo", device_name="chipT",
+                setup_name="sim", cooldown_id="cd1")
+    out = s.run("qubit_thermal_population", {"targets": ["q0"]})
+    assert "single_shot_readout" in out["error"]
+    assert out["outcomes"]["q0"] == "failed"
+
+
+def test_thermal_population_refuses_active_reset():
+    """Active reset removes exactly the population being measured — refused at
+    parameter-validation time, so a campaign plan dies at preflight."""
+    from scqo.experiments.qubit_thermal_population import QubitThermalPopulationParameters
+
+    QubitThermalPopulationParameters(targets=["q0"])
+    with pytest.raises(ValueError, match="active"):
+        QubitThermalPopulationParameters(targets=["q0"], reset_method="active")
 
 
 def test_arch_fit_writes_mode_facts_and_transfer_function(session):

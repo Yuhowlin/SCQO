@@ -168,6 +168,7 @@ from .qubit_spectroscopy_flux_pulse import (  # noqa: E402
 )
 from .qubit_spectroscopy_overlap import QubitSpectroscopyOverlap  # noqa: E402
 from .qubit_sqrb import QubitSQRB  # noqa: E402
+from .qubit_thermal_population import QubitThermalPopulation  # noqa: E402
 from .qubit_tomography import QubitTomography  # noqa: E402
 from .readout_frequency import ReadoutFrequency  # noqa: E402
 from .readout_power import ReadoutPower  # noqa: E402
@@ -180,6 +181,7 @@ from .resonator_spectroscopy_power_chain import (  # noqa: E402
     ResonatorSpectroscopyPowerChain,
 )
 from .single_shot_readout import SingleShotReadout  # noqa: E402
+from .single_shot_readout_gef import SingleShotReadoutGEF  # noqa: E402
 
 __all__ = [
     "catalog", "get", "register",
@@ -189,9 +191,9 @@ __all__ = [
     "QubitEchoFluxPulse", "QubitPiPulseError", "QubitPowerRabi", "QubitRamsey",
     "QubitRelaxation", "QubitRelaxationFluxPulse", "QubitSQRB",
     "QubitSpectroscopy", "QubitSpectroscopyFluxPulse", "QubitSpectroscopyOverlap",
-    "QubitTomography",
+    "QubitThermalPopulation", "QubitTomography",
     "ReadoutFrequency", "ReadoutPower", "ResonatorSpectroscopy",
     "ResonatorSpectroscopyFlux", "ResonatorSpectroscopyPowerAmp",
-    "ResonatorSpectroscopyPowerChain", "SingleShotReadout",
+    "ResonatorSpectroscopyPowerChain", "SingleShotReadout", "SingleShotReadoutGEF",
 ]
 

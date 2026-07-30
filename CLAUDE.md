@@ -222,6 +222,20 @@ scqo/
                                 #   (population alone, from scqat's gaussian_norms - amplitudes
                                 #   only, centers/widths pinned). Their difference ~ the
                                 #   discrimination error
+    single_shot_readout_gef.py  # the QUTRIT sibling: prepared_state [0,1,2] -> 3x3 confusion
+                                #   (counted + fitted twins) + fidelity_g/e/f and pos_{g,e,f}_*
+                                #   monitors. Proposes NO discriminator - a scalar threshold on
+                                #   one rotated quadrature has no 3-state analogue, so
+                                #   single_shot_readout stays THE authority for
+                                #   readout_rotation_rad/readout_threshold. QM-ONLY probe
+                                #   (needs a calibrated EF_x180 + anharmonicity; Qblox has the
+                                #   <q>.12 clock but no gate targets it)
+    qubit_thermal_population.py # prepare |g> ONLY, split the cloud against the readout channel's
+                                #   STORED pos_* centers (pinned user_mean, width re-fit) ->
+                                #   pop_e_prep_g -> the mode fact n_th (its first writer).
+                                #   REFUSES without an accepted single_shot_readout (one state
+                                #   cannot locate |e>) and refuses active reset (it would remove
+                                #   the population being counted)
     resonator_spectroscopy_flux.py   # 2D resonator flux map -> idle_flux + readout_freq_hz
                                 #   at the sweet spot; flux_offset/flux_per_phi0 (flux-channel
                                 #   facts) + f_r0_hz/g_hz (resonator facts)

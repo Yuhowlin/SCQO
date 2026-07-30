@@ -34,7 +34,7 @@ INSTRUMENT_FIELD_ORDER = catalog_fields("knob", "monitor")
 #: decision), but still worth reporting from a run's fit.
 #: `p_*_given_*` are COUNTED (nearest-center assignment: population + overlap
 #: error); `pop_*_prep_*` are the FITTED blob weights (population alone).
-FIT_ONLY_QUANTITIES = ("p_e_given_g", "pop_e_prep_g", "pop_g_prep_e")
+FIT_ONLY_QUANTITIES = ("p_e_given_g", "p_g_given_e", "pop_e_prep_g", "pop_g_prep_e")
 
 #: Everything worth OFFERING as a trend: measured physics, then monitors, then
 #: calibration knobs. Derived from the kind catalogs by field ROLE, never a

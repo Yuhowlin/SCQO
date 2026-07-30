@@ -79,6 +79,8 @@ EXPECTED_TAGS = {
     "pair_swap_chevron": ["qubit_reset"],
     "pair_swap_flux_map": ["qubit_reset"],
     "single_shot_readout": ["qubit_reset"],
+    "single_shot_readout_gef": ["qubit_reset"],
+    "qubit_thermal_population": ["qubit_reset"],
     "readout_power": ["qubit_reset", "amplitude"],
     "readout_frequency": ["qubit_reset"],
     "qubit_spectroscopy": ["qubit_reset"],

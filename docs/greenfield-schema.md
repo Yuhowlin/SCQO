@@ -252,7 +252,7 @@ flux-activated `<op>_coupler_flux`; microwave-activated `<op>_drive_freq_hz`, `<
 | kind | knobs | monitors | facts |
 |---|---|---|---|
 | `drive` | `drive_freq_hz`, `drive_amp`, `drive_power_dbm`, `pi_amp`, `drag_beta`, `pi_duration_s`, `thermalization_time_s` | — | — |
-| `readout` | `readout_freq_hz`, `readout_amp`, `readout_power_dbm`, `readout_duration_s`, `readout_integration_s`, `readout_rotation_rad`, `readout_threshold`, `readout_rus_threshold` | `fidelity_g`, `fidelity_e`, `pos_g_i`, `pos_g_q`, `pos_e_i`, `pos_e_q` | — |
+| `readout` | `readout_freq_hz`, `readout_amp`, `readout_power_dbm`, `readout_duration_s`, `readout_integration_s`, `readout_rotation_rad`, `readout_threshold`, `readout_rus_threshold` | `fidelity_g`, `fidelity_e`, `fidelity_f`, `pos_g_i`, `pos_g_q`, `pos_e_i`, `pos_e_q`, `pos_f_i`, `pos_f_q` | — |
 | `flux` | `idle_flux` | — | `flux_offset`, `flux_per_phi0`, `distortion_amp[]`, `distortion_tau_s[]` |
 | `pump` | `pump_freq_hz`, `pump_amp`, `pump_phase_rad`, `pump_duration_s` | — | — |
 
@@ -261,9 +261,11 @@ twin pattern — orthogonal planes (dimensionless DAC scale vs absolute level at
 doctor warns when a vendor mapping consumes only one of a pair that has both set. A coupler's
 standing/decouple bias **is** its flux channel's `idle_flux` (no `coupler_decouple_v`); gate
 operating points are per-operation composite knobs (survives a coupler shared by two pairs and a
-pair with two gates). There is no aggregate `readout_fidelity` (derivable), no qutrit/ef vocabulary,
+pair with two gates). There is no aggregate `readout_fidelity` (derivable),
 no `drive_phase_rad`, no flux-crosstalk family — all deferred until a writer exists (re-adding is
-append-only-safe vocabulary).
+append-only-safe vocabulary). The qutrit READOUT monitors (`fidelity_f`, `pos_f_i`, `pos_f_q`)
+landed on exactly those terms once `single_shot_readout_gef` became their writer; the EF DRIVE
+knobs stay deferred (no backend governs an EF pulse through SCQO yet).
 
 ---
 
