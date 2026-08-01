@@ -18,7 +18,12 @@ import xarray as xr
 
 
 def per_qubit_results(
-    prepared: xr.Dataset, estimator: Any, artifact_dir: Path | None = None, **estimator_kwargs
+    prepared: xr.Dataset,
+    estimator: Any,
+    artifact_dir: Path | None = None,
+    *,
+    per_target_kwargs: dict[str, dict] | None = None,
+    **estimator_kwargs,
 ) -> dict[str, dict]:
     """Run a scqat estimator on each qubit of an already-prepared dataset.
 
@@ -27,6 +32,11 @@ def per_qubit_results(
     that renaming/scaling. This helper only splits along ``qubit`` and calls
     ``analyze`` once per qubit, returning ``{qubit_name: results_dict}``. Extra
     keyword arguments are forwarded to ``analyze`` (estimator knobs, e.g. ``ec_ghz``).
+
+    ``per_target_kwargs`` carries knobs whose VALUE differs per qubit — the stored
+    blob centers a pinned-center fit needs, say. They are merged over the shared
+    ``estimator_kwargs`` (per-target wins) for that qubit only; a qubit absent from
+    the mapping just gets the shared set.
 
     With ``artifact_dir`` set (the Session does this when a datastore is configured),
     each qubit's scqat artifacts — ``<estimator>_metadata.json``, ``_plotdata.nc`` and
@@ -41,9 +51,10 @@ def per_qubit_results(
     for sq in repetition_data(prepared, repetition_dim="target"):
         qubit_name = sq["target"].values.item()
         out_dir = str(artifact_dir / str(qubit_name)) if artifact_dir is not None else None
+        kwargs = {**estimator_kwargs, **(per_target_kwargs or {}).get(str(qubit_name), {})}
         try:
             results, figures = estimator.analyze(
-                sq, output_dir=out_dir, skip_figures=artifact_dir is None, **estimator_kwargs
+                sq, output_dir=out_dir, skip_figures=artifact_dir is None, **kwargs
             )
         except Exception as err:
             if out_dir is None:
@@ -55,7 +66,7 @@ def per_qubit_results(
                 "retrying analysis without saving artifacts",
                 file=sys.stderr,
             )
-            results, figures = estimator.analyze(sq, output_dir=None, skip_figures=True, **estimator_kwargs)
+            results, figures = estimator.analyze(sq, output_dir=None, skip_figures=True, **kwargs)
         if figures:  # already saved to out_dir by analyze(); free them (long sessions)
             import matplotlib.pyplot as plt
 

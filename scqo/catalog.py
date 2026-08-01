@@ -418,6 +418,9 @@ CHANNELS: dict[str, ChannelKind] = {
                     "readout settings.", role="monitor"),
             "fidelity_e": FieldSpec(
                 "", "P(assign e | prepared e).", role="monitor"),
+            "fidelity_f": FieldSpec(
+                "", "P(assign f | prepared f); three-state readout only.",
+                role="monitor"),
             "pos_g_i": FieldSpec("", "|g> blob center, I (acquisition frame).",
                                  role="monitor", portable=False),
             "pos_g_q": FieldSpec("", "|g> blob center, Q.", role="monitor",
@@ -425,6 +428,10 @@ CHANNELS: dict[str, ChannelKind] = {
             "pos_e_i": FieldSpec("", "|e> blob center, I.", role="monitor",
                                  portable=False),
             "pos_e_q": FieldSpec("", "|e> blob center, Q.", role="monitor",
+                                 portable=False),
+            "pos_f_i": FieldSpec("", "|f> blob center, I; three-state readout "
+                                     "only.", role="monitor", portable=False),
+            "pos_f_q": FieldSpec("", "|f> blob center, Q.", role="monitor",
                                  portable=False),
         },
     ),
