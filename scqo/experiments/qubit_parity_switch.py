@@ -51,6 +51,7 @@ Driver contract (``probe()``):
 
 from __future__ import annotations
 
+import math
 from typing import ClassVar
 
 import numpy as np
@@ -95,6 +96,14 @@ _MISSING_DEPLETION = (
     "and means no wait)."
 )
 
+_TOO_MANY_SHOTS = (
+    "record_time_s = {want:g} s needs {n} shots on {target} (its estimated shot "
+    "period is {period_us:.3g} us), over max_num_shots = {ceiling}. Shorten "
+    "record_time_s, raise max_num_shots consciously (instruments have their own "
+    "limits — Qblox refuses past 3e6 acquisition bins), or pass num_shots "
+    "explicitly to bypass this ceiling."
+)
+
 _MISSING_REFERENCE = (
     "no stored readout reference for {targets}: discriminating the shot trace "
     "into a 0/1 telegraph needs the |g>/|e> blob centers. Run "
@@ -112,11 +121,30 @@ _NOMINAL_PI2_S = 40e-9
 class QubitParitySwitchParameters(TargetSelection, StateReadoutParameters):
     """Inputs for a charge-parity switching-rate measurement."""
 
-    num_shots: int = Field(
-        100000, gt=99,
-        description="Back-to-back shots (each recorded individually). The trace must span "
-                    "many switching events: at ~100 Hz parity rate and ~10 us per shot, "
-                    "100000 shots is ~1 s of telegraph, ~100 switches per direction.")
+    record_time_s: float = Field(
+        30.0, gt=0,
+        description="How long to record the telegraph, seconds. This — not the shot count — "
+                    "is what sets the measurement's reach: the parity spectrum's lowest "
+                    "frequency bin is 8 / record_time_s, so a rate whose PSD corner "
+                    "(rate / pi) sits near that bin is fitted from only a handful of "
+                    "points. Aim for record_time_s > 40 / corner, i.e. > 130 / rate. "
+                    "Converted to shots with the target's ESTIMATED shot period (idle + "
+                    "readout + depletion + the two pi/2 pulses), so the achieved duration "
+                    "differs slightly from the request; both are recorded.")
+    num_shots: int | None = Field(
+        None, gt=99,
+        description="Explicit shot count, overriding record_time_s. None (the normal case) "
+                    "derives it. Given, it wins outright and BYPASSES max_num_shots — the "
+                    "ceiling guards the derived value, exactly as max_derived_idle_ns "
+                    "guards the derived idle. Use it to reproduce an earlier run's exact "
+                    "length, or for a quick short test.")
+    max_num_shots: int = Field(
+        2_000_000, gt=99,
+        description="Refusal ceiling for the DERIVED shot count (never a clamp). A long "
+                    "record_time_s on a slow-cadence qubit can ask for far more shots than "
+                    "an instrument will hold, so this refuses early and by name rather "
+                    "than deep in a vendor error. Deliberately under the Qblox 3e6 "
+                    "acquisition-bin limit. Raise it consciously, or pass num_shots.")
     idle_time_ns: float | None = Field(
         None, gt=0,
         description="Fixed free-evolution time between the two pi/2 pulses, ns. None (the "
@@ -153,7 +181,9 @@ class QubitParitySwitch(Experiment):
     name: ClassVar[str] = "qubit_parity_switch"
     description: ClassVar[str] = (
         "Fixed-sequence charge-parity monitor: y90 - idle - x90 - measure repeated as "
-        "num_shots back-to-back single shots, idle = 1 / (2 x parity_delta_f_hz) (the "
+        "back-to-back single shots for record_time_s (the shot count is derived from it, "
+        "since the spectrum's lowest frequency is 8 / record_time_s and THAT is what sets "
+        "how slow a rate is measurable), idle = 1 / (2 x parity_delta_f_hz) (the "
         "drive channel's stored beat splitting from a ramsey_model='beat' qubit_ramsey; "
         "+/- pi/2 parity phase), with ONLY the resonator depletion wait between shots — "
         "deliberately NO qubit reset, which is what lets the parity accumulate. Because "
@@ -263,13 +293,48 @@ class QubitParitySwitch(Experiment):
             raise ValueError(_MISSING_REFERENCE.format(targets=", ".join(missing)))
         return out
 
+    def _resolve_num_shots(self) -> int:
+        """The shot count, from ``record_time_s`` unless overridden.
+
+        Uses the ESTIMATED shot period: ``shot_idx`` has to be sized here, and a
+        probe's exactly-scheduled period is not known until ``probe()`` runs.
+        The achieved duration is recorded alongside the request so the
+        difference is visible rather than silent.
+
+        ``shot_idx`` is ONE axis shared by every target, so the count is the MAX
+        over targets: each target then records at LEAST ``record_time_s``, and a
+        target whose shot period is shorter simply records for longer. Rounding
+        down instead would leave some target short of the reach that was asked
+        for, which is the failure that matters.
+        """
+        if self.params.num_shots is not None:
+            return int(self.params.num_shots)
+
+        want = float(self.params.record_time_s)
+        per_target = {t: math.ceil(want / self._estimated_shot_period_s(t))
+                      for t in self.params.targets}
+        n = max(per_target.values())
+        if n > self.params.max_num_shots:
+            slowest = min(per_target, key=lambda t: per_target[t])
+            raise ValueError(_TOO_MANY_SHOTS.format(
+                n=n, want=want, ceiling=self.params.max_num_shots,
+                period_us=self._estimated_shot_period_s(slowest) * 1e6,
+                target=max(per_target, key=lambda t: per_target[t])))
+        return int(n)
+
     def define_sweep(self) -> dict[str, np.ndarray]:
         self._resolved = self._resolve_timing()  # refuse before any hardware runs
         if not self.params.use_state_discrimination:
             self._reference_positions()
-        return {"shot_idx": np.arange(self.params.num_shots)}
+        self._num_shots = self._resolve_num_shots()
+        return {"shot_idx": np.arange(self._num_shots)}
 
     # ------------------------------------------------------- probe interface
+    def resolved_num_shots(self) -> int:
+        """The shot count a probe must record (``define_sweep`` resolved it
+        from ``record_time_s``, or took the explicit override)."""
+        return self._num_shots
+
     def resolved_idle_ns(self, target: str) -> float:
         """The fixed idle a probe must play for ``target`` (grid-snapped ns;
         ``define_sweep`` resolved it)."""
@@ -308,6 +373,11 @@ class QubitParitySwitch(Experiment):
         self.dataset["shot_period_s"] = ("target", np.asarray(periods, dtype=float))
         self.dataset["idle_time_ns"] = ("target", np.asarray(idles, dtype=float))
         self.dataset["parity_delta_f_hz"] = ("target", np.asarray(deltas, dtype=float))
+        # what was ACHIEVED, from the period the probe really scheduled — the
+        # count came from an ESTIMATE, so this is not the same as the request.
+        n = float(self.dataset.sizes["shot_idx"])
+        self.dataset["record_time_s"] = (
+            "target", np.asarray([n * p for p in periods], dtype=float))
 
     # -------------------------------------------------------------- offline
     def simulate(self, coords: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
@@ -381,8 +451,16 @@ class QubitParitySwitch(Experiment):
                 "p_parity_odd": p_parity_odd,
                 # (state_source stays in the scqat metadata artifact — Result.fit
                 # is a float-only surface)
+                # what the fit could see: the spectrum's low edge and how much
+                # headroom the corner had above it. A small margin is the
+                # readable symptom of "record for longer".
+                "psd_freq_min_hz": float(r.get("psd_freq_min_hz", nan)),
+                "psd_contrast": float(r.get("psd_contrast", nan)),
+                "corner_margin_low": float(r.get("corner_margin_low", nan)),
                 # timing provenance, from the acquisition-time snapshot
                 "shot_period_s": dt,
+                "record_time_s": self._acquired("record_time_s", qubit),
+                "requested_record_time_s": float(self.params.record_time_s),
                 "idle_time_ns": self._acquired("idle_time_ns", qubit),
                 "parity_delta_f_hz": self._acquired("parity_delta_f_hz", qubit),
             }

@@ -32,6 +32,13 @@ RECORD_ONLY = {"qubit_sqrb", "qubit_tomography", "qubit_echo_flux_pulse",
 #: of PCA — the path the real instruments take, so the offline sweep exercises it.
 REFERENCE_BLOBS = {"pos_g_i": 0.0, "pos_g_q": 0.0, "pos_e_i": 4.0, "pos_e_q": 0.0}
 
+#: qubit_parity_switch derives its shot count from record_time_s, and the demo
+#: device's estimated shot period is ~3.9 us against a real chip's ~30 us — so
+#: the physically correct 30 s default would ask for 7.7M shots here and be
+#: refused by max_num_shots. Shorten it for the offline sweep rather than
+#: weakening the default: 0.4 s is ~103k shots, the size the suite used before.
+PARITY_DEFAULTS = {"qubit_parity_switch": {"record_time_s": 0.4}}
+
 
 @pytest.fixture(scope="module")
 def session(tmp_path_factory):
@@ -42,7 +49,8 @@ def session(tmp_path_factory):
     s = Session(SimulatedBackend(vendor), roster, design=design,
                 scqo_dir=tmp / "scqo", data_root=tmp / "data",
                 device_name="chipT", setup_name="sim",
-                cooldown_id="cd1")
+                cooldown_id="cd1",
+                parameter_defaults=PARITY_DEFAULTS)
     s.set_values({f"{q}_ro.{field}": value
                   for q in ("q0", "q1")
                   for field, value in REFERENCE_BLOBS.items()})
@@ -427,7 +435,8 @@ def _fresh_parity_session(tmp_path, *, splitting=True, depletion=True):
     vendor = InMemoryDevice(roster, demo_vendor_state(roster, design))
     s = Session(SimulatedBackend(vendor), roster, design=design,
                 scqo_dir=tmp_path / "scqo", data_root=tmp_path / "data",
-                device_name="chipT", setup_name="sim", cooldown_id="cd1")
+                device_name="chipT", setup_name="sim", cooldown_id="cd1",
+                parameter_defaults=PARITY_DEFAULTS)
     s.set_values({f"q0_ro.{field}": value
                   for field, value in REFERENCE_BLOBS.items()})
     if depletion:
@@ -526,7 +535,62 @@ def test_parity_switch_reports_the_odd_fraction(session):
     assert out.get("error") is None, out.get("error")
     fit = out["fit"]["q0"]
     assert 0.0 < fit["p_switch"] < 0.05
+    # the shot count is DERIVED from record_time_s now, so recover it from the
+    # recorded timings rather than pasting a literal
+    n_shots = round(fit["record_time_s"] / fit["shot_period_s"])
     assert fit["p_switch"] == pytest.approx(
-        fit["n_parity_switches"] / (100000 - 2), rel=1e-6)
+        fit["n_parity_switches"] / (n_shots - 2), rel=1e-6)
     assert fit["p_parity_odd"] == pytest.approx(0.5, abs=0.15)
     assert out["outcomes"]["q0"] == "successful"
+
+
+def test_parity_switch_derives_shots_from_record_time(session):
+    """record_time_s is the knob, because the spectrum's lowest frequency is
+    8 / record_time_s and THAT is what limits how slow a rate is measurable.
+    The shot count follows from the estimated shot period."""
+    out = session.run("qubit_parity_switch",
+                      {"targets": ["q0"], "record_time_s": 0.8}, update="none")
+    assert out.get("error") is None, out.get("error")
+    fit = out["fit"]["q0"]
+    assert fit["requested_record_time_s"] == pytest.approx(0.8)
+    # achieved uses the period the probe really scheduled, so it is close to
+    # the request but not identical -- and both are recorded on purpose
+    assert fit["record_time_s"] == pytest.approx(0.8, rel=0.05)
+    n_shots = round(fit["record_time_s"] / fit["shot_period_s"])
+    assert n_shots == pytest.approx(0.8 / fit["shot_period_s"], rel=0.01)
+    # doubling the record halves the spectrum's low edge
+    half = session.run("qubit_parity_switch",
+                       {"targets": ["q0"], "record_time_s": 0.4}, update="none")
+    assert (half["fit"]["q0"]["psd_freq_min_hz"]
+            == pytest.approx(2 * fit["psd_freq_min_hz"], rel=0.1))
+
+
+def test_parity_switch_refuses_an_absurd_record_time(session):
+    """The ceiling guards the DERIVED count: a long record on a fast-cadence
+    qubit asks for more shots than an instrument will hold."""
+    out = session.run("qubit_parity_switch",
+                      {"targets": ["q0"], "record_time_s": 3600.0})
+    assert "max_num_shots" in str(out.get("error"))
+    assert "record_time_s" in str(out.get("error"))
+
+
+def test_parity_switch_num_shots_overrides_and_bypasses_the_ceiling(session):
+    """num_shots wins outright, exactly as idle_time_ns bypasses
+    max_derived_idle_ns -- the ceiling is on the derived value only."""
+    out = session.run(
+        "qubit_parity_switch",
+        {"targets": ["q0"], "num_shots": 120000, "max_num_shots": 1000},
+        update="none")
+    assert out.get("error") is None, out.get("error")
+    fit = out["fit"]["q0"]
+    assert round(fit["record_time_s"] / fit["shot_period_s"]) == 120000
+
+
+def test_parity_switch_reports_the_spectral_reach(session):
+    """A corner near the lowest bin is the readable symptom of 'record for
+    longer', so the margin has to reach the run record."""
+    out = session.run("qubit_parity_switch", {"targets": ["q0"]}, update="none")
+    fit = out["fit"]["q0"]
+    assert fit["corner_margin_low"] == pytest.approx(
+        fit["psd_corner_hz"] / fit["psd_freq_min_hz"], rel=1e-6)
+    assert fit["psd_contrast"] > 3.0          # the gate that replaced p_switch
