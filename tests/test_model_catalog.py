@@ -205,3 +205,19 @@ def test_composite_roles_typed_and_qubit_pair_shape():
 def test_resonator_ref_is_the_single_dispersive_record():
     assert MODES["resonator"].refs == {"qubit": QUBIT_LIKE}
     assert all(not s.refs for k, s in MODES.items() if k != "resonator")
+
+
+def test_parity_fields_declared():
+    """The parity pair: the rate is a transmon-family FACT (like t1_s), the
+    beat splitting a drive-channel MONITOR (it drifts with the offset charge,
+    so it is not chip-in-the-dark physics). Fluxonium is deliberately excluded
+    — no charge-Ramsey beat exists there to derive the idle from."""
+    from scqo.catalog import CHANNELS, MODES
+
+    fact = MODES["transmon"].fields["parity_rate_hz"]
+    assert fact.role == "fact" and fact.unit == "Hz"
+    assert "parity_rate_hz" in MODES["flux_transmon"].fields
+    assert "parity_rate_hz" not in MODES["fluxonium"].fields
+
+    monitor = CHANNELS["drive"].fields["parity_delta_f_hz"]
+    assert monitor.role == "monitor" and monitor.unit == "Hz"

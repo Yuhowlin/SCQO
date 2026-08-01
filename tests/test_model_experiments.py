@@ -46,6 +46,11 @@ def session(tmp_path_factory):
     s.set_values({f"{q}_ro.{field}": value
                   for q in ("q0", "q1")
                   for field, value in REFERENCE_BLOBS.items()})
+    # qubit_parity_switch REFUSES without a governed depletion wait (the shot
+    # cadence is its telegraph timebase) and a stored parity splitting (its
+    # fixed idle). 250 kHz -> idle = 1 / (2 x 250 kHz) = 2000 ns, on-grid.
+    s.set_values({f"{q}_ro.readout_depletion_s": 1e-6 for q in ("q0", "q1")})
+    s.set_values({f"{q}_xy.parity_delta_f_hz": 250e3 for q in ("q0", "q1")})
     return s
 
 
@@ -409,3 +414,101 @@ def test_accept_roundtrip_on_the_pair(session):
     assert not summary["errors"]
     assert session.device_state()["q0_q1_c_z"]["idle_flux"] is not None
     assert session.physical_state()["q0_q1"]["zz_hz"] is not None
+
+
+# ---------------------------------------------------------------- parity
+
+
+def _fresh_parity_session(tmp_path, *, splitting=True, depletion=True):
+    """A session seeded like the module fixture, with the parity prerequisites
+    individually controllable (the REFUSE tests need them absent)."""
+    roster = demo_components(tunable=True)
+    design = demo_design(roster)
+    vendor = InMemoryDevice(roster, demo_vendor_state(roster, design))
+    s = Session(SimulatedBackend(vendor), roster, design=design,
+                scqo_dir=tmp_path / "scqo", data_root=tmp_path / "data",
+                device_name="chipT", setup_name="sim", cooldown_id="cd1")
+    s.set_values({f"q0_ro.{field}": value
+                  for field, value in REFERENCE_BLOBS.items()})
+    if depletion:
+        s.set_values({"q0_ro.readout_depletion_s": 1e-6})
+    if splitting:
+        s.set_values({"q0_xy.parity_delta_f_hz": 250e3})
+    return s
+
+
+def test_ramsey_beat_proposes_the_parity_splitting(session):
+    """ramsey_model='beat' forces the two-frequency fit; the splitting lands
+    as a drive-channel monitor proposal on top of the usual three, and its
+    value is the sim's planted branch separation."""
+    from scqo.experiments._sim import stable_seed
+
+    out = session.run("qubit_ramsey", {
+        "targets": ["q0"], "ramsey_model": "beat",
+        "max_idle_time_ns": 10000, "num_points": 201})
+    assert out.get("error") is None, out.get("error")
+    proposed = {(s["entity"], s["field"]) for s in out["suggestions"]}
+    assert proposed == {("q0_xy", "drive_freq_hz"), ("q0", "f_01_hz"),
+                        ("q0", "t2_star_s"), ("q0_xy", "parity_delta_f_hz")}
+    # replay the sim's draws (err, t2_star, then delta on the beat branch)
+    rng = np.random.default_rng(stable_seed("qubit_ramsey", "q0"))
+    rng.uniform(-0.2, 0.2)
+    rng.uniform(5e-6, 15e-6)
+    delta = rng.uniform(0.3, 0.5) * 1.0e6
+    assert out["fit"]["q0"]["parity_delta_f_hz"] == pytest.approx(delta, rel=0.1)
+
+
+def test_parity_switch_writes_parity_rate_fact(session):
+    assert _suggest(session, "qubit_parity_switch") == {("q0", "parity_rate_hz")}
+
+
+def test_parity_switch_recovers_the_planted_rate(session):
+    """The offline loop closes: the sim's Markov flip probability over the
+    attached shot period comes back out of the PSD knee, at the idle the
+    seeded 250 kHz splitting implies."""
+    from scqo.experiments._sim import stable_seed
+
+    out = session.run("qubit_parity_switch", {"targets": ["q0"]}, update="none")
+    assert out.get("error") is None, out.get("error")
+    fit = out["fit"]["q0"]
+    assert fit["idle_time_ns"] == pytest.approx(2000.0)  # 1 / (2 x 250 kHz)
+    assert fit["parity_delta_f_hz"] == pytest.approx(250e3)
+    assert "outlier_probability" in fit  # the discriminated-path marker
+    assert 0.3 < fit["p_excited"] < 0.7
+    rng = np.random.default_rng(stable_seed("qubit_parity_switch", "q0"))
+    p_flip = rng.uniform(0.002, 0.01)
+    expected = p_flip / fit["shot_period_s"]
+    assert fit["parity_rate_hz"] == pytest.approx(expected, rel=0.2)
+
+
+def test_parity_switch_refuses_without_the_splitting(tmp_path):
+    s = _fresh_parity_session(tmp_path, splitting=False)
+    out = s.run("qubit_parity_switch", {"targets": ["q0"]})
+    assert "parity_delta_f_hz" in str(out.get("error"))
+    assert "ramsey_model='beat'" in str(out.get("error"))
+    # ... but an explicit idle override runs without the stored splitting
+    ok = s.run("qubit_parity_switch",
+               {"targets": ["q0"], "idle_time_ns": 1000.0}, update="none")
+    assert ok.get("error") is None, ok.get("error")
+    assert ok["fit"]["q0"]["idle_time_ns"] == pytest.approx(1000.0)
+    assert math.isnan(ok["fit"]["q0"]["parity_delta_f_hz"])
+
+
+def test_parity_switch_two_stage_chain(tmp_path):
+    """The full workflow on a fresh device: beat ramsey -> apply -> the parity
+    monitor derives its idle from the just-measured splitting -> apply -> the
+    rate lands in physical state."""
+    s = _fresh_parity_session(tmp_path, splitting=False)
+    out1 = s.run("qubit_ramsey", {
+        "targets": ["q0"], "ramsey_model": "beat",
+        "max_idle_time_ns": 10000, "num_points": 201}, update="apply")
+    assert out1.get("error") is None, out1.get("error")
+    delta = out1["fit"]["q0"]["parity_delta_f_hz"]
+
+    out2 = s.run("qubit_parity_switch", {"targets": ["q0"]}, update="apply")
+    assert out2.get("error") is None, out2.get("error")
+    fit = out2["fit"]["q0"]
+    assert fit["parity_delta_f_hz"] == pytest.approx(delta)
+    assert fit["idle_time_ns"] == pytest.approx(
+        max(16.0, round(1e9 / (2.0 * delta) / 4.0) * 4.0))
+    assert s.physical_state()["q0"]["parity_rate_hz"] is not None
