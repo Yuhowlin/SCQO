@@ -121,10 +121,11 @@ class QubitParitySwitchResult(Result):
     """``fit[qubit]``: ``parity_rate_hz`` (per-direction rate, pi x the PSD
     corner — the value stored as the mode fact), the PSD fit scalars
     (``psd_corner_hz`` / ``psd_amplitude`` / ``psd_white_floor``), the
-    diagnostics ``n_transitions`` (readout-error-inflated flip count) and
-    ``p_excited``, and the timing provenance ``shot_period_s`` /
-    ``idle_time_ns`` / ``parity_delta_f_hz`` (NaN when the idle was
-    overridden)."""
+    diagnostics ``n_transitions`` (readout-error-inflated flip count),
+    ``p_odd`` (fraction of consecutive pairs that disagree — 0.5 means the
+    shots are independent and NO rate is recoverable) and ``p_excited``, and
+    the timing provenance ``shot_period_s`` / ``idle_time_ns`` /
+    ``parity_delta_f_hz`` (NaN when the idle was overridden)."""
 
 
 @register
@@ -335,6 +336,11 @@ class QubitParitySwitch(Experiment):
                 "psd_amplitude": float(r.get("psd_amplitude", nan)),
                 "psd_white_floor": float(r.get("psd_white_floor", nan)),
                 "n_transitions": int(r.get("n_transitions", 0)),
+                # the fraction of consecutive pairs that DISAGREE. It saturates
+                # at 0.5, where the shots are independent and no rate exists;
+                # scqat refuses above 0.4, so this is the number that explains a
+                # FAILED run whose fit otherwise looked healthy.
+                "p_odd": float(r.get("p_odd", nan)),
                 "p_excited": p_excited,
                 # (state_source stays in the scqat metadata artifact — Result.fit
                 # is a float-only surface)
@@ -347,9 +353,10 @@ class QubitParitySwitch(Experiment):
                 fit["outlier_probability"] = float(r["outlier_probability"])
             result.fit[qubit] = fit
             # A trustworthy rate: the knee fit converged inside the spectral
-            # window, and the trace actually toggled (a pinned occupancy means
-            # no telegraph — wrong idle time, wrong centers, or no switching
-            # resolved at this cadence).
+            # window AND the consecutive shots were actually correlated (scqat
+            # refuses p_odd > 0.4 — see its telegraph_psd docstring), and the
+            # trace toggled (a pinned occupancy means no telegraph — wrong idle
+            # time, wrong centers, or no switching resolved at this cadence).
             ok = (bool(r.get("success")) and np.isfinite(rate)
                   and 0.0 < rate < 0.5 / dt and 0.02 < p_excited < 0.98)
             result.outcomes[qubit] = Outcome.SUCCESSFUL if ok else Outcome.FAILED
