@@ -1,6 +1,6 @@
 [project]
 name = "scqo"
-version = "0.17.0"
+version = "0.18.0"
 description = "Superconducting Qubit Orchestration — instrument-agnostic experiment API shared by QM and Qblox backends"
 readme = "CLAUDE.md"
 requires-python = ">=3.10,<3.13"
@@ -12,7 +12,12 @@ dependencies = [
     "scqat",            # the shared analysis engine: estimators + fitters (import-light; lazy-imported in estimate())
                         # needs scqat tag v0.1.4+ (punchout outlier test is baseline-normalized for the |IQ|-scaled sim,
                         # SCQO 586af0e); scqat metadata caught up at v0.1.5, but the lab installs scqat editable at the
-                        # RELEASES.toml-pinned tag, so no version pin here — the manifest is the authority
+                        # RELEASES.toml-pinned tag, so no version pin here — the manifest is the authority.
+                        # As of v0.18.0 the real floor is scqat v0.7.0: qubit_thermal_population pins a stored g/e
+                        # reference while preparing one state, and before scqat 2d501f0 discriminate unpacked only
+                        # n_state centres and SILENTLY dropped the rest — a wrong n_th, not an error. A pin would not
+                        # help (editable installs bypass resolution, which is how both the lab and CI consume scqat),
+                        # so the manifest carries it: see RELEASES.toml [v0-18-0].
     "netcdf4>=1.6",     # datastore: dataset.nc has a string qubit coord (needs netCDF4, not the scipy netCDF3 fallback)
     "tomli>=2.0; python_version<'3.11'",  # labconfig TOML parsing on py3.10
 ]
