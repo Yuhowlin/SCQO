@@ -12,9 +12,26 @@ corner gives the per-direction switching rate (rate = pi x corner, scqat's
 ``fit_telegraph_psd``), written back as the mode fact ``parity_rate_hz``.
 
 Between shots only the RESONATOR is reset (the ``readout_depletion_s`` wait).
-The Parameters deliberately carry NO ``reset_method``: the sequence re-prepares
-the equator each shot regardless of the starting pole, so a qubit reset adds
-nothing — and the shot cadence IS the telegraph timebase, so the loop must
+The Parameters deliberately carry NO ``reset_method``, and the absence is
+load-bearing rather than an optimization — see below.
+
+THE READOUT IS NOT THE PARITY; ITS CONSECUTIVE DIFFERENCE IS.
+The sequence is a unitary, so it maps antipodal Bloch vectors to antipodal
+ones: |0> and |1> can never produce the same outcome. Each shot therefore
+starts wherever the previous measurement projected it (no reset, QND readout)
+and its outcome INVERTS with that pole:
+
+    s[i] = s[i-1] XOR parity[i]
+
+so the readout trace is the RUNNING XOR of the parity, and the consecutive-pair
+difference ``s[i] XOR s[i+1]`` IS the parity telegraph. scqat fits that pair
+series, never the raw readout — fitting the readout means fitting an integrated
+telegraph and the rate is meaningless (that was the v0.19.0 defect). The raw
+readout's spectrum is still plotted, unfitted, as a diagnostic.
+
+This is also why a qubit reset would BREAK the experiment rather than merely
+cost time: resetting to |0> every shot severs the XOR chain that carries the
+parity. And the shot cadence IS the telegraph timebase, so the loop must
 contain exactly the scheduled operations and a governed depletion wait.
 
 Driver contract (``probe()``):
@@ -119,13 +136,14 @@ class QubitParitySwitchParameters(TargetSelection, StateReadoutParameters):
 
 class QubitParitySwitchResult(Result):
     """``fit[qubit]``: ``parity_rate_hz`` (per-direction rate, pi x the PSD
-    corner — the value stored as the mode fact), the PSD fit scalars
-    (``psd_corner_hz`` / ``psd_amplitude`` / ``psd_white_floor``), the
-    diagnostics ``n_transitions`` (readout-error-inflated flip count),
-    ``p_odd`` (fraction of consecutive pairs that disagree — 0.5 means the
-    shots are independent and NO rate is recoverable) and ``p_excited``, and
-    the timing provenance ``shot_period_s`` / ``idle_time_ns`` /
-    ``parity_delta_f_hz`` (NaN when the idle was overridden)."""
+    corner of the PARITY series — the value stored as the mode fact), the PSD
+    fit scalars (``psd_corner_hz`` / ``psd_amplitude`` / ``psd_white_floor``),
+    the diagnostics ``n_parity_switches``, ``p_switch`` (fraction of
+    consecutive PARITY samples that differ — 0.5 means they are independent and
+    NO rate is recoverable) and ``p_parity_odd`` (how often the chip sits in the
+    odd parity; ~0.5 is HEALTHY and carries no rate information), and the timing
+    provenance ``shot_period_s`` / ``idle_time_ns`` / ``parity_delta_f_hz``
+    (NaN when the idle was overridden)."""
 
 
 @register
@@ -138,9 +156,13 @@ class QubitParitySwitch(Experiment):
         "num_shots back-to-back single shots, idle = 1 / (2 x parity_delta_f_hz) (the "
         "drive channel's stored beat splitting from a ramsey_model='beat' qubit_ramsey; "
         "+/- pi/2 parity phase), with ONLY the resonator depletion wait between shots — "
-        "deliberately NO qubit reset. The discriminated 0/1 trace is a random telegraph "
-        "signal; the Lorentzian corner of its Welch PSD gives the per-direction switching "
-        "rate (rate = pi x corner), written back as the mode fact parity_rate_hz. "
+        "deliberately NO qubit reset, which is what lets the parity accumulate. Because "
+        "the sequence inverts with the pole the previous shot left behind, the readout is "
+        "the RUNNING XOR of the parity and the consecutive-pair difference IS the parity "
+        "telegraph; the Lorentzian corner of THAT series' Welch PSD gives the "
+        "per-direction switching rate (rate = pi x corner), written back as the mode fact "
+        "parity_rate_hz. NOTE the readout must be good: one bad shot corrupts two parity "
+        "samples, so the rate inflates as 1 + 2 x readout_error / (rate x shot_period). "
         "use_state_discrimination returns each shot's FPGA-discriminated 0/1 state "
         "instead of I/Q (per-shot here, not averaged; needs a calibrated discriminator); "
         "the I/Q path REQUIRES an accepted single_shot_readout (the stored pos_* centers "
@@ -298,16 +320,29 @@ class QubitParitySwitch(Experiment):
         q_data = np.empty_like(i_data)
         state = np.empty_like(i_data)
         for k, target in enumerate(targets):
-            # Markov telegraph: per-shot flip probability = rate x shot period.
+            # The PARITY is the telegraph: per-shot switch probability =
+            # rate x shot period.
             p_flip = rng.uniform(0.002, 0.01)
-            trace = np.cumsum(rng.random(n_shots) < p_flip) % 2
+            parity = np.cumsum(rng.random(n_shots) < p_flip) % 2
+            # ... and the READOUT is its running XOR, because the sequence
+            # inverts with the pole the previous shot left behind (class
+            # docstring). Planting the telegraph straight into the readout —
+            # as this simulator did before — models the wrong physics and
+            # would let a wrong estimator pass its own offline test.
+            trace = np.cumsum(parity) % 2
             if use_state:
-                errors = rng.random(n_shots) < 0.02  # readout errors: floor, not knee
+                # Readout error is deliberately TINY here. It is not benign on
+                # this experiment: one bad shot flips two adjacent parity
+                # samples, and the rate inflates as 1 + 2*eps/(p_flip). At the
+                # old 2% it swamped the planted rate entirely.
+                errors = rng.random(n_shots) < 1e-4
                 state[k] = (trace ^ errors).astype(float)
             else:
                 g_i, g_q, e_i, e_q = reference[target]
-                i_data[k] = np.where(trace, e_i, g_i) + rng.normal(0, 1.0, n_shots)
-                q_data[k] = np.where(trace, e_q, g_q) + rng.normal(0, 1.0, n_shots)
+                # blob sigma 0.4 against a separation of 4 -> ~1e-7 error, for
+                # the same reason
+                i_data[k] = np.where(trace, e_i, g_i) + rng.normal(0, 0.4, n_shots)
+                q_data[k] = np.where(trace, e_q, g_q) + rng.normal(0, 0.4, n_shots)
         return readout_vars(use_state, state, i_data, q_data)
 
     # ------------------------------------------------------------- analysis
@@ -329,19 +364,21 @@ class QubitParitySwitch(Experiment):
             r = results[qubit]
             rate = float(r.get("parity_rate_hz", nan))
             dt = float(r.get("dt_s", nan))
-            p_excited = float(r.get("p_excited", nan))
+            p_parity_odd = float(r.get("p_parity_odd", nan))
             fit = {
                 "parity_rate_hz": rate,
                 "psd_corner_hz": float(r.get("psd_corner_hz", nan)),
                 "psd_amplitude": float(r.get("psd_amplitude", nan)),
                 "psd_white_floor": float(r.get("psd_white_floor", nan)),
-                "n_transitions": int(r.get("n_transitions", 0)),
-                # the fraction of consecutive pairs that DISAGREE. It saturates
-                # at 0.5, where the shots are independent and no rate exists;
-                # scqat refuses above 0.4, so this is the number that explains a
-                # FAILED run whose fit otherwise looked healthy.
-                "p_odd": float(r.get("p_odd", nan)),
-                "p_excited": p_excited,
+                # the PARITY's own switch count and fraction (not the readout's)
+                "n_parity_switches": int(r.get("n_transitions", 0)),
+                # p_switch saturates at 0.5, where consecutive parity samples
+                # are independent and no rate exists; scqat refuses above 0.4,
+                # so this explains a FAILED run whose fit looked healthy.
+                "p_switch": float(r.get("p_switch", nan)),
+                # how often the chip sits in the odd parity. ~0.5 is HEALTHY and
+                # carries no rate information — do not confuse it with p_switch.
+                "p_parity_odd": p_parity_odd,
                 # (state_source stays in the scqat metadata artifact — Result.fit
                 # is a float-only surface)
                 # timing provenance, from the acquisition-time snapshot
@@ -354,11 +391,11 @@ class QubitParitySwitch(Experiment):
             result.fit[qubit] = fit
             # A trustworthy rate: the knee fit converged inside the spectral
             # window AND the consecutive shots were actually correlated (scqat
-            # refuses p_odd > 0.4 — see its telegraph_psd docstring), and the
+            # refuses p_switch > 0.4 — see its telegraph_psd docstring), and the
             # trace toggled (a pinned occupancy means no telegraph — wrong idle
             # time, wrong centers, or no switching resolved at this cadence).
             ok = (bool(r.get("success")) and np.isfinite(rate)
-                  and 0.0 < rate < 0.5 / dt and 0.02 < p_excited < 0.98)
+                  and 0.0 < rate < 0.5 / dt and 0.02 < p_parity_odd < 0.98)
             result.outcomes[qubit] = Outcome.SUCCESSFUL if ok else Outcome.FAILED
         return result
 
