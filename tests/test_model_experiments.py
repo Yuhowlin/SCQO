@@ -596,6 +596,28 @@ def test_parity_switch_reports_the_spectral_reach(session):
     assert fit["psd_contrast"] > 3.0          # the gate that replaced p_switch
 
 
+def test_parity_switch_reports_the_mapping_fidelity_twice(session):
+    """A and B are the reference model's 4F^2 and (1-F^2)dt terms, so the same
+    fit yields F two independent ways. Both must reach the run record, along
+    with their ratio -- the ratio is the only number that notices the
+    correlated-noise model failure that psd_contrast is blind to."""
+    out = session.run("qubit_parity_switch", {"targets": ["q0"]}, update="none")
+    fit = out["fit"]["q0"]
+    f_amp = fit["mapping_fidelity"]
+    f_floor = fit["mapping_fidelity_floor"]
+    # derived from the SAME fit, not recomputed
+    assert f_amp == pytest.approx(
+        math.sqrt(2.0 * math.pi * fit["psd_corner_hz"] * fit["psd_amplitude"]),
+        rel=1e-6)
+    assert f_floor == pytest.approx(
+        math.sqrt(1.0 - 2.0 * fit["psd_white_floor"] / fit["shot_period_s"]),
+        rel=1e-6)
+    assert fit["mapping_fidelity_ratio"] == pytest.approx(f_amp / f_floor,
+                                                          rel=1e-6)
+    # the offline simulator plants a clean telegraph, so the two must agree
+    assert fit["mapping_fidelity_ratio"] == pytest.approx(1.0, abs=0.2)
+
+
 def test_parity_switch_idle_multiple_stretches_the_derived_idle(session):
     """idle = N / (2 x parity_delta_f_hz). The seeded 250 kHz gives a 2000 ns
     base, so N=3 must play 6000 ns."""
