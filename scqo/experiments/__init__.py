@@ -157,6 +157,7 @@ from .qubit_drag_alternating import QubitDragAlternating  # noqa: E402
 from .qubit_drag_equator import QubitDragEquator  # noqa: E402
 from .qubit_echo import QubitEcho  # noqa: E402
 from .qubit_echo_flux_pulse import QubitEchoFluxPulse  # noqa: E402
+from .qubit_parity_switch import QubitParitySwitch  # noqa: E402
 from .qubit_pi_pulse_error import QubitPiPulseError  # noqa: E402
 from .qubit_power_rabi import QubitPowerRabi  # noqa: E402
 from .qubit_ramsey import QubitRamsey  # noqa: E402
@@ -188,7 +189,7 @@ __all__ = [
     "QubitResetParameters", "reset_wait_ns",
     "PairSwapChevron", "PairSwapFluxMap",
     "PairZZCoupler", "QubitDeterministicBenchmarking", "QubitDragAlternating", "QubitDragEquator", "QubitEcho",
-    "QubitEchoFluxPulse", "QubitPiPulseError", "QubitPowerRabi", "QubitRamsey",
+    "QubitEchoFluxPulse", "QubitParitySwitch", "QubitPiPulseError", "QubitPowerRabi", "QubitRamsey",
     "QubitRelaxation", "QubitRelaxationFluxPulse", "QubitSQRB",
     "QubitSpectroscopy", "QubitSpectroscopyFluxPulse", "QubitSpectroscopyOverlap",
     "QubitThermalPopulation", "QubitTomography",

@@ -9,6 +9,7 @@ gains a method axis.
 
 from typing import get_args
 
+from scqo.experiments.qubit_ramsey import QubitRamseyParameters
 from scqo.experiments.resonator_spectroscopy import ResonatorSpectroscopyParameters
 from scqo.experiments.resonator_spectroscopy_flux import ResonatorSpectroscopyFluxParameters
 from scqo.experiments.resonator_spectroscopy_power_amp import ResonatorSpectroscopyPowerAmpParameters
@@ -43,3 +44,11 @@ def test_resonator_power_dip_method_matches_registry():
     for model in (ResonatorSpectroscopyPowerAmpParameters,
                   ResonatorSpectroscopyPowerChainParameters):
         assert _literal_values(model, "dip_method") == set(DIP_METHODS)
+
+
+def test_ramsey_model_matches_registry():
+    # "auto" is SCQO's own value (force_model=None: the frequency-gate + BIC
+    # selection); everything else must be exactly scqat's model registry.
+    from scqat.tools.ramsey_fit import RAMSEY_MODELS
+
+    assert _literal_values(QubitRamseyParameters, "ramsey_model") - {"auto"} == set(RAMSEY_MODELS)

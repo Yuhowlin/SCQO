@@ -64,6 +64,10 @@ EXPECTED_TAGS = {
     "qubit_sqrb": ["state_readout", "qubit_reset"],
     "qubit_relaxation_flux_pulse": ["state_readout", "flux", "qubit_reset", "flux_pulse"],
     "qubit_echo_flux_pulse": ["state_readout", "flux", "qubit_reset", "flux_pulse"],
+    # parity monitor: state_readout only — deliberately NO qubit_reset. The
+    # sequence re-prepares the equator every shot, and its depletion-only
+    # cadence IS the telegraph timebase a reset wait would corrupt.
+    "qubit_parity_switch": ["state_readout"],
     "resonator_spectroscopy_flux": ["flux"],
     "qubit_spectroscopy_flux_pulse": ["flux", "flux_pulse"],
     # reset without discrimination: these pulse the qubit and read it out, so

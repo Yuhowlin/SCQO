@@ -150,6 +150,10 @@ _TRANSMON_BASE: dict[str, FieldSpec] = {
     "t2_echo_s": FieldSpec("s", "Hahn-echo coherence time T2_echo.", role="fact"),
     "n_th": FieldSpec(
         "", "Thermal excited-state population at idle (0..1).", role="fact"),
+    "parity_rate_hz": FieldSpec(
+        "Hz", "Charge-parity (quasiparticle-tunneling) switching rate, per "
+              "direction: pi x the Lorentzian corner of the parity-telegraph "
+              "PSD measured by qubit_parity_switch.", role="fact"),
 }
 
 MODES: dict[str, ModeKind] = {
@@ -370,6 +374,13 @@ CHANNELS: dict[str, ChannelKind] = {
                 "dBm", "Absolute saturation drive power at the instrument "
                        "port; setting it re-solves the drive chain and moves "
                        "drive_amp as a COUPLED change.", role="knob"),
+            "parity_delta_f_hz": FieldSpec(
+                "Hz", "Charge-parity beat splitting |f_1 - f_2| of the Ramsey "
+                      "fringe at the operating point (qubit_ramsey's beat "
+                      "model); qubit_parity_switch derives its fixed idle "
+                      "1 / (2 x parity_delta_f_hz) from it. Drifts with the "
+                      "offset charge, so it is a monitor, not a fact.",
+                role="monitor"),
         },
     ),
     "readout": ChannelKind(

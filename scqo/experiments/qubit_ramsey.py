@@ -8,7 +8,7 @@ measured twin ``f_01_hz`` and ``t2_star_s`` stay as facts on the target MODE.
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 import numpy as np
 from pydantic import Field
@@ -40,6 +40,12 @@ class QubitRamseyParameters(TargetSelection, AveragingParameters, StateReadoutPa
     min_idle_time_ns: float = Field(16, ge=0, description="Shortest idle delay between the two pi/2 pulses.")
     max_idle_time_ns: float = Field(4000, gt=0, description="Longest idle delay.")
     num_points: int = Field(101, gt=1, description="Number of idle-time points.")
+    ramsey_model: Literal["auto", "single", "beat", "relaxation"] = Field(
+        "auto",
+        description="Force the fringe model instead of the automatic frequency-gate + BIC "
+                    "selection. 'beat' is the charge-parity workflow: the two-frequency fit "
+                    "is guaranteed, so the parity_delta_f_hz monitor proposal is deterministic "
+                    "(widen max_idle_time_ns enough to resolve the splitting).")
 
 
 class QubitRamseyResult(Result):
@@ -59,7 +65,11 @@ class QubitRamsey(Experiment):
     description: ClassVar[str] = (
         "Two pi/2 pulses separated by a swept idle time with an artificial drive detuning; "
         "fits the decaying fringe to correct the drive channel's drive_freq_hz and report "
-        "T2*. use_state_discrimination returns the FPGA-discriminated averaged state "
+        "T2*. A charge-parity-split fringe selects the two-frequency beat model (force it "
+        "with ramsey_model='beat'): the drive retunes to the MEAN of the two branches and "
+        "the splitting |f_1 - f_2| is proposed as the drive channel's parity_delta_f_hz "
+        "monitor — the input qubit_parity_switch derives its fixed idle from. "
+        "use_state_discrimination returns the FPGA-discriminated averaged state "
         "instead of I/Q (needs a calibrated discriminator: run single_shot_readout and "
         "accept its readout_rotation_rad / readout_threshold suggestions first)."
     )
@@ -94,7 +104,17 @@ class QubitRamsey(Experiment):
         for k in range(len(targets)):
             err = rng.uniform(-0.2, 0.2) * applied  # residual detuning to recover
             t2_star = rng.uniform(5e-6, 15e-6)
-            fringe = 0.5 - 0.5 * np.exp(-t / t2_star) * np.cos(2 * np.pi * (applied + err) * t)
+            if self.params.ramsey_model == "beat":
+                # charge-parity-split fringe: two branches at +/- delta/2 around
+                # the detuned frequency. The extra draw happens only on this
+                # branch, so the default path's draw order stays byte-identical.
+                delta = rng.uniform(0.3, 0.5) * applied
+                envelope = 0.25 * np.exp(-t / t2_star)
+                fringe = 0.5 - envelope * (
+                    np.cos(2 * np.pi * (applied + err - 0.5 * delta) * t)
+                    + np.cos(2 * np.pi * (applied + err + 0.5 * delta) * t))
+            else:
+                fringe = 0.5 - 0.5 * np.exp(-t / t2_star) * np.cos(2 * np.pi * (applied + err) * t)
             if use_state:
                 state[k] = state_row(fringe, rng)
             else:
@@ -114,7 +134,9 @@ class QubitRamsey(Experiment):
         prepared = self.dataset.rename(rename)
         prepared = prepared.assign_coords(idle_time=prepared["idle_time"] * 1e-9)
 
-        results = per_qubit_results(prepared, RamseyEstimator(), artifact_dir=self.artifact_dir)
+        force = None if self.params.ramsey_model == "auto" else self.params.ramsey_model
+        results = per_qubit_results(prepared, RamseyEstimator(), artifact_dir=self.artifact_dir,
+                                    force_model=force)
 
         applied = self.params.frequency_detuning_hz
         result = QubitRamseyResult()
@@ -136,6 +158,15 @@ class QubitRamsey(Experiment):
                 "t2_star_s": t2_star,
                 "old_drive_freq_hz": old,
             }
+            if model_type == "beat":
+                # the charge-parity splitting is frame-independent: the two
+                # fringe frequencies shift together with the applied detuning.
+                # The fringe values themselves are detuned-frame diagnostics.
+                f_1, f_2 = float(r["f_1"]), float(r["f_2"])
+                result.fit[qubit].update(
+                    fringe_f_1_hz=f_1, fringe_f_2_hz=f_2,
+                    parity_delta_f_hz=abs(f_1 - f_2),
+                )
             # A fringe is expected: only a converged single/beat fit with a physical T2*
             # counts; the relaxation model (f=0) means no fringe was resolved.
             ok = bool(r["success"]) and model_type in ("single", "beat") and np.isfinite(t2_star) and t2_star > 0
@@ -156,6 +187,11 @@ class QubitRamsey(Experiment):
                 mode = self.device.component(qubit)
                 mode.f_01_hz = fit["f_01_hz"]  # the measured physical fact (same fit)
                 mode.t2_star_s = fit["t2_star_s"]
+                # A beat fit additionally measured the charge-parity splitting;
+                # the monitor feeds qubit_parity_switch's fixed idle time.
+                delta_f = fit.get("parity_delta_f_hz")
+                if delta_f is not None and np.isfinite(delta_f) and delta_f > 0:
+                    self.device.channel(qubit, "drive").parity_delta_f_hz = delta_f
 
     def probe(self):  # pragma: no cover - driver half
         raise NotImplementedError("a driver backend supplies probe()")
