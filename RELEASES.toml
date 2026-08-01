@@ -3,6 +3,15 @@
 # scqat at its pinned tag (scqat versions independently: its own pyproject/tag line).
 # Hand-edited at release time by the manager (see RELEASING.md).
 
+[v0-19-1]
+date = 2026-08-01
+scqo = "v0.19.1"                 # p_odd on the parity-switch run record
+lchqbdriver = "v0.19.1"          # no-change re-tag
+lchqmdriver = "v0.19.1"          # no-change re-tag
+scqo-contrib = "v0.12.0"         # still NOT in the combo (unchanged since v0.13.0)
+scqat = "v0.8.1"                 # the real fix: refuse an unresolved telegraph — REQUIRED, see the notes
+notes = "CORRECTNESS FIX, AND v0.19.0 COULD WRITE A MEANINGLESS CHIP FACT. qubit_parity_switch's estimator accepted a shot trace whose consecutive shots are UNCORRELATED and reported a confident-looking rate from it. p_odd — the fraction of consecutive pairs that disagree — is (1 - exp(-2 x Gamma x dt))/2, which SATURATES AT 0.5: at 0.5 the shots are independent, the spectrum is white and no rate exists. But curve_fit still lands a finite Lorentzian corner on white noise, so the fit cannot self-diagnose it and `success` stayed True. Observed on a real 1e6-shot run: 535053 transitions (p_odd = 0.535, i.e. PAST the ceiling) reported alongside 1708 Hz, passing the outcome gate — one `scqo accept` away from landing in physical.json as the mode fact parity_rate_hz. scqat v0.8.1 now checks p_odd INDEPENDENTLY of the fit and refuses above MAX_ODD_FRACTION = 0.40 (~0.8 switches per shot), setting success=False and a NaN rate while KEEPING the corner and the PSD arrays so the failure stays diagnosable; a NaN from this check means 'unresolved at this shot cadence — measure faster', which is a different statement from 'the fit did not converge'. ACTION: re-check any parity_rate_hz you accepted from a v0.19.0 run — open its run record and look at p_odd (now recorded by scqo v0.19.1); anything near 0.4+ was not a measurement. Re-run `uv pip install -e . --no-deps` in all three venvs (.venv-qm, .venv-qblox, .venv-view) plus the scqat checkout — and note these uv-managed venvs have NEITHER pip NOR uv inside them, so the working form is `uv pip install --python <venv>\\Scripts\\python.exe -e D:\\github\\SCQO -e D:\\github\\scqat --no-deps` driven from outside. ALSO: the parity figures are readable now. Both time-domain panels are SCATTER instead of a connected step (at 1e6 shots the old one filled solid), and there are TWO of them — `trace` = the measured state per shot, `parity` = the derived parity of each consecutive pair (even = the pair agrees, odd = it differs), which is one shorter than the shot trace and is the physically meaningful view, since a parity switch is a CHANGE between neighbouring shots rather than a level. The parity panel annotates the odd fraction and warns on sight when it exceeds 0.4."
+
 [v0-19-0]
 date = 2026-08-01
 scqo = "v0.19.0"                 # qubit_parity_switch + the Ramsey beat splitting it feeds on
