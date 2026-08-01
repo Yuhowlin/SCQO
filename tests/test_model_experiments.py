@@ -474,7 +474,7 @@ def test_parity_switch_recovers_the_planted_rate(session):
     assert fit["idle_time_ns"] == pytest.approx(2000.0)  # 1 / (2 x 250 kHz)
     assert fit["parity_delta_f_hz"] == pytest.approx(250e3)
     assert "outlier_probability" in fit  # the discriminated-path marker
-    assert 0.3 < fit["p_excited"] < 0.7
+    assert 0.3 < fit["p_parity_odd"] < 0.7
     rng = np.random.default_rng(stable_seed("qubit_parity_switch", "q0"))
     p_flip = rng.uniform(0.002, 0.01)
     expected = p_flip / fit["shot_period_s"]
@@ -515,19 +515,18 @@ def test_parity_switch_two_stage_chain(tmp_path):
 
 
 def test_parity_switch_reports_the_odd_fraction(session):
-    """p_odd explains a FAILED run whose fit otherwise looks healthy, so it has
-    to reach the run record.
+    """p_switch explains a FAILED run whose fit otherwise looks healthy, so it
+    has to reach the run record — and it must not be confused with
+    p_parity_odd, which sits near 0.5 on every healthy run.
 
-    The simulator plants p_flip in (0.002, 0.01), but READOUT ERROR dominates
-    the observed value: the blobs sit 4 sigma apart, so ~2.3% of shots are
-    misassigned and each one fakes two flips, contributing ~0.046 on its own.
-    That is the real experiment's behaviour too (which is exactly why the
-    counted fraction is a diagnostic and the PSD knee is the measurement), and
-    it is still an order of magnitude under scqat's 0.4 refusal."""
+    The simulator plants a per-shot parity switch probability in (0.002, 0.01),
+    so p_switch lands in that range; p_parity_odd is ~0.5 because the chip
+    spends about half its time in each parity."""
     out = session.run("qubit_parity_switch", {"targets": ["q0"]}, update="none")
     assert out.get("error") is None, out.get("error")
     fit = out["fit"]["q0"]
-    assert 0.0 < fit["p_odd"] < 0.1
-    assert fit["p_odd"] == pytest.approx(
-        fit["n_transitions"] / (100000 - 1), rel=1e-6)
+    assert 0.0 < fit["p_switch"] < 0.05
+    assert fit["p_switch"] == pytest.approx(
+        fit["n_parity_switches"] / (100000 - 2), rel=1e-6)
+    assert fit["p_parity_odd"] == pytest.approx(0.5, abs=0.15)
     assert out["outcomes"]["q0"] == "successful"
