@@ -11,6 +11,22 @@ parity switches into a random telegraph signal; the Welch-PSD Lorentzian
 corner gives the per-direction switching rate (rate = pi x corner, scqat's
 ``fit_telegraph_psd``), written back as the mode fact ``parity_rate_hz``.
 
+STRETCHING THE IDLE (``idle_multiple``). The idle may instead be taken as
+``N / (2 x parity_delta_f_hz)`` for ODD N: the parity phase is then
+``+/- N pi/2`` and the readout still reads sin of it at full contrast. EVEN N
+gives exactly zero (both parities land on the same pole) — allowed, but warned
+about, and the fit then refuses it for lack of spectral contrast.
+
+Why bother: a run is usually limited by ACQUISITION BINS rather than by wall
+clock, so a longer shot buys more recorded time out of the same bin budget and
+therefore a lower spectral edge. On chipA (30.4 us shots) the Qblox 3e6-bin
+ceiling caps a run at 91 s (f_min 0.088 Hz); N=3 stretches the shot to ~48.5 us,
+so the same bins buy 145 s (f_min 0.055 Hz). It also suppresses the
+readout-error bias, which scales as ``1 + 2 eps / (rate x shot_period)``. The
+ceiling is T2* — contrast decays as ``exp(-idle / T2*)`` — and that is NOT
+checked automatically, because ``t2_star_s`` is a mode FACT and mode facts are
+unreachable at ``define_sweep`` time.
+
 Between shots only the RESONATOR is reset (the ``readout_depletion_s`` wait).
 The Parameters deliberately carry NO ``reset_method``, and the absence is
 load-bearing rather than an optimization — see below.
@@ -52,6 +68,7 @@ Driver contract (``probe()``):
 from __future__ import annotations
 
 import math
+import warnings
 from typing import ClassVar
 
 import numpy as np
@@ -94,6 +111,23 @@ _MISSING_DEPLETION = (
     "Run resonator_spectroscopy on {targets} and accept its "
     "readout_depletion_s proposal, or pass readout_depletion_ns= (0 is legal "
     "and means no wait)."
+)
+
+_MULTIDLE_WARNING = (
+    "idle_multiple={n} is EVEN, so this run carries no parity signal: the "
+    "parity phase is +/- {n} x pi/2 and the readout goes as sin of it, which is "
+    "exactly zero for even multiples — both parities land on the same pole. Use "
+    "{lower} or {higher} instead. Running anyway as requested; the fit will "
+    "refuse it for lack of spectral contrast."
+)
+
+_MULTIPLIED_IDLE_TOO_LONG = (
+    "idle_multiple={n} stretches {target}'s idle to {idle_ns:.0f} ns (base "
+    "{base_ns:.0f} ns from parity_delta_f_hz = {delta_f:.4g} Hz), over "
+    "max_derived_idle_ns = {ceiling:.0f} ns. The base itself is fine, so this "
+    "is the multiple: raise max_derived_idle_ns to match, or lower "
+    "idle_multiple. Keep the idle well under T2* either way — the fringe "
+    "contrast decays as exp(-idle / T2*)."
 )
 
 _TOO_MANY_SHOTS = (
@@ -148,10 +182,24 @@ class QubitParitySwitchParameters(TargetSelection, StateReadoutParameters):
     idle_time_ns: float | None = Field(
         None, gt=0,
         description="Fixed free-evolution time between the two pi/2 pulses, ns. None (the "
-                    "normal case) derives 1 / (2 x parity_delta_f_hz) from the drive "
-                    "channel's stored monitor (an accepted beat qubit_ramsey). Given or "
-                    "derived, the value is snapped to the 4 ns cross-backend grid with a "
-                    "16 ns floor.")
+                    "normal case) derives idle_multiple / (2 x parity_delta_f_hz) from the "
+                    "drive channel's stored monitor (an accepted beat qubit_ramsey). Given "
+                    "explicitly it wins outright and is NOT multiplied by idle_multiple. "
+                    "Given or derived, the value is snapped to the 4 ns cross-backend grid "
+                    "with a 16 ns floor.")
+    idle_multiple: int = Field(
+        1, gt=0,
+        description="Stretch the DERIVED idle to N / (2 x parity_delta_f_hz). ONLY ODD N "
+                    "CARRIES SIGNAL: the parity phase is +/- N x pi/2 and the readout goes "
+                    "as sin of it, so odd N gives full contrast and EVEN N gives exactly "
+                    "zero (both parities land on the same pole) — even values are allowed "
+                    "but warn. Raise it when runs are acquisition-BIN limited rather than "
+                    "time limited: a longer shot means the same bin budget covers more "
+                    "wall-clock, which lowers the spectrum's reach, and it also suppresses "
+                    "the readout-error bias (~1 + 2 x eps / (rate x shot_period)). The "
+                    "limit is T2*: contrast decays as exp(-idle / T2*), which is NOT "
+                    "checked here because t2_star_s is a mode fact and unreachable "
+                    "pre-run. Ignored when idle_time_ns is given.")
     max_derived_idle_ns: float = Field(
         20000, gt=0,
         description="Refusal ceiling for the DERIVED idle time: a splitting so small that "
@@ -241,10 +289,20 @@ class QubitParitySwitch(Experiment):
                     missing_split.append(target)
                     continue
                 delta_f = float(value)
-                idle_ns = 1e9 / (2.0 * delta_f)
+                base_ns = 1e9 / (2.0 * delta_f)
+                idle_ns = base_ns * self.params.idle_multiple
                 if idle_ns > self.params.max_derived_idle_ns:
-                    raise ValueError(_IDLE_TOO_LONG.format(
-                        idle_ns=idle_ns, delta_f=delta_f,
+                    # Two different faults reach here and they have different
+                    # remedies, so say which one this is: a base already over
+                    # the ceiling means the stored splitting is stale, whereas
+                    # only the MULTIPLIED value being over is a deliberate
+                    # choice that just needs headroom.
+                    template = (_IDLE_TOO_LONG
+                                if base_ns > self.params.max_derived_idle_ns
+                                else _MULTIPLIED_IDLE_TOO_LONG)
+                    raise ValueError(template.format(
+                        idle_ns=idle_ns, base_ns=base_ns, delta_f=delta_f,
+                        n=self.params.idle_multiple,
                         ceiling=self.params.max_derived_idle_ns, target=target))
             # cross-backend legal fixed delay: QM plays waits on a 4 ns clock
             # with a 16 ns floor, Qblox on a 1 ns grid — snap to the coarser.
@@ -323,6 +381,12 @@ class QubitParitySwitch(Experiment):
         return int(n)
 
     def define_sweep(self) -> dict[str, np.ndarray]:
+        n = self.params.idle_multiple
+        # only meaningful on the derived path — an explicit idle_time_ns is not
+        # multiplied, so an even multiple there is simply unused, not a defect.
+        if self.params.idle_time_ns is None and n % 2 == 0:
+            warnings.warn(_MULTIDLE_WARNING.format(n=n, lower=n - 1, higher=n + 1),
+                          stacklevel=2)
         self._resolved = self._resolve_timing()  # refuse before any hardware runs
         if not self.params.use_state_discrimination:
             self._reference_positions()
@@ -462,6 +526,7 @@ class QubitParitySwitch(Experiment):
                 "record_time_s": self._acquired("record_time_s", qubit),
                 "requested_record_time_s": float(self.params.record_time_s),
                 "idle_time_ns": self._acquired("idle_time_ns", qubit),
+                "idle_multiple": float(self.params.idle_multiple),
                 "parity_delta_f_hz": self._acquired("parity_delta_f_hz", qubit),
             }
             if "outlier_probability" in r:
