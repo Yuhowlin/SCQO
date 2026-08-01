@@ -93,3 +93,55 @@ def test_two_sessions_write_simultaneously(tmp_path):
     assert errors == []
     assert len(reader.find_runs(device="chipA", limit=1000)) == 200
     assert len(reader.find_runs(device="chipB", limit=1000)) == 200
+
+
+def test_concurrent_first_open_never_drops_the_schema(tmp_path):
+    """Regression: a HALF-BOOTSTRAPPED index must not read as a stale one.
+
+    ``DataStore.__init__`` decides whether to DROP the tables by reading the index —
+    "a live `runs` table with no schema_version row" means an index older than the
+    version marker (test_datastore.py::test_an_index_with_no_recorded_version_is_
+    rebuilt_too). Creating the table and stamping its version used to be two separate
+    commits, so a session that opened the data_root in between saw exactly that
+    signature on a BRAND-NEW index and dropped the table out from under the session
+    still bootstrapping it — killing its next INSERT with "no such table: runs", or
+    silently taking rows it had already written.
+
+    The window is one session wide and a few statements long, so ONE attempt is a coin
+    flip — ``test_two_sessions_write_simultaneously`` above hits it only when its 100k-row
+    sibling has skewed thread startup, and misses more often than not. Repeating the
+    scenario on a fresh data_root each time is what makes it a guard rather than a
+    lottery ticket. Do NOT "tidy" this into a single trial, and do not synchronise the
+    openers on a barrier: released together they all check BEFORE any of them has
+    created `runs`, all correctly conclude "brand new", and the bug goes unseen. It
+    needs one session already inside the window when the next one looks.
+    """
+    trials = 8
+    for trial in range(trials):
+        root = tmp_path / f"trial{trial}"  # a fresh data_root: the window is first-open only
+        errors: list[Exception] = []
+
+        def writer(device: str) -> None:
+            try:
+                store = DataStore(root, device_name=device)
+                for i in range(30):
+                    with store._connect() as db:
+                        db.execute(_SQL, _row(device, i))
+            except Exception as err:  # pragma: no cover - the assertion below reports it
+                errors.append(err)
+
+        threads = [threading.Thread(target=writer, args=(d,)) for d in ("chipA", "chipB")]
+        for t in threads:
+            t.start()
+        reader = DataStore(root)  # a third session lands mid-bootstrap: the viewer
+        for t in threads:
+            t.join()
+
+        assert errors == [], f"trial {trial}"
+        # nobody's rows went down with a dropped table
+        assert len(reader.find_runs(device="chipA", limit=1000)) == 30, f"trial {trial}"
+        assert len(reader.find_runs(device="chipB", limit=1000)) == 30, f"trial {trial}"
+        with reader._connect() as db:
+            version = db.execute(
+                "SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+        assert version is not None, f"trial {trial}"  # the stamp the staleness check reads

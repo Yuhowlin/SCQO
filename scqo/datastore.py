@@ -81,7 +81,11 @@ CAMPAIGN_REPEATS_FILE = "repeats.jsonl"  # append-only per-repeat skeleton besid
 # values, URL query params and path segments — keep them plain.
 SLUG_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
-_SCHEMA = """
+# One statement per entry, NOT one script: `executescript` force-commits any open
+# transaction before it runs, and the bootstrap below must stay inside one (see
+# `_create_schema`). Keep them individually executable — no multi-statement entries.
+_SCHEMA = (
+    """
 CREATE TABLE IF NOT EXISTS runs (
   run_id         TEXT NOT NULL,
   started_at     TEXT NOT NULL,
@@ -110,20 +114,25 @@ CREATE TABLE IF NOT EXISTS runs (
   schema_version INTEGER NOT NULL DEFAULT 1,
   PRIMARY KEY (run_id, device)
 );
-CREATE INDEX IF NOT EXISTS idx_runs_experiment ON runs(experiment);
-CREATE INDEX IF NOT EXISTS idx_runs_started    ON runs(started_at);
-DROP INDEX IF EXISTS idx_runs_device;  -- superseded by the composite below
--- Device-scoped, newest-first pages walk this index and read only the LIMIT rows:
--- O(limit) regardless of how many runs THIS or any other sample has accumulated.
+""",
+    "CREATE INDEX IF NOT EXISTS idx_runs_experiment ON runs(experiment);",
+    "CREATE INDEX IF NOT EXISTS idx_runs_started    ON runs(started_at);",
+    "DROP INDEX IF EXISTS idx_runs_device;",  # superseded by the composite below
+    # Device-scoped, newest-first pages walk this index and read only the LIMIT rows:
+    # O(limit) regardless of how many runs THIS or any other sample has accumulated.
+    """
 CREATE INDEX IF NOT EXISTS idx_runs_device_started
   ON runs(device, started_at DESC, run_id DESC);
--- A campaign's children in EXECUTION order, O(children) not O(table). This is why
--- membership is an indexed COLUMN and not a `campaign:<id>` tag: a tag filter is an
--- unindexed json_each scan, and a second grouping mechanism can disagree with this one.
+""",
+    # A campaign's children in EXECUTION order, O(children) not O(table). This is why
+    # membership is an indexed COLUMN and not a `campaign:<id>` tag: a tag filter is an
+    # unindexed json_each scan, and a second grouping mechanism can disagree with this one.
+    """
 CREATE INDEX IF NOT EXISTS idx_runs_campaign
   ON runs(campaign, repeat_idx, step_idx);
-CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
-
+""",
+    "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);",
+    """
 -- One row per campaign. Mirrors `runs`: PK (id, device) and a composite
 -- device-scoped index, for the same reason (one data_root, many samples).
 -- No run_ids column — idx_runs_campaign already answers "which runs", in order,
@@ -153,9 +162,12 @@ CREATE TABLE IF NOT EXISTS campaigns (
   schema_version INTEGER NOT NULL DEFAULT 1,
   PRIMARY KEY (campaign_id, device)
 );
+""",
+    """
 CREATE INDEX IF NOT EXISTS idx_campaigns_device_started
   ON campaigns(device, started_at DESC, campaign_id DESC);
-"""
+""",
+)
 
 
 class RunRecord(BaseModel):
@@ -263,19 +275,40 @@ class DataStore:
         # ("no such column: campaign") before any version check could fire. The index
         # is only a cache, so a stale version drops the tables outright and the
         # rebuild below repopulates them from the run folders.
-        with self._connect() as db:
+        #
+        # EXCLUSIVE, because that read decides a DROP. Two sessions opening one
+        # data_root at once (two students, two samples) otherwise interleave: the
+        # second reads a HALF-BOOTSTRAPPED index — `runs` created, its version row not
+        # yet committed — which is byte-for-byte the signature of a pre-meta layout.
+        # It then drops the table out from under the first, whose next INSERT dies with
+        # "no such table: runs", or (worse, silently) whose already-written rows go with
+        # it. One transaction publishes the tables and the version row together, so that
+        # in-between state is never observable and the verdict is never bogus.
+        with self._connect(exclusive=True) as db:
             db.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
             stale = self._stale_layout(db)
             if stale:
                 db.execute("DROP TABLE IF EXISTS runs")
                 db.execute("DROP TABLE IF EXISTS campaigns")
-            db.executescript(_SCHEMA)
-            db.execute(
-                "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
-                (str(SCHEMA_VERSION),),
-            )
+            self._create_schema(db)
         if stale:
             self.reindex()
+
+    @staticmethod
+    def _create_schema(db: sqlite3.Connection) -> None:
+        """Create the tables/indexes and stamp the version — one unit, one transaction.
+
+        The version row must land WITH the tables, never after them in a transaction of
+        its own: :meth:`_stale_layout` reads its absence as "an index old enough to
+        predate the meta row", so a committed `runs` without one is a false stale
+        verdict — and a stale verdict drops the table. Caller supplies the transaction.
+        """
+        for statement in _SCHEMA:
+            db.execute(statement)
+        db.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
+            (str(SCHEMA_VERSION),),
+        )
 
     @staticmethod
     def _stale_layout(db: sqlite3.Connection) -> bool:
@@ -853,14 +886,14 @@ class DataStore:
         skipped with a warning; unreadable records are skipped likewise, never fatal.
         """
         count = 0
-        with self._connect() as db:
+        # EXCLUSIVE for the same reason as the bootstrap, plus one of its own: between
+        # the DROP and the last re-INSERT the index is empty, and a concurrent writer
+        # must not be able to see (or write into) that hole. It costs no extra lock
+        # time — the row-by-row rebuild below already ran in one write transaction.
+        with self._connect(exclusive=True) as db:
             db.execute("DROP TABLE IF EXISTS runs")
             db.execute("DROP TABLE IF EXISTS campaigns")
-            db.executescript(_SCHEMA)
-            db.execute(
-                "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
-                (str(SCHEMA_VERSION),),
-            )
+            self._create_schema(db)
             for record_path in sorted(self.data_root.glob(f"*/*/*/{RECORD_FILE}")):
                 run_dir = record_path.parent
                 try:
@@ -896,8 +929,16 @@ class DataStore:
 
     # ----------------------------------------------------------------- internal
     @contextmanager
-    def _connect(self) -> Iterator[sqlite3.Connection]:
-        """Short-lived connection: commit on success, always close (Windows file locks)."""
+    def _connect(self, *, exclusive: bool = False) -> Iterator[sqlite3.Connection]:
+        """Short-lived connection: commit on success, always close (Windows file locks).
+
+        ``exclusive=True`` runs the body inside one ``BEGIN IMMEDIATE`` write
+        transaction — SQLite's own write lock, honoured across threads AND processes,
+        with other writers waiting out the ``timeout`` below. Schema bootstrap and
+        :meth:`reindex` both need it: each decides on a DROP by READING the index, and
+        that check-then-act is only sound if nobody can write in between. Readers are
+        untouched (WAL) and see the pre-transaction snapshot, never a half-built schema.
+        """
         db = sqlite3.connect(self._db_path, timeout=10)
         db.row_factory = sqlite3.Row
         try:
@@ -905,6 +946,11 @@ class DataStore:
         except sqlite3.OperationalError:
             pass  # e.g. some network filesystems: fall back to the default journal mode
         try:
+            if exclusive:
+                # After the PRAGMA (journal mode cannot change inside a transaction).
+                # Closing without commit rolls the whole thing back, so a bootstrap that
+                # raises leaves no half schema behind for the next session to misread.
+                db.execute("BEGIN IMMEDIATE")
             yield db
             db.commit()
         finally:
