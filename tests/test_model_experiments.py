@@ -512,3 +512,22 @@ def test_parity_switch_two_stage_chain(tmp_path):
     assert fit["idle_time_ns"] == pytest.approx(
         max(16.0, round(1e9 / (2.0 * delta) / 4.0) * 4.0))
     assert s.physical_state()["q0"]["parity_rate_hz"] is not None
+
+
+def test_parity_switch_reports_the_odd_fraction(session):
+    """p_odd explains a FAILED run whose fit otherwise looks healthy, so it has
+    to reach the run record.
+
+    The simulator plants p_flip in (0.002, 0.01), but READOUT ERROR dominates
+    the observed value: the blobs sit 4 sigma apart, so ~2.3% of shots are
+    misassigned and each one fakes two flips, contributing ~0.046 on its own.
+    That is the real experiment's behaviour too (which is exactly why the
+    counted fraction is a diagnostic and the PSD knee is the measurement), and
+    it is still an order of magnitude under scqat's 0.4 refusal."""
+    out = session.run("qubit_parity_switch", {"targets": ["q0"]}, update="none")
+    assert out.get("error") is None, out.get("error")
+    fit = out["fit"]["q0"]
+    assert 0.0 < fit["p_odd"] < 0.1
+    assert fit["p_odd"] == pytest.approx(
+        fit["n_transitions"] / (100000 - 1), rel=1e-6)
+    assert out["outcomes"]["q0"] == "successful"
