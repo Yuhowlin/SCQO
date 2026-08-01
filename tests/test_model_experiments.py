@@ -594,3 +594,49 @@ def test_parity_switch_reports_the_spectral_reach(session):
     assert fit["corner_margin_low"] == pytest.approx(
         fit["psd_corner_hz"] / fit["psd_freq_min_hz"], rel=1e-6)
     assert fit["psd_contrast"] > 3.0          # the gate that replaced p_switch
+
+
+def test_parity_switch_idle_multiple_stretches_the_derived_idle(session):
+    """idle = N / (2 x parity_delta_f_hz). The seeded 250 kHz gives a 2000 ns
+    base, so N=3 must play 6000 ns."""
+    out = session.run("qubit_parity_switch",
+                      {"targets": ["q0"], "idle_multiple": 3,
+                       "max_derived_idle_ns": 100000.0}, update="none")
+    assert out.get("error") is None, out.get("error")
+    fit = out["fit"]["q0"]
+    assert fit["idle_time_ns"] == pytest.approx(6000.0)
+    assert fit["idle_multiple"] == 3
+
+
+def test_parity_switch_explicit_idle_is_not_multiplied(session):
+    """idle_time_ns is the escape hatch: it wins outright, so idle_multiple
+    must NOT scale it (silently tripling an explicit request would be the worst
+    kind of surprise)."""
+    out = session.run("qubit_parity_switch",
+                      {"targets": ["q0"], "idle_time_ns": 1000.0,
+                       "idle_multiple": 5}, update="none")
+    assert out.get("error") is None, out.get("error")
+    assert out["fit"]["q0"]["idle_time_ns"] == pytest.approx(1000.0)
+
+
+def test_parity_switch_even_idle_multiple_warns_but_runs(session):
+    """Even N puts both parities on the same pole (sin(N pi/2) == 0), so the
+    run carries no signal. The user asked for it to be allowed, so it must warn
+    loudly rather than refuse -- and then fail honestly in the fit."""
+    with pytest.warns(UserWarning, match="EVEN"):
+        out = session.run("qubit_parity_switch",
+                          {"targets": ["q0"], "idle_multiple": 2,
+                           "max_derived_idle_ns": 100000.0}, update="none")
+    assert out.get("error") is None, out.get("error")
+    assert out["fit"]["q0"]["idle_time_ns"] == pytest.approx(4000.0)
+
+
+def test_parity_switch_ceiling_names_the_multiple(session):
+    """Two faults reach the same ceiling and need different remedies: here the
+    BASE is fine and only the multiple pushed it over, so the message must say
+    so instead of blaming a stale splitting."""
+    out = session.run("qubit_parity_switch",
+                      {"targets": ["q0"], "idle_multiple": 21})
+    err = str(out.get("error"))
+    assert "idle_multiple" in err
+    assert "base" in err.lower()
