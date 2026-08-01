@@ -217,9 +217,13 @@ class QubitParitySwitchResult(Result):
     the diagnostics ``n_parity_switches``, ``p_switch`` (fraction of
     consecutive PARITY samples that differ — 0.5 means they are independent and
     NO rate is recoverable) and ``p_parity_odd`` (how often the chip sits in the
-    odd parity; ~0.5 is HEALTHY and carries no rate information), and the timing
-    provenance ``shot_period_s`` / ``idle_time_ns`` / ``parity_delta_f_hz``
-    (NaN when the idle was overridden)."""
+    odd parity; ~0.5 is HEALTHY and carries no rate information), the sequence
+    mapping fidelity read two independent ways off the SAME Lorentzian
+    (``mapping_fidelity`` from the plateau, ``mapping_fidelity_floor`` from the
+    floor, and their ``mapping_fidelity_ratio`` — near 1 the model fits the
+    data, well below 1 it does not), and the timing provenance
+    ``shot_period_s`` / ``idle_time_ns`` / ``idle_multiple`` /
+    ``parity_delta_f_hz`` (NaN when the idle was overridden)."""
 
 
 @register
@@ -507,8 +511,10 @@ class QubitParitySwitch(Experiment):
                 # the PARITY's own switch count and fraction (not the readout's)
                 "n_parity_switches": int(r.get("n_transitions", 0)),
                 # p_switch saturates at 0.5, where consecutive parity samples
-                # are independent and no rate exists; scqat refuses above 0.4,
-                # so this explains a FAILED run whose fit looked healthy.
+                # are independent and no rate exists. REPORTED ONLY — it does
+                # not gate anything: any shot-to-shot noise drives it toward 0.5
+                # whether or not a knee exists, and a clean chipA fit sat at
+                # 0.294. The gate is psd_contrast below.
                 "p_switch": float(r.get("p_switch", nan)),
                 # how often the chip sits in the odd parity. ~0.5 is HEALTHY and
                 # carries no rate information — do not confuse it with p_switch.
@@ -521,6 +527,18 @@ class QubitParitySwitch(Experiment):
                 "psd_freq_min_hz": float(r.get("psd_freq_min_hz", nan)),
                 "psd_contrast": float(r.get("psd_contrast", nan)),
                 "corner_margin_low": float(r.get("corner_margin_low", nan)),
+                # the SAME Lorentzian read in the reference variables
+                # 4F^2*G/((2G)^2+(2pi f)^2) + (1-F^2)*dt: the plateau and the
+                # floor each give the sequence mapping fidelity F on their own.
+                # Their RATIO is the diagnostic — near 1 the model describes the
+                # data, well below 1 it does not, which is the readable symptom
+                # of the correlated readout error that also inflates the rate.
+                # psd_contrast cannot see that failure. Reported, never gated.
+                "mapping_fidelity": float(r.get("mapping_fidelity", nan)),
+                "mapping_fidelity_floor": float(
+                    r.get("mapping_fidelity_floor", nan)),
+                "mapping_fidelity_ratio": float(
+                    r.get("mapping_fidelity_ratio", nan)),
                 # timing provenance, from the acquisition-time snapshot
                 "shot_period_s": dt,
                 "record_time_s": self._acquired("record_time_s", qubit),
@@ -533,10 +551,11 @@ class QubitParitySwitch(Experiment):
                 fit["outlier_probability"] = float(r["outlier_probability"])
             result.fit[qubit] = fit
             # A trustworthy rate: the knee fit converged inside the spectral
-            # window AND the consecutive shots were actually correlated (scqat
-            # refuses p_switch > 0.4 — see its telegraph_psd docstring), and the
-            # trace toggled (a pinned occupancy means no telegraph — wrong idle
-            # time, wrong centers, or no switching resolved at this cadence).
+            # window AND there was a real knee rather than a curve through noise
+            # (scqat gates on the plateau-to-floor contrast — see its
+            # telegraph_psd docstring), and the parity toggled (a pinned
+            # occupancy means no telegraph — wrong idle time, wrong centers, or
+            # no switching resolved at this cadence).
             ok = (bool(r.get("success")) and np.isfinite(rate)
                   and 0.0 < rate < 0.5 / dt and 0.02 < p_parity_odd < 0.98)
             result.outcomes[qubit] = Outcome.SUCCESSFUL if ok else Outcome.FAILED
