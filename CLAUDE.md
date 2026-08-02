@@ -267,7 +267,9 @@ scqo/
                                 #   written absolute = old + fitted). QM-only probe today
     pair_swap_chevron.py        # single-excitation swap chevron: flux amplitude (absolute V) x
                                 #   pulse duration on one member's flux line - record-only 2D map
-    pair_swap_flux_map.py       # fixed-duration coupler-flux x member-flux swap spot - record-only.
+                                #   (scqat estimator draws the raw joint populations; no writeback)
+    pair_swap_flux_map.py       # fixed-duration coupler-flux x member-flux swap spot - record-only
+                                #   (same raw-population map estimator in scqat).
                                 #   Both precede pair_zz_coupler at bring-up: find where the pair
                                 #   swaps, then where it decouples
     pair_zz_coupler.py          # residual ZZ vs coupler bias (echo fringe per bias) -> idle_flux

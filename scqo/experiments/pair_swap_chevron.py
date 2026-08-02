@@ -9,11 +9,12 @@ both the resonance amplitude and the full-swap time — the bring-up predecessor
 to :mod:`scqo.experiments.pair_zz_coupler` (find the swap point, then the
 decouple point).
 
-RECORD-ONLY. There is no ``update()`` and nothing lands on the device surface;
-the per-map summary lives in ``result.fit``. There is also no scqat estimator
-yet, so these runs persist their dataset and result but write NO analysis
-artifacts — the viewer's artifact panel is empty for them by design, not by
-failure.
+RECORD-ONLY for the DEVICE: there is no ``update()`` and nothing lands on the
+device surface; the per-map summary lives in ``result.fit``. A scqat estimator
+(``pair_swap_chevron``) now draws the raw joint state populations — a per-pair
+2x2 population figure plus plotdata/metadata under ``analysis/<pair>/`` — but it
+only VISUALIZES the maps and proposes nothing; the SUCCESS verdict
+(``min_transfer``) is made here in ``estimate()``, not by the estimator.
 """
 
 from __future__ import annotations
@@ -169,6 +170,15 @@ class PairSwapChevron(Experiment):
     def estimate(self) -> PairSwapChevronResult:
         assert self.dataset is not None, "run() populates self.dataset before estimate()"
         ds = self.dataset.transpose("target", "flux_amp_v", "swap_time_ns")
+        # Raw joint-state-population maps -> scqat artifacts (figure + plotdata +
+        # metadata, one folder per pair). Record-only: the SUCCESS verdict below
+        # (min_transfer) stays here; the estimator only draws the populations.
+        from scqat.estimators.pair_swap_chevron import PairSwapChevronEstimator
+        from .._scqat import per_qubit_results
+
+        per_qubit_results(ds, PairSwapChevronEstimator(), artifact_dir=self.artifact_dir,
+                          drive_side=self.params.drive_side, flux_side=self.params.flux_side,
+                          per_target_kwargs=_role_names(self.device, self.params.targets))
         result = PairSwapChevronResult()
         for pair in self.params.targets:
             fit, ok = summarize_transfer_map(
@@ -255,3 +265,23 @@ def _flux_member_problems(roster, targets, why: str) -> list[str]:
         elif not any((m, "flux") in roster.defaults for m in members):
             problems.append(f"{pair}: neither member has a flux channel — {why}")
     return problems
+
+
+def _role_names(device, targets) -> dict[str, dict[str, str]]:
+    """Per-pair ``{"high_name", "low_name"}`` from the roster so the estimator
+    labels the figure with the ACTUAL member qubit names (q0/q1) instead of the
+    high/low roles. Falls back to the role words when the mapping is unavailable
+    (no device/roster, or a pair that declares no members) so plotting never
+    depends on it."""
+    roster = getattr(device, "roster", None)
+    out: dict[str, dict[str, str]] = {}
+    for pair in targets:
+        roles = getattr(roster.entities.get(pair), "roles", {}) if roster is not None else {}
+        roles = roles or {}
+        hi = roles.get("high", ())
+        lo = roles.get("low", ())
+        out[pair] = {
+            "high_name": hi[0] if hi else "high",
+            "low_name": lo[0] if lo else "low",
+        }
+    return out

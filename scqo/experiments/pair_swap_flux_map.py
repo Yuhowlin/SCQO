@@ -7,8 +7,10 @@ Excite one member, play both flux pulses over the same window, read both members
 out jointly. At a fixed time the transfer draws closed contours, so the map
 shows the swap **spot** on the resonance line and how the coupler bias moves it.
 
-RECORD-ONLY, exactly like the chevron: no ``update()``, nothing on the device
-surface, no scqat artifacts. See that module's docstring for the rationale.
+RECORD-ONLY for the DEVICE, exactly like the chevron: no ``update()``, nothing on
+the device surface. A scqat estimator (``pair_swap_flux_map``) draws the raw joint
+state populations (a per-pair 2x2 population figure + plotdata/metadata under
+``analysis/<pair>/``); see that module's docstring for the rationale.
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ from .pair_swap_chevron import (
     DRIVE_SIDE_DESC,
     MIN_TRANSFER_DESC,
     _flux_member_problems,
+    _role_names,
     _role_populations,
     summarize_transfer_map,
 )
@@ -173,6 +176,15 @@ class PairSwapFluxMap(Experiment):
     def estimate(self) -> PairSwapFluxMapResult:
         assert self.dataset is not None, "run() populates self.dataset before estimate()"
         ds = self.dataset.transpose("target", "qubit_flux_v", "coupler_flux_v")
+        # Raw joint-state-population maps -> scqat artifacts (figure + plotdata +
+        # metadata, one folder per pair). Record-only: the SUCCESS verdict below
+        # (min_transfer) stays here; the estimator only draws the populations.
+        from scqat.estimators.pair_swap_flux_map import PairSwapFluxMapEstimator
+        from .._scqat import per_qubit_results
+
+        per_qubit_results(ds, PairSwapFluxMapEstimator(), artifact_dir=self.artifact_dir,
+                          drive_side=self.params.drive_side, flux_side=self.params.flux_side,
+                          per_target_kwargs=_role_names(self.device, self.params.targets))
         # the driver stashes the QUANTIZED duration it actually played; fall back
         # to what was asked for when no driver ran (simulated backend).
         played = getattr(self, "_flux_time_ns", None)
