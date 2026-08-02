@@ -9,6 +9,7 @@ gains a method axis.
 
 from typing import get_args
 
+from scqo.experiments.qubit_parity_switch import QubitParitySwitchParameters
 from scqo.experiments.qubit_ramsey import QubitRamseyParameters
 from scqo.experiments.resonator_spectroscopy import ResonatorSpectroscopyParameters
 from scqo.experiments.resonator_spectroscopy_flux import ResonatorSpectroscopyFluxParameters
@@ -52,3 +53,11 @@ def test_ramsey_model_matches_registry():
     from scqat.tools.ramsey_fit import RAMSEY_MODELS
 
     assert _literal_values(QubitRamseyParameters, "ramsey_model") - {"auto"} == set(RAMSEY_MODELS)
+
+
+def test_parity_psd_model_matches_registry():
+    # no SCQO-only value here (unlike ramsey's "auto") — the psd_model Literal is
+    # exactly the two telegraph fit models.
+    from scqat.tools.telegraph_psd import TELEGRAPH_MODELS
+
+    assert _literal_values(QubitParitySwitchParameters, "psd_model") == set(TELEGRAPH_MODELS)

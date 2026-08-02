@@ -62,6 +62,14 @@ EXPECTED_TAGS = {
     "qubit_power_rabi": ["state_readout", "qubit_reset", "amplitude"],
     "qubit_deterministic_benchmarking": ["state_readout", "qubit_reset", "amplitude"],
     "qubit_sqrb": ["state_readout", "qubit_reset"],
+    # cryoscope: state_readout + qubit_reset, but NO flux tag — the flux-pulse
+    # amplitude is a scalar parameter, not a swept window, so it does not
+    # subclass the flux mixins; the swept axis is the pulse duration.
+    "qubit_cryoscope": ["state_readout", "qubit_reset"],
+    # xyz delay: like cryoscope, NO flux tag — the Z pulse amplitude (z_pulse_amp_v)
+    # is a scalar parameter, not a swept flux window, so it does not subclass the
+    # flux mixins; the swept axes are prepared_state and the relative XY/Z timing.
+    "qubit_xyz_delay": ["state_readout", "qubit_reset"],
     "qubit_relaxation_flux_pulse": ["state_readout", "flux", "qubit_reset", "flux_pulse"],
     "qubit_echo_flux_pulse": ["state_readout", "flux", "qubit_reset", "flux_pulse"],
     # parity monitor: state_readout only — deliberately NO qubit_reset. The

@@ -99,6 +99,8 @@ def demo_vendor_state(roster: Roster, design: Design) -> dict:
             fields.setdefault("drive_amp", 0.05)
             fields.setdefault("drive_power_dbm", -13.0)
             fields.setdefault("thermalization_time_s", 200e-6)
+            # x180 length — the triangle half-width qubit_xyz_delay's fit needs
+            fields.setdefault("pi_duration_s", 40e-9)
         elif e.kind == "readout":
             fields.setdefault("readout_amp", 0.08)
             fields.setdefault("readout_power_dbm", -30.0)
@@ -106,6 +108,7 @@ def demo_vendor_state(roster: Roster, design: Design) -> dict:
             fields.setdefault("readout_integration_s", 8.0e-7)
         elif e.kind == "flux":
             fields.setdefault("idle_flux", 0.0)
+            fields.setdefault("flux_delay_s", 0.0)
         state[name] = fields
     for name, e in roster.composites().items():
         state[name] = {}

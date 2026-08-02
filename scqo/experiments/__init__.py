@@ -152,6 +152,7 @@ from ._capabilities import (  # noqa: E402
 from .pair_swap_chevron import PairSwapChevron  # noqa: E402
 from .pair_swap_flux_map import PairSwapFluxMap  # noqa: E402
 from .pair_zz_coupler import PairZZCoupler  # noqa: E402
+from .qubit_cryoscope import QubitCryoscope  # noqa: E402
 from .qubit_deterministic_benchmarking import QubitDeterministicBenchmarking  # noqa: E402
 from .qubit_drag_alternating import QubitDragAlternating  # noqa: E402
 from .qubit_drag_equator import QubitDragEquator  # noqa: E402
@@ -171,6 +172,7 @@ from .qubit_spectroscopy_overlap import QubitSpectroscopyOverlap  # noqa: E402
 from .qubit_sqrb import QubitSQRB  # noqa: E402
 from .qubit_thermal_population import QubitThermalPopulation  # noqa: E402
 from .qubit_tomography import QubitTomography  # noqa: E402
+from .qubit_xyz_delay import QubitXyzDelay  # noqa: E402
 from .readout_frequency import ReadoutFrequency  # noqa: E402
 from .readout_power import ReadoutPower  # noqa: E402
 from .resonator_spectroscopy import ResonatorSpectroscopy  # noqa: E402
@@ -188,11 +190,11 @@ __all__ = [
     "catalog", "get", "register",
     "QubitResetParameters", "reset_wait_ns",
     "PairSwapChevron", "PairSwapFluxMap",
-    "PairZZCoupler", "QubitDeterministicBenchmarking", "QubitDragAlternating", "QubitDragEquator", "QubitEcho",
+    "PairZZCoupler", "QubitCryoscope", "QubitDeterministicBenchmarking", "QubitDragAlternating", "QubitDragEquator", "QubitEcho",
     "QubitEchoFluxPulse", "QubitParitySwitch", "QubitPiPulseError", "QubitPowerRabi", "QubitRamsey",
     "QubitRelaxation", "QubitRelaxationFluxPulse", "QubitSQRB",
     "QubitSpectroscopy", "QubitSpectroscopyFluxPulse", "QubitSpectroscopyOverlap",
-    "QubitThermalPopulation", "QubitTomography",
+    "QubitThermalPopulation", "QubitTomography", "QubitXyzDelay",
     "ReadoutFrequency", "ReadoutPower", "ResonatorSpectroscopy",
     "ResonatorSpectroscopyFlux", "ResonatorSpectroscopyPowerAmp",
     "ResonatorSpectroscopyPowerChain", "SingleShotReadout", "SingleShotReadoutGEF",

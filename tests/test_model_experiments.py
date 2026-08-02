@@ -149,6 +149,45 @@ def test_pair_zz_writes_coupler_idle_and_pair_fact(session):
         ("q0_q1_c_z", "idle_flux"), ("q0_q1", "zz_hz")}
 
 
+def test_cryoscope_writes_the_paired_distortion_taps(session):
+    """The cryoscope proposes ONLY the flux channel's paired distortion facts,
+    and the two arrays are proposed with equal length (the paired-array
+    invariant the accept batches together)."""
+    out = session.run("qubit_cryoscope", {"targets": ["q0"]})
+    assert out.get("error") is None, out.get("error")
+    assert {(s["entity"], s["field"]) for s in out["suggestions"]} == {
+        ("q0_z", "distortion_amp"), ("q0_z", "distortion_tau_s")}
+    after = {s["field"]: s["after"] for s in out["suggestions"]}
+    assert len(after["distortion_amp"]) == len(after["distortion_tau_s"]) > 0
+
+
+def test_cryoscope_fit_values_are_physical(session):
+    """The fit carries relative tap amplitudes, positive tau constants in
+    SECONDS, the settled level near 1, and the frame declaration (the excursion
+    rode on the parked bias, 0.0 on the demo device)."""
+    out = session.run("qubit_cryoscope", {"targets": ["q0"]}, update="none")
+    assert out["outcomes"]["q0"] == "successful"
+    fit = out["fit"]["q0"]
+    amps, taus = fit["distortion_amp"], fit["distortion_tau_s"]
+    assert len(amps) == len(taus) == len(fit["distortion_amp"])
+    assert all(math.isfinite(a) for a in amps)
+    assert all(0 < t < 1e-6 for t in taus)  # seconds, sub-microsecond
+    assert fit["a_dc"] == pytest.approx(1.0, abs=0.05)
+    assert fit["old_idle_flux"] == 0.0
+    assert fit["flux_pulse_amp_v"] == pytest.approx(0.1)
+
+
+def test_cryoscope_accept_roundtrips_paired_facts(session):
+    """Accepting lands both arrays on the flux channel with equal length —
+    exercising the per-entity paired batch apply end to end."""
+    out = session.run("qubit_cryoscope", {"targets": ["q1"]})
+    summary = session.accept(out["run_id"])
+    assert not summary["errors"]
+    physical = session.physical_state()["q1_z"]
+    assert physical["distortion_amp"] is not None
+    assert len(physical["distortion_amp"]) == len(physical["distortion_tau_s"]) > 0
+
+
 @pytest.mark.parametrize("name,axes", [
     ("pair_swap_chevron", ("flux_amp_v", "swap_time_ns")),
     ("pair_swap_flux_map", ("qubit_flux_v", "coupler_flux_v")),
@@ -597,11 +636,15 @@ def test_parity_switch_reports_the_spectral_reach(session):
 
 
 def test_parity_switch_reports_the_mapping_fidelity_twice(session):
-    """A and B are the reference model's 4F^2 and (1-F^2)dt terms, so the same
-    fit yields F two independent ways. Both must reach the run record, along
-    with their ratio -- the ratio is the only number that notices the
-    correlated-noise model failure that psd_contrast is blind to."""
-    out = session.run("qubit_parity_switch", {"targets": ["q0"]}, update="none")
+    """Under the INDEPENDENT model, A and B are the reference model's 4F^2 and
+    (1-F^2)dt terms, so the same fit yields F two independent ways. Both must
+    reach the run record with their ratio -- the ratio is the only number that
+    notices the correlated-noise model failure that psd_contrast is blind to.
+    (The default is now 'constrained', where the floor/ratio are NaN; this is
+    the OPT-IN model, so it must be requested by name.)"""
+    out = session.run("qubit_parity_switch",
+                      {"targets": ["q0"], "psd_model": "independent"},
+                      update="none")
     fit = out["fit"]["q0"]
     f_amp = fit["mapping_fidelity"]
     f_floor = fit["mapping_fidelity_floor"]
@@ -616,6 +659,32 @@ def test_parity_switch_reports_the_mapping_fidelity_twice(session):
                                                           rel=1e-6)
     # the offline simulator plants a clean telegraph, so the two must agree
     assert fit["mapping_fidelity_ratio"] == pytest.approx(1.0, abs=0.2)
+
+
+def test_parity_switch_default_model_is_constrained(session):
+    """The DEFAULT run fits the reference single-F model, whose fingerprint is
+    one mapping_fidelity plus NaN for the plateau/floor cross-check (the coupled
+    model cannot produce it) and a finite residual as its quality number. The
+    fitted-model STRING is a string, so it lives in the scqat metadata artifact
+    and the run parameters, not in the float-only fit dict."""
+    out = session.run("qubit_parity_switch", {"targets": ["q0"]}, update="none")
+    fit = out["fit"]["q0"]
+    assert math.isfinite(fit["mapping_fidelity"])          # the single fitted F
+    assert math.isnan(fit["mapping_fidelity_floor"])        # no independent floor
+    assert math.isnan(fit["mapping_fidelity_ratio"])
+    assert math.isfinite(fit["psd_fit_residual"])           # its quality number
+
+
+def test_parity_switch_independent_model_selectable(session):
+    """The opt-in model is reachable by name and still recovers the rate."""
+    base = session.run("qubit_parity_switch", {"targets": ["q0"]}, update="none")
+    indep = session.run("qubit_parity_switch",
+                        {"targets": ["q0"], "psd_model": "independent"},
+                        update="none")
+    assert indep["outcomes"]["q0"] == "successful"
+    # both models see the same planted telegraph, so the rate agrees
+    assert indep["fit"]["q0"]["parity_rate_hz"] == pytest.approx(
+        base["fit"]["q0"]["parity_rate_hz"], rel=0.3)
 
 
 def test_parity_switch_idle_multiple_stretches_the_derived_idle(session):
