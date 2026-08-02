@@ -149,11 +149,11 @@ def test_pair_zz_writes_coupler_idle_and_pair_fact(session):
         ("q0_q1_c_z", "idle_flux"), ("q0_q1", "zz_hz")}
 
 
-def test_cryoscope_writes_the_paired_distortion_taps(session):
+def test_ramsey_cryoscope_writes_the_paired_distortion_taps(session):
     """The cryoscope proposes ONLY the flux channel's paired distortion facts,
     and the two arrays are proposed with equal length (the paired-array
     invariant the accept batches together)."""
-    out = session.run("qubit_cryoscope", {"targets": ["q0"]})
+    out = session.run("qubit_ramsey_cryoscope", {"targets": ["q0"]})
     assert out.get("error") is None, out.get("error")
     assert {(s["entity"], s["field"]) for s in out["suggestions"]} == {
         ("q0_z", "distortion_amp"), ("q0_z", "distortion_tau_s")}
@@ -161,11 +161,11 @@ def test_cryoscope_writes_the_paired_distortion_taps(session):
     assert len(after["distortion_amp"]) == len(after["distortion_tau_s"]) > 0
 
 
-def test_cryoscope_fit_values_are_physical(session):
+def test_ramsey_cryoscope_fit_values_are_physical(session):
     """The fit carries relative tap amplitudes, positive tau constants in
     SECONDS, the settled level near 1, and the frame declaration (the excursion
     rode on the parked bias, 0.0 on the demo device)."""
-    out = session.run("qubit_cryoscope", {"targets": ["q0"]}, update="none")
+    out = session.run("qubit_ramsey_cryoscope", {"targets": ["q0"]}, update="none")
     assert out["outcomes"]["q0"] == "successful"
     fit = out["fit"]["q0"]
     amps, taus = fit["distortion_amp"], fit["distortion_tau_s"]
@@ -177,10 +177,10 @@ def test_cryoscope_fit_values_are_physical(session):
     assert fit["flux_pulse_amp_v"] == pytest.approx(0.1)
 
 
-def test_cryoscope_accept_roundtrips_paired_facts(session):
+def test_ramsey_cryoscope_accept_roundtrips_paired_facts(session):
     """Accepting lands both arrays on the flux channel with equal length —
     exercising the per-entity paired batch apply end to end."""
-    out = session.run("qubit_cryoscope", {"targets": ["q1"]})
+    out = session.run("qubit_ramsey_cryoscope", {"targets": ["q1"]})
     summary = session.accept(out["run_id"])
     assert not summary["errors"]
     physical = session.physical_state()["q1_z"]

@@ -152,7 +152,7 @@ from ._capabilities import (  # noqa: E402
 from .pair_swap_chevron import PairSwapChevron  # noqa: E402
 from .pair_swap_flux_map import PairSwapFluxMap  # noqa: E402
 from .pair_zz_coupler import PairZZCoupler  # noqa: E402
-from .qubit_cryoscope import QubitCryoscope  # noqa: E402
+from .qubit_ramsey_cryoscope import QubitRamseyCryoscope  # noqa: E402
 from .qubit_deterministic_benchmarking import QubitDeterministicBenchmarking  # noqa: E402
 from .qubit_drag_alternating import QubitDragAlternating  # noqa: E402
 from .qubit_drag_equator import QubitDragEquator  # noqa: E402
@@ -190,7 +190,7 @@ __all__ = [
     "catalog", "get", "register",
     "QubitResetParameters", "reset_wait_ns",
     "PairSwapChevron", "PairSwapFluxMap",
-    "PairZZCoupler", "QubitCryoscope", "QubitDeterministicBenchmarking", "QubitDragAlternating", "QubitDragEquator", "QubitEcho",
+    "PairZZCoupler", "QubitRamseyCryoscope", "QubitDeterministicBenchmarking", "QubitDragAlternating", "QubitDragEquator", "QubitEcho",
     "QubitEchoFluxPulse", "QubitParitySwitch", "QubitPiPulseError", "QubitPowerRabi", "QubitRamsey",
     "QubitRelaxation", "QubitRelaxationFluxPulse", "QubitSQRB",
     "QubitSpectroscopy", "QubitSpectroscopyFluxPulse", "QubitSpectroscopyOverlap",

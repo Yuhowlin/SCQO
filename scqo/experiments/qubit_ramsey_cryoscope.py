@@ -1,4 +1,4 @@
-"""Qubit cryoscope — flux-line step response via Ramsey phase tomography.
+"""Qubit Ramsey cryoscope — flux-line step response via Ramsey phase tomography.
 
 Measure the flux line's transient (step) response so its distortions can be
 compensated. The probe plays a flux pulse of swept DURATION inside a Ramsey
@@ -55,7 +55,7 @@ DURATION_AXIS = "duration_ns"
 FRAME_AXIS = "frame"
 
 
-class QubitCryoscopeParameters(
+class QubitRamseyCryoscopeParameters(
     TargetSelection, AveragingParameters, StateReadoutParameters, QubitResetParameters
 ):
     """Parameters for the cryoscope (flux-line step response)."""
@@ -106,7 +106,7 @@ class QubitCryoscopeParameters(
         return value
 
 
-class QubitCryoscopeResult(Result):
+class QubitRamseyCryoscopeResult(Result):
     """Fitted step-response results.
 
     ``fit[target]``: the paired tap arrays ``distortion_amp`` (relative,
@@ -117,10 +117,10 @@ class QubitCryoscopeResult(Result):
 
 
 @register
-class QubitCryoscope(Experiment):
+class QubitRamseyCryoscope(Experiment):
     """Measure the flux-line step response and propose predistortion taps."""
 
-    name: ClassVar[str] = "qubit_cryoscope"
+    name: ClassVar[str] = "qubit_ramsey_cryoscope"
     description: ClassVar[str] = (
         "Reconstruct the flux line's step response with a Ramsey phase-tomography "
         "sequence — a flux pulse of swept DURATION (1 ns resolution) between two "
@@ -133,8 +133,8 @@ class QubitCryoscope(Experiment):
         "Prerequisite: calibrated x90 (spectroscopy, power_rabi, Ramsey). QM-only "
         "probe today."
     )
-    Parameters: ClassVar[type] = QubitCryoscopeParameters
-    Result: ClassVar[type] = QubitCryoscopeResult
+    Parameters: ClassVar[type] = QubitRamseyCryoscopeParameters
+    Result: ClassVar[type] = QubitRamseyCryoscopeResult
     Contract: ClassVar[DatasetContract] = DatasetContract(
         sweeps=(DURATION_AXIS, FRAME_AXIS),
         sweep_units=("ns", "turn"),
@@ -142,7 +142,7 @@ class QubitCryoscope(Experiment):
         alt_variables=STATE_ALT,
     )
 
-    params: QubitCryoscopeParameters
+    params: QubitRamseyCryoscopeParameters
 
     required_operations: ClassVar[tuple[str, ...]] = ("rx", "readout", "flux_bias")
 
@@ -166,7 +166,7 @@ class QubitCryoscope(Experiment):
         state = np.zeros_like(i_data)
 
         use_state = self.params.use_state_discrimination
-        rng = np.random.default_rng(stable_seed("qubit_cryoscope", *qubits))
+        rng = np.random.default_rng(stable_seed("qubit_ramsey_cryoscope", *qubits))
         dt_s = 1e-9  # the duration axis is whole nanoseconds
         for k in range(n_qubits):
             # physics draws first (the stable-seed draw-order contract), all
@@ -192,11 +192,11 @@ class QubitCryoscope(Experiment):
 
         return readout_vars(use_state, state, i_data, q_data)
 
-    def estimate(self) -> QubitCryoscopeResult:
+    def estimate(self) -> QubitRamseyCryoscopeResult:
         assert self.dataset is not None, "run() populates self.dataset before estimate()"
         # Loud coupling: an under-versioned scqat lacks this module and fails
         # with ImportError here rather than silently reading NaNs downstream.
-        from scqat.estimators.cryoscope import CryoscopeEstimator
+        from scqat.estimators.ramsey_cryoscope import RamseyCryoscopeEstimator
         from .._scqat import per_qubit_results
 
         # scqat's contract: `signal` (or complex I/Q) + coords `duration` (s) &
@@ -208,12 +208,12 @@ class QubitCryoscope(Experiment):
 
         results = per_qubit_results(
             prepared,
-            CryoscopeEstimator(),
+            RamseyCryoscopeEstimator(),
             artifact_dir=self.artifact_dir,
             start_fractions=list(self.params.fit_start_fractions),
         )
 
-        result = QubitCryoscopeResult()
+        result = QubitRamseyCryoscopeResult()
         for qubit in self.params.targets:
             r = results[qubit]
             a_dc = float(r["a_dc"])
