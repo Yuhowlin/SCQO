@@ -636,11 +636,15 @@ def test_parity_switch_reports_the_spectral_reach(session):
 
 
 def test_parity_switch_reports_the_mapping_fidelity_twice(session):
-    """A and B are the reference model's 4F^2 and (1-F^2)dt terms, so the same
-    fit yields F two independent ways. Both must reach the run record, along
-    with their ratio -- the ratio is the only number that notices the
-    correlated-noise model failure that psd_contrast is blind to."""
-    out = session.run("qubit_parity_switch", {"targets": ["q0"]}, update="none")
+    """Under the INDEPENDENT model, A and B are the reference model's 4F^2 and
+    (1-F^2)dt terms, so the same fit yields F two independent ways. Both must
+    reach the run record with their ratio -- the ratio is the only number that
+    notices the correlated-noise model failure that psd_contrast is blind to.
+    (The default is now 'constrained', where the floor/ratio are NaN; this is
+    the OPT-IN model, so it must be requested by name.)"""
+    out = session.run("qubit_parity_switch",
+                      {"targets": ["q0"], "psd_model": "independent"},
+                      update="none")
     fit = out["fit"]["q0"]
     f_amp = fit["mapping_fidelity"]
     f_floor = fit["mapping_fidelity_floor"]
@@ -655,6 +659,32 @@ def test_parity_switch_reports_the_mapping_fidelity_twice(session):
                                                           rel=1e-6)
     # the offline simulator plants a clean telegraph, so the two must agree
     assert fit["mapping_fidelity_ratio"] == pytest.approx(1.0, abs=0.2)
+
+
+def test_parity_switch_default_model_is_constrained(session):
+    """The DEFAULT run fits the reference single-F model, whose fingerprint is
+    one mapping_fidelity plus NaN for the plateau/floor cross-check (the coupled
+    model cannot produce it) and a finite residual as its quality number. The
+    fitted-model STRING is a string, so it lives in the scqat metadata artifact
+    and the run parameters, not in the float-only fit dict."""
+    out = session.run("qubit_parity_switch", {"targets": ["q0"]}, update="none")
+    fit = out["fit"]["q0"]
+    assert math.isfinite(fit["mapping_fidelity"])          # the single fitted F
+    assert math.isnan(fit["mapping_fidelity_floor"])        # no independent floor
+    assert math.isnan(fit["mapping_fidelity_ratio"])
+    assert math.isfinite(fit["psd_fit_residual"])           # its quality number
+
+
+def test_parity_switch_independent_model_selectable(session):
+    """The opt-in model is reachable by name and still recovers the rate."""
+    base = session.run("qubit_parity_switch", {"targets": ["q0"]}, update="none")
+    indep = session.run("qubit_parity_switch",
+                        {"targets": ["q0"], "psd_model": "independent"},
+                        update="none")
+    assert indep["outcomes"]["q0"] == "successful"
+    # both models see the same planted telegraph, so the rate agrees
+    assert indep["fit"]["q0"]["parity_rate_hz"] == pytest.approx(
+        base["fit"]["q0"]["parity_rate_hz"], rel=0.3)
 
 
 def test_parity_switch_idle_multiple_stretches_the_derived_idle(session):

@@ -69,7 +69,7 @@ from __future__ import annotations
 
 import math
 import warnings
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 import numpy as np
 from pydantic import Field
@@ -208,6 +208,17 @@ class QubitParitySwitchParameters(TargetSelection, StateReadoutParameters):
                     "explicitly or re-run qubit_ramsey with ramsey_model='beat'.")
     readout_depletion_ns: float | None = Field(
         None, ge=0, description=READOUT_DEPLETION_NS_DESC)
+    psd_model: Literal["constrained", "independent"] = Field(
+        "constrained",
+        description="Which spectrum model the estimator fits the parity PSD with. "
+                    "'constrained' (default) = the reference RTS model "
+                    "F^2 x 4G/((2G)^2+(2 pi f)^2) + (1-F^2) x dt with a SINGLE "
+                    "shared mapping fidelity F and dt FIXED to the scheduled shot "
+                    "period (a 2-parameter fit {F, G}); F is read out directly. "
+                    "'independent' = Lorentzian + FREE constant floor (3 params), "
+                    "which yields the fidelity twice — from the plateau and the "
+                    "floor — plus their ratio as a model-consistency check. The "
+                    "selected model's rate is what writes back to parity_rate_hz.")
 
 
 class QubitParitySwitchResult(Result):
@@ -217,12 +228,13 @@ class QubitParitySwitchResult(Result):
     the diagnostics ``n_parity_switches``, ``p_switch`` (fraction of
     consecutive PARITY samples that differ — 0.5 means they are independent and
     NO rate is recoverable) and ``p_parity_odd`` (how often the chip sits in the
-    odd parity; ~0.5 is HEALTHY and carries no rate information), the sequence
-    mapping fidelity read two independent ways off the SAME Lorentzian
-    (``mapping_fidelity`` from the plateau, ``mapping_fidelity_floor`` from the
-    floor, and their ``mapping_fidelity_ratio`` — near 1 the model fits the
-    data, well below 1 it does not), and the timing provenance
-    ``shot_period_s`` / ``idle_time_ns`` / ``idle_multiple`` /
+    odd parity; ~0.5 is HEALTHY and carries no rate information), the spectrum
+    fit residual ``psd_fit_residual``, the sequence mapping fidelity
+    ``mapping_fidelity`` (the single fitted F under the 'constrained' default;
+    the plateau estimate under 'independent', where ``mapping_fidelity_floor``
+    and ``mapping_fidelity_ratio`` add the floor estimate and the
+    model-consistency check — both NaN under 'constrained'), and the timing
+    provenance ``shot_period_s`` / ``idle_time_ns`` / ``idle_multiple`` /
     ``parity_delta_f_hz`` (NaN when the idle was overridden)."""
 
 
@@ -494,7 +506,8 @@ class QubitParitySwitch(Experiment):
         # so a saved run re-analyzes offline unchanged.
         prepared = self.dataset.transpose("target", "shot_idx")
         results = per_qubit_results(prepared, ParitySwitchEstimator(),
-                                    artifact_dir=self.artifact_dir)
+                                    artifact_dir=self.artifact_dir,
+                                    model=self.params.psd_model)
 
         nan = float("nan")
         result = QubitParitySwitchResult()
@@ -527,13 +540,21 @@ class QubitParitySwitch(Experiment):
                 "psd_freq_min_hz": float(r.get("psd_freq_min_hz", nan)),
                 "psd_contrast": float(r.get("psd_contrast", nan)),
                 "corner_margin_low": float(r.get("corner_margin_low", nan)),
-                # the SAME Lorentzian read in the reference variables
-                # 4F^2*G/((2G)^2+(2pi f)^2) + (1-F^2)*dt: the plateau and the
-                # floor each give the sequence mapping fidelity F on their own.
-                # Their RATIO is the diagnostic — near 1 the model describes the
-                # data, well below 1 it does not, which is the readable symptom
-                # of the correlated readout error that also inflates the rate.
-                # psd_contrast cannot see that failure. Reported, never gated.
+                # log-space RMS residual of the spectrum fit — the constrained
+                # model's own fit-quality number, since it has no plateau/floor
+                # ratio. (Which model was fitted, psd_model, is a STRING and so
+                # stays in the scqat metadata artifact + the run parameters, not
+                # here — Result.fit is a float-only surface, like state_source.)
+                "psd_fit_residual": float(r.get("psd_fit_residual", nan)),
+                # the sequence mapping fidelity F. Under psd_model='constrained'
+                # (default) this is the single fitted F and the floor/ratio below
+                # are NaN (the model couples plateau and floor by construction).
+                # Under psd_model='independent' F is read TWICE — plateau
+                # (mapping_fidelity) and floor (mapping_fidelity_floor) — and
+                # their RATIO is the diagnostic: near 1 the Lorentzian+white-floor
+                # model fits, well below 1 it does not (the readable symptom of
+                # the correlated readout error that also inflates the rate, which
+                # psd_contrast is blind to). Reported, never gated.
                 "mapping_fidelity": float(r.get("mapping_fidelity", nan)),
                 "mapping_fidelity_floor": float(
                     r.get("mapping_fidelity_floor", nan)),
