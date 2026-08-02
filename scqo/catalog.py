@@ -460,6 +460,14 @@ CHANNELS: dict[str, ChannelKind] = {
                 "also the ORIGIN a '_pulse' flux experiment's swept window is "
                 "measured from (its probe plays on top of this bias).",
                 role="knob", portable=False),
+            "flux_delay_s": FieldSpec(
+                "s", "Output-path delay of this flux line relative to the target's "
+                     "drive line, calibrated by qubit_xyz_delay so a Z pulse and "
+                     "the XY drive it accompanies arrive together. The vendor "
+                     "realization may be PORT-level (shared by everything on that "
+                     "DAC output), so it is per-line, not per-gate; a driver with "
+                     "no line-delay knob declares it Unrealized.",
+                role="knob", portable=False),
             "flux_offset": FieldSpec(
                 "source-native", "Sweet-spot offset of the transfer function "
                                  "flux/Phi0 = (x - flux_offset)/flux_per_phi0, "

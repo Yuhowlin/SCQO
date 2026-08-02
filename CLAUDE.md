@@ -261,6 +261,10 @@ scqo/
     qubit_echo_flux_pulse.py    # T2_echo vs swept z PULSE (idle-relative) - record-only
     qubit_sqrb.py               # single-qubit randomized benchmarking - record-only gate fidelities
     qubit_tomography.py         # state tomography (custom contract) - record-only
+    qubit_xyz_delay.py          # slide XY x180 vs same-length Z pulse (prepared_state x
+                                #   relative_time_ns), triangle-overlap fit -> flux_delay_s
+                                #   (flux-channel knob, the line delay vs the drive line;
+                                #   written absolute = old + fitted). QM-only probe today
     pair_swap_chevron.py        # single-excitation swap chevron: flux amplitude (absolute V) x
                                 #   pulse duration on one member's flux line - record-only 2D map
     pair_swap_flux_map.py       # fixed-duration coupler-flux x member-flux swap spot - record-only.
