@@ -165,6 +165,7 @@ from .qubit_ramsey import QubitRamsey  # noqa: E402
 from .qubit_relaxation import QubitRelaxation  # noqa: E402
 from .qubit_relaxation_flux_pulse import QubitRelaxationFluxPulse  # noqa: E402
 from .qubit_spectroscopy import QubitSpectroscopy  # noqa: E402
+from .qubit_spectroscopy_cryoscope import QubitSpectroscopyCryoscope  # noqa: E402
 from .qubit_spectroscopy_flux_pulse import (  # noqa: E402
     QubitSpectroscopyFluxPulse,
 )
@@ -193,7 +194,7 @@ __all__ = [
     "PairZZCoupler", "QubitRamseyCryoscope", "QubitDeterministicBenchmarking", "QubitDragAlternating", "QubitDragEquator", "QubitEcho",
     "QubitEchoFluxPulse", "QubitParitySwitch", "QubitPiPulseError", "QubitPowerRabi", "QubitRamsey",
     "QubitRelaxation", "QubitRelaxationFluxPulse", "QubitSQRB",
-    "QubitSpectroscopy", "QubitSpectroscopyFluxPulse", "QubitSpectroscopyOverlap",
+    "QubitSpectroscopy", "QubitSpectroscopyCryoscope", "QubitSpectroscopyFluxPulse", "QubitSpectroscopyOverlap",
     "QubitThermalPopulation", "QubitTomography", "QubitXyzDelay",
     "ReadoutFrequency", "ReadoutPower", "ResonatorSpectroscopy",
     "ResonatorSpectroscopyFlux", "ResonatorSpectroscopyPowerAmp",

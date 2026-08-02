@@ -188,6 +188,43 @@ def test_ramsey_cryoscope_accept_roundtrips_paired_facts(session):
     assert len(physical["distortion_amp"]) == len(physical["distortion_tau_s"]) > 0
 
 
+def test_spectroscopy_cryoscope_writes_the_paired_distortion_taps(session):
+    """The long-time spectroscopy cryoscope proposes the SAME paired flux-channel
+    distortion facts as the Ramsey one, with equal length."""
+    out = session.run("qubit_spectroscopy_cryoscope", {"targets": ["q0"]})
+    assert out.get("error") is None, out.get("error")
+    assert {(s["entity"], s["field"]) for s in out["suggestions"]} == {
+        ("q0_z", "distortion_amp"), ("q0_z", "distortion_tau_s")}
+    after = {s["field"]: s["after"] for s in out["suggestions"]}
+    assert len(after["distortion_amp"]) == len(after["distortion_tau_s"]) > 0
+
+
+def test_spectroscopy_cryoscope_fit_values_are_physical(session):
+    """Relative tap amplitudes, positive sub-100us tau constants, a nonzero parked
+    center offset, and the frame declaration (excursion rode on the parked bias)."""
+    out = session.run("qubit_spectroscopy_cryoscope", {"targets": ["q0"]}, update="none")
+    assert out["outcomes"]["q0"] == "successful"
+    fit = out["fit"]["q0"]
+    amps, taus = fit["distortion_amp"], fit["distortion_tau_s"]
+    assert len(amps) == len(taus) > 0
+    assert all(math.isfinite(a) for a in amps)
+    assert all(0 < t < 1e-4 for t in taus)  # seconds, sub-100 us (long-time tails)
+    assert fit["center_offset_hz"] != 0.0  # the drive was centered (nominal on demo)
+    assert fit["old_idle_flux"] == 0.0
+    assert fit["flux_pulse_amp_v"] == pytest.approx(0.1)
+
+
+def test_spectroscopy_cryoscope_accept_roundtrips_paired_facts(session):
+    """Accepting lands both arrays on the flux channel with equal length — the same
+    paired batch apply the Ramsey cryoscope uses (REPLACE, last-writer-wins)."""
+    out = session.run("qubit_spectroscopy_cryoscope", {"targets": ["q1"]})
+    summary = session.accept(out["run_id"])
+    assert not summary["errors"]
+    physical = session.physical_state()["q1_z"]
+    assert physical["distortion_amp"] is not None
+    assert len(physical["distortion_amp"]) == len(physical["distortion_tau_s"]) > 0
+
+
 @pytest.mark.parametrize("name,axes", [
     ("pair_swap_chevron", ("flux_amp_v", "swap_time_ns")),
     ("pair_swap_flux_map", ("qubit_flux_v", "coupler_flux_v")),

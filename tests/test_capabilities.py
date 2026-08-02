@@ -66,6 +66,10 @@ EXPECTED_TAGS = {
     # amplitude is a scalar parameter, not a swept window, so it does not
     # subclass the flux mixins; the swept axis is the pulse duration.
     "qubit_ramsey_cryoscope": ["state_readout", "qubit_reset"],
+    # spectroscopy cryoscope: same tags, same reasoning — the flux amplitude is a
+    # scalar parked excursion, not a swept window; the swept axes are the drive
+    # detuning and the (log-spaced) wait time.
+    "qubit_spectroscopy_cryoscope": ["state_readout", "qubit_reset"],
     # xyz delay: like cryoscope, NO flux tag — the Z pulse amplitude (z_pulse_amp_v)
     # is a scalar parameter, not a swept flux window, so it does not subclass the
     # flux mixins; the swept axes are prepared_state and the relative XY/Z timing.
