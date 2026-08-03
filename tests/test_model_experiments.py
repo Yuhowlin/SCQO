@@ -4,6 +4,7 @@ and the re-homed writes of the load-bearing families land on the right
 entities."""
 
 import math
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -223,6 +224,38 @@ def test_spectroscopy_cryoscope_accept_roundtrips_paired_facts(session):
     physical = session.physical_state()["q1_z"]
     assert physical["distortion_amp"] is not None
     assert len(physical["distortion_amp"]) == len(physical["distortion_tau_s"]) > 0
+
+
+def test_spectroscopy_cryoscope_window_and_drive_len_validation():
+    """The detuning window is an explicit [min, max] range (asymmetric allowed,
+    always ascending), and drive_len_ns sits on the 4 ns grid at or above 16 ns.
+    define_sweep reads only params, so a stub backend exercises it."""
+    cls = registry.get("qubit_spectroscopy_cryoscope")
+
+    # the default window reproduces the old symmetric +/-100 MHz, 101 points
+    default = cls(SimpleNamespace(device=None), cls.Parameters(targets=["q0"]))
+    det = default.define_sweep()["detuning_hz"]
+    assert det[0] == pytest.approx(-100e6) and det[-1] == pytest.approx(100e6)
+    assert det.size == 101
+
+    # an asymmetric, one-sided window flows through ascending
+    asym = cls(SimpleNamespace(device=None),
+               cls.Parameters(targets=["q0"], min_detuning_hz=-70e6,
+                              max_detuning_hz=0.0, num_freq_points=71))
+    det = asym.define_sweep()["detuning_hz"]
+    assert det[0] == pytest.approx(-70e6) and det[-1] == pytest.approx(0.0)
+    assert det.size == 71
+    assert np.all(np.diff(det) > 0)  # ascending — peak_fit's gamma bound needs it
+
+    # max must exceed min
+    with pytest.raises(ValueError, match="max_detuning_hz"):
+        cls.Parameters(targets=["q0"], min_detuning_hz=10e6, max_detuning_hz=-10e6)
+
+    # drive_len_ns: at or above the 16 ns floor, on the 4 ns grid
+    with pytest.raises(ValueError):
+        cls.Parameters(targets=["q0"], drive_len_ns=10)   # below the 16 ns floor
+    with pytest.raises(ValueError):
+        cls.Parameters(targets=["q0"], drive_len_ns=18)   # off the 4 ns grid
 
 
 @pytest.mark.parametrize("name,axes", [

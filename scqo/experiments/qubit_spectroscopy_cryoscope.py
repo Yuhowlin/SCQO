@@ -15,8 +15,17 @@ BAND-LIMITED v1: the drive is centered on the arch-predicted parked detuning
 (``resolved_center_offset_hz``, derived from the catalogued arch facts, or a
 nominal fallback), NOT by shifting the LO. It therefore reaches only excursions
 whose detuning stays in the analog band; a gate-sized excursion needs an LO
-shift, which is deferred. The detuning window is a symmetric span around that
-center.
+shift, which is deferred. The detuning window is an explicit ``[min, max]`` range
+relative to that center (ASYMMETRIC allowed — when the centering is imperfect the
+parked line sits systematically to one side, so a one-sided window spends every
+point on signal instead of half on empty detuning).
+
+SPECTROSCOPY DRIVE: the probe plays a long, weak ``saturation`` (square) tone of
+duration ``drive_len_ns`` whose amplitude is auto-scaled to hold the calibrated
+x180 pulse AREA (peak-amplitude x time), so a longer pulse is a proportionally
+weaker one. The line width is then Fourier-limited (FWHM ~ 0.8 / drive_len_ns)
+with little power broadening — the fix for a bare x180's tens-of-MHz line that a
+few-MHz settling tail cannot be tracked against.
 
 FRAME (deliberately NOT a ``_pulse`` experiment): the flux amplitude is a SCALAR
 parameter ``flux_pulse_amp_v`` (volts RELATIVE to idle_flux — the pulse rides on
@@ -91,13 +100,31 @@ class QubitSpectroscopyCryoscopeParameters(
         "the resulting detuning. Band-limited v1: keep it small enough that the "
         "detuning stays in the analog band (no LO shift).",
     )
-    frequency_span_hz: float = Field(
-        200e6, gt=0,
-        description="Total drive-detuning span swept around the arch-predicted "
-        "parked frequency (symmetric). Widen it if the peak is not captured "
-        "(e.g. when the arch facts are unset and the center is only nominal).",
+    min_detuning_hz: float = Field(
+        -100e6,
+        description="LOW edge of the drive-detuning window swept around the "
+        "arch-predicted parked frequency, i.e. relative to the parked drive — the "
+        "spectrogram's y-axis. The window may be ASYMMETRIC: when the centering is "
+        "only nominal (arch facts unset) the parked line is systematically to one "
+        "side, so put the whole window there (e.g. min=-70e6, max=0) instead of "
+        "wasting half the points on empty detuning.",
+    )
+    max_detuning_hz: float = Field(
+        100e6,
+        description="HIGH edge of the drive-detuning window (must exceed "
+        "min_detuning_hz). Relative to the arch-predicted parked drive.",
     )
     num_freq_points: int = Field(101, gt=1, description="Number of detuning points.")
+    drive_len_ns: float = Field(
+        400.0, ge=16, multiple_of=4,
+        description="Duration of the spectroscopy drive pulse, ns (on the 4 ns "
+        "grid). It sets the spectral line width: FWHM ~ 0.8 / drive_len_ns (400 ns "
+        "-> ~2 MHz), so lengthen it to resolve a narrow settling tail. The backend "
+        "auto-scales the drive amplitude to hold the calibrated x180 pulse area, so "
+        "a longer pulse is a proportionally weaker one (little power broadening). "
+        "Wait points shorter than drive_len_ns average the settling over the pulse, "
+        "so keep drive_len_ns well below the tails of interest.",
+    )
     min_wait_ns: int = Field(
         16, ge=16,
         description="Shortest wait into the flux pulse, ns (>= the 16 ns QM floor).",
@@ -120,7 +147,7 @@ class QubitSpectroscopyCryoscopeParameters(
         description="Nominal flux-frequency curvature (Hz per V^2) used to center "
         "the drive when the arch facts (f_q_max_hz, flux_per_phi0) are unset. Only "
         "a rough centering; measure the arch (qubit_spectroscopy_flux_pulse) for an "
-        "accurate one, or widen frequency_span_hz.",
+        "accurate one, or widen the [min_detuning_hz, max_detuning_hz] window.",
     )
     num_averages: int = Field(
         100, gt=0, description="Number of shots to average per sweep point."
@@ -145,11 +172,16 @@ class QubitSpectroscopyCryoscopeParameters(
         return value
 
     @model_validator(mode="after")
-    def _wait_window_orders(self) -> "QubitSpectroscopyCryoscopeParameters":
+    def _windows_order(self) -> "QubitSpectroscopyCryoscopeParameters":
         if self.max_wait_ns <= self.min_wait_ns:
             raise ValueError(
                 f"max_wait_ns ({self.max_wait_ns}) must exceed min_wait_ns "
                 f"({self.min_wait_ns})"
+            )
+        if self.max_detuning_hz <= self.min_detuning_hz:
+            raise ValueError(
+                f"max_detuning_hz ({self.max_detuning_hz}) must exceed "
+                f"min_detuning_hz ({self.min_detuning_hz})"
             )
         return self
 
@@ -230,8 +262,11 @@ class QubitSpectroscopyCryoscope(Experiment):
         return float(quad * self.params.flux_pulse_amp_v ** 2)
 
     def define_sweep(self) -> dict[str, np.ndarray]:
-        span = self.params.frequency_span_hz
-        detuning = np.linspace(-span / 2.0, span / 2.0, self.params.num_freq_points)
+        # ascending window (min -> max); peak_fit's gamma bound assumes ascending.
+        detuning = np.linspace(
+            self.params.min_detuning_hz, self.params.max_detuning_hz,
+            self.params.num_freq_points,
+        )
         wait = _log_time_ns(
             self.params.min_wait_ns, self.params.max_wait_ns, self.params.num_wait_points
         )
