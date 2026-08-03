@@ -161,9 +161,10 @@ not by this file):
 
 Optionally describe each sample in `<data_root>\devices.toml` (one table per chip:
 description and provenance notes — instrument-independent, human-facing only;
-as-designed TARGETS belong in the sample's own design.toml); the viewer's Device
-page shows the matching card. All samples share ONE `data_root` and ONE index —
-filter with `--device` / the viewer's device dropdown.
+as-designed TARGETS belong in the sample's own design.toml); the viewer's Samples
+overview lists every sample, and a sample's page shows the matching card. All
+samples share ONE `data_root` and ONE index — filter with `--device` / the run
+list's device dropdown.
 
 **Moving a sample to the other instrument** (e.g. chipA from Qblox to the OPX1000)
 needs **no data action at all** — the folder, index, history and trends follow the
@@ -725,9 +726,18 @@ The rules that make this safe:
   protects) and the index rebuilds anywhere, so it doesn't even need mirroring.
 - **One authoritative config per server** (the canonical `data_root`). With one
   login account per student, per-user `~\.scqo\config.toml` silently leaves every
-  OTHER account on built-in defaults (simulated, unsaved!) — put the file at a shared
-  path and select it machine-wide instead (admin, once):
-  `[Environment]::SetEnvironmentVariable('SCQO_CONFIG','D:\github\scqo-config.toml','Machine')`.
+  OTHER account on built-in defaults (simulated, unsaved!) — put the file in a small
+  dedicated folder (never inside a user profile, never inside the data_root — a
+  factory reset deletes the data_root wholesale) and select it machine-wide
+  instead (admin, once):
+  `[Environment]::SetEnvironmentVariable('SCQO_CONFIG','D:\scqo\config.toml','Machine')`.
+  The **account model** behind this split: the admin/service account owns the
+  MACHINE wiring (the Machine-scope `SCQO_CONFIG`, the shared config with its
+  `data_root`, the services — viewer, NAS mirror — and the registries); each user
+  account owns only its PERSONAL selection in `~\.scqo\user.toml`, which affects
+  that account's own runs and nothing else. Services read machine wiring only:
+  the viewer takes just `data_root`, so who launches it never changes what it
+  serves — it always lists every sample.
   Personal configs exist only on analysis laptops and point `data_root` at the NAS
   copy — those machines read, never write. In the shared config, leave
   `parameters_file` **unset** so each account keeps its own standing defaults in

@@ -1,7 +1,10 @@
 """``python -m scqo.viewer`` — serve the run-viewer (lab convention: port 8080).
 
-Zero-config: reads data_root/device from the lab config; state files are per SETUP,
-found via each device's cooldown registry (``scqo.datastore.setup_state_path``). Ports:
+Zero-config: reads data_root from the lab config — and ONLY data_root. The viewer
+is a machine-level, account-independent service: the launching account's personal
+``~/.scqo/user.toml`` selection (device/setup) never affects what it serves. State
+files are per SETUP, found via each device's cooldown registry
+(``scqo.datastore.setup_state_path``). Ports:
 8001 qualibrate · 8080 THIS viewer · 8081 datasette (``python -m scqo.browse``).
 """
 
@@ -50,7 +53,7 @@ def main(argv: list[str] | None = None) -> int:
             f'Or install the extras into THIS env:  uv pip install -e "{repo}[viewer]"'
         )
 
-    app = create_app(root, device_name=cfg.device or "device")
+    app = create_app(root)
     shown = "127.0.0.1" if args.host == "0.0.0.0" else args.host
     print(f"SCQO run viewer: http://{shown}:{args.port}  (Ctrl+C to stop)")
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")

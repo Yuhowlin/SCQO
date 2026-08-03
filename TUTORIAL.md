@@ -599,13 +599,19 @@ all can run at once):
   linking the run that superseded it), and the device before → after diff. You can
   **add/remove tags and edit the note right here** — the viewer's only write,
   equivalent to `scqo tag`.
-- **Trends** — a fitted quantity vs time per qubit (`t1_s`, `t2_star_s`, `ej_sum_hz`,
-  `readout_freq_hz`, `pi_amp`, ...): coherence drift at a glance, every point linking
-  to its run.
-- **Device** — the current calibration and the sample's **physical parameters**
-  (`physical.json`): every value links to the run that set it (`(manual)` and
-  `(externally changed)` marked honestly), plus both change histories, each entry
-  linking to the run that caused it.
+- **Trends** — opens with the sample list; pick a sample, then chart a fitted
+  quantity vs time per qubit (`t1_s`, `t2_star_s`, `ej_sum_hz`, `readout_freq_hz`,
+  `pi_amp`, ...): coherence drift at a glance, every point linking to its run. A
+  trend is always scoped to ONE sample — qubit names repeat across chips, so
+  there is no cross-sample union and no silent default.
+- **Samples** — opens with an overview of EVERY sample in the data_root
+  (description, active cooldown, latest run — including freshly added samples
+  with no runs yet); click one for its detail page: the current calibration and
+  the sample's **physical parameters** (`physical.json`), where every value links
+  to the run that set it (`(manual)` and `(externally changed)` marked honestly),
+  plus both change histories, each entry linking to the run that caused it. The
+  viewer is account-independent: it serves the whole lab regardless of who
+  launched it or what their `user.toml` selects.
 
 Power users: `python -m scqo.browse` still serves raw datasette on **8081** for
 ad-hoc SQL, facets and CSV export (same canned queries as before).

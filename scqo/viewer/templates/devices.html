@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Samples{% endblock %}
+{% block content %}
+<h2>Samples</h2>
+{% if picker == "trends" %}
+<p class="muted">Qubit names repeat across chips, so a trend is always scoped to ONE sample — pick it:</p>
+{% endif %}
+{% if samples %}
+<table>
+  <tr><th>sample</th><th>description</th><th>active cooldown</th><th>latest run</th><th>trends</th></tr>
+  {% for s in samples %}
+  <tr>
+    <td><a href="/device?device={{ s.name }}"><b>{{ s.name }}</b></a></td>
+    <td>{{ s.description or "-" }}</td>
+    <td>{% if s.cooldown_error %}<span class="ext">cooldowns.toml error:</span> {{ s.cooldown_error }}
+        {%- elif s.active_cycle %}{{ s.active_cycle }} ({{ s.setup_count }} setup{{ "s" if s.setup_count != 1 else "" }})
+        {%- else %}-{% endif %}</td>
+    <td>{% if s.latest %}<a href="/run/{{ s.latest.run_id }}">{{ s.latest.started_at[:16] }}</a>{% else %}no runs yet{% endif %}</td>
+    <td><a href="/trends?device={{ s.name }}">trends</a></td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p>No samples yet — create one: <code>scqo device add &lt;name&gt;</code>.</p>
+{% endif %}
+<p class="muted">data_root: {{ data_root }}</p>
+{% endblock %}

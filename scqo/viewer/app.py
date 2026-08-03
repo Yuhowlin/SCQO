@@ -24,6 +24,7 @@ from ..datastore import (
     STATE_FILE,
     DataStore,
     active_cooldown,
+    known_devices,
     load_cooldowns,
     load_device_registry,
     setup_scqo_dir,
@@ -40,11 +41,12 @@ from ..report import (
 from ..stores import PHYSICAL_FILE
 
 
-def create_app(
-    data_root: str | Path,
-    device_name: str = "device",
-) -> FastAPI:
-    store = DataStore(data_root, device_name=device_name)
+def create_app(data_root: str | Path) -> FastAPI:
+    # The viewer is a MACHINE-level service: it serves every sample in the
+    # data_root and must never inherit the launching account's personal sample
+    # selection (user.toml). DataStore's device_name is a write-side default the
+    # viewer never exercises — its read/tag paths are run_id- or device-keyed.
+    store = DataStore(data_root)
     templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
     app = FastAPI(title="SCQO run viewer", docs_url=None, redoc_url=None)
 
@@ -106,6 +108,38 @@ def create_app(
         data = (_read_json(scqo_dir / PHYSICAL_FILE) if scqo_dir else None) or {}
         history = _read_history(scqo_dir / PHYSICAL_FILE) if scqo_dir else []
         return live_sources(data.get("values", {}), history)
+
+    def _known_names() -> list[str]:
+        """Every sample this lab knows: indexed runs ∪ registry/cooldowns/folders —
+        a freshly added sample with no runs yet must still appear."""
+        return sorted(set(store.distinct_devices()) | known_devices(store.data_root))
+
+    def _sample_overview() -> list[dict]:
+        """One row per known sample for the bare /device and /trends pickers.
+        Tolerant like device_page: a broken cooldowns.toml becomes an inline
+        per-row error, never a 500. The per-sample find_runs is O(limit) via the
+        composite index, and a lab holds single-digit samples — no caching."""
+        registry = load_device_registry(store.data_root)
+        rows = []
+        for name in _known_names():
+            cooldown_error, cid, setup_count = "", "", 0
+            try:
+                cycles = load_cooldowns(store.data_root, name)
+            except ValueError as err:
+                cycles, cooldown_error = {}, str(err)
+            active = active_cooldown(cycles)
+            if active:
+                cid, setup_count = active[0], len(active[1].get("setup", {}))
+            latest = store.find_runs(device=name, limit=1)
+            entry = registry.get(name)
+            rows.append({
+                "name": name,
+                "description": entry.get("description", "") if isinstance(entry, dict) else "",
+                "active_cycle": cid, "setup_count": setup_count,
+                "cooldown_error": cooldown_error,
+                "latest": latest[0] if latest else None,
+            })
+        return rows
 
     @app.get("/", response_class=HTMLResponse)
     def runs_page(
@@ -249,16 +283,24 @@ def create_app(
 
     @app.get("/trends", response_class=HTMLResponse)
     def trends_page(request: Request, target: str = "q1", quantity: str = "t1_s", device: str = ""):
-        # qubit names repeat across samples ("q1" exists on every chip), so the
-        # trend defaults to the configured device rather than mixing samples.
-        dev = device or device_name
-        rows = store.fit_trend(target, quantity, device=dev) if target and quantity else []
+        # Qubit names repeat across samples ("q1" exists on every chip), so a
+        # trend is ALWAYS explicitly device-scoped — never a launcher-account
+        # default. Bare /trends is the sample picker; the chart renders once a
+        # sample is chosen.
+        if not device:
+            return templates.TemplateResponse(
+                request,
+                "devices.html",
+                {"samples": _sample_overview(), "picker": "trends",
+                 "data_root": str(store.data_root)},
+            )
+        rows = store.fit_trend(target, quantity, device=device) if target and quantity else []
         svg = _trend_svg(rows)
         return templates.TemplateResponse(
             request,
             "trends.html",
             {"target": target, "quantity": quantity, "rows": rows, "svg": svg,
-             "quantities": REPORTABLE_QUANTITIES, "device": dev,
+             "quantities": REPORTABLE_QUANTITIES, "device": device,
              "devices": store.distinct_devices()},
         )
 
@@ -317,7 +359,16 @@ def create_app(
 
     @app.get("/device", response_class=HTMLResponse)
     def device_page(request: Request, device: str = ""):
-        dev = device or device_name
+        # Bare /device is the lab-wide sample overview; a sample's detail page
+        # is always explicitly addressed (?device=<name>).
+        if not device:
+            return templates.TemplateResponse(
+                request,
+                "devices.html",
+                {"samples": _sample_overview(), "picker": "device",
+                 "data_root": str(store.data_root)},
+            )
+        dev = device
         latest = store.find_runs(device=dev, limit=1)
         registry = load_device_registry(store.data_root)
         # Cooldown cycles + the ACTIVE cycle's named setups. The registry validates
@@ -352,7 +403,7 @@ def create_app(
             "device.html",
             {"sections": sections,
              "latest": latest[0] if latest else None,
-             "device": dev, "devices": store.distinct_devices(),
+             "device": dev, "devices": _known_names(),
              "registry": registry.get(dev) or {},
              "cycles": cycles, "active_cycle": active[0] if active else None,
              "setups": setups,

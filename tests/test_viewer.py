@@ -93,7 +93,8 @@ def lab(tmp_path_factory):
     sess_z = _session(root, "chipZ", cid="cdZ", setup="z_main")
     r_z = sess_z.run("resonator_spectroscopy", {"targets": ["q0"]}, update="apply", tags=["zcool"])
     (root / "devices.toml").write_text(
-        '[chipZ]\ndescription = "second sample on the other fridge"\n',
+        '[chipZ]\ndescription = "second sample on the other fridge"\n\n'
+        '[paperX]\ndescription = "registry-only sample"\n',
         encoding="utf-8",
     )
 
@@ -101,7 +102,18 @@ def lab(tmp_path_factory):
     sess_b = _session(root, "bare")
     r_bare = sess_b.run("resonator_spectroscopy", {"targets": ["q0"]}, update="apply")
 
-    client = TestClient(create_app(root, device_name="devV"))
+    # three INDEX-FREE samples for the overview pages (none has runs, so no
+    # existing test's counts move): a freshly added sample with a cycle but no
+    # runs yet, a registry-only entry (paperX above), and a broken registry.
+    (root / "freshY").mkdir()
+    (root / "freshY" / "cooldowns.toml").write_text(
+        '[cdF]\nstart = 2026-07-03\n[cdF.setup.f_main]\nbackend = "simulated"\n',
+        encoding="utf-8",
+    )
+    (root / "brokenB").mkdir()
+    (root / "brokenB" / "cooldowns.toml").write_text("not [valid toml\n", encoding="utf-8")
+
+    client = TestClient(create_app(root))
     return {"client": client, "root": root, "res": r_res, "res2": r_res2, "ram": r_ram,
             "t1": r_t1, "pend": r_pend, "alt": r_alt, "ghost": r_ghost,
             "chipz": r_z, "bare": r_bare}
@@ -157,15 +169,16 @@ def test_tag_editing_is_the_only_write(lab):
 
 def test_trends_page_charts_t1(lab):
     c = lab["client"]
-    page = c.get("/trends", params={"target": "q1", "quantity": "t1_s"}).text
+    page = c.get("/trends", params={"target": "q1", "quantity": "t1_s", "device": "devV"}).text
     assert "<svg" in page and "<circle" in page
     assert lab["t1"]["run_id"] in page
 
 
 def test_device_page_state_and_history(lab):
     c = lab["client"]
-    page = c.get("/device").text
-    assert "Device: devV" in page  # default = the configured sample
+    page = c.get("/device", params={"device": "devV"}).text
+    assert "Device: devV" in page
+    assert "All samples" in page  # the detail page always links back to the overview
     # the calibration table holds what the runs WROTE (schema-3 stores carry a
     # field only once it is recorded — an untouched vendor knob is not state)
     assert "readout_freq_hz" in page
@@ -177,7 +190,7 @@ def test_device_page_history_operator_column(lab):
     """P3 attribution: the change history shows WHO made each change."""
     import getpass
 
-    page = lab["client"].get("/device").text
+    page = lab["client"].get("/device", params={"device": "devV"}).text
     assert "<th>operator</th>" in page
     assert getpass.getuser() in page  # this test process's login, stamped on the runs
 
@@ -185,7 +198,7 @@ def test_device_page_history_operator_column(lab):
 def test_physical_panel_is_per_setup_section(lab):
     """Physical values live inside their setup's section (per (cooldown, setup)
     context) — flat rows, no setup column. Only sim_main measured physics here."""
-    page = lab["client"].get("/device").text
+    page = lab["client"].get("/device", params={"device": "devV"}).text
     assert "Physical parameters — sim_main" in page
     values_table = page.split("Physical parameters — sim_main", 1)[1].split("</table>", 1)[0]
     assert "<th>setup</th>" not in values_table  # one context per section: no setup column
@@ -217,9 +230,10 @@ def test_device_page_history_survives_values_only_reset(tmp_path):
     r = sess.run("resonator_spectroscopy", {"targets": ["q0"]}, update="apply")
     (_scqo_dir(tmp_path, "devR", "cdR", "main") / "scqo_state.json").unlink()  # sidecar survives
 
-    page = TestClient(create_app(tmp_path, device_name="devR")).get("/device").text
+    page = TestClient(create_app(tmp_path)).get("/device", params={"device": "devR"}).text
     assert "Change history" in page
     assert r["run_id"] in page  # rows render from the surviving sidecar
+    assert "All samples" in page  # single-sample root: the overview link renders anyway
 
 
 def test_run_page_marks_operator_suggestion(lab):
@@ -242,7 +256,8 @@ def test_runs_page_pending_filter_and_updates_column(lab):
 
 
 def test_trends_offer_descriptor_quantities(lab):
-    page = lab["client"].get("/trends").text
+    # the quantity menu lives on the device-scoped chart page, not the picker
+    page = lab["client"].get("/trends", params={"device": "devV"}).text
     assert "t2_echo_s" in page
     assert "fidelity_g" in page and "fidelity_e" in page
 
@@ -272,7 +287,7 @@ def test_runs_page_setup_filter_and_column(lab):
 
 
 def test_device_page_shows_cycle_and_setup(lab):
-    page = lab["client"].get("/device").text
+    page = lab["client"].get("/device", params={"device": "devV"}).text
     assert "Cooldown cycles" in page
     assert "cdV" in page and "(active)" in page
     assert "PCB v3" in page  # packaging is a cycle fact
@@ -335,7 +350,7 @@ def test_runs_page_live_column(lab):
 def test_device_page_values_link_to_source_runs(lab):
     """Strict match: each value links to the run that set it; manual writes are
     marked; the assertions are scoped to the VALUE tables (history links too)."""
-    page = lab["client"].get("/device").text
+    page = lab["client"].get("/device", params={"device": "devV"}).text
     # slice to the value TABLE itself — the caption above it links the latest run
     state_table = page.split("Current calibration", 1)[1].split("<table>", 1)[1].split("</table>", 1)[0]
     assert f"/run/{lab['res2']['run_id']}" in state_table  # readout_freq_hz -> its run
@@ -381,7 +396,7 @@ def test_device_page_flags_external_change(lab):
 def test_device_page_renders_one_section_per_setup(lab):
     """Two setups of one device = two independent calibration sections, each
     captioned with its own state file and holding only its own runs' history."""
-    page = lab["client"].get("/device").text
+    page = lab["client"].get("/device", params={"device": "devV"}).text
     assert "setup <b>sim_main</b>" in page and "setup <b>sim_alt</b>" in page
     main_sec = page.split("setup <b>sim_main</b>", 1)[1].split("setup <b>sim_alt</b>", 1)[0]
     alt_sec = page.split("setup <b>sim_alt</b>", 1)[1]
@@ -396,7 +411,7 @@ def test_device_section_latest_run_link_is_per_setup(lab):
     """The 'latest run' caption in each per-setup calibration section must link
     that SETUP's own latest run — never the device-wide newest (here r_ghost, a
     run bound to a setup no longer in the active cycle)."""
-    page = lab["client"].get("/device").text
+    page = lab["client"].get("/device", params={"device": "devV"}).text
     main_sec = page.split("setup <b>sim_main</b>", 1)[1].split("setup <b>sim_alt</b>", 1)[0]
     caption = main_sec.split("latest run:", 1)[1].split("</p>", 1)[0]
     assert lab["ghost"]["run_id"] not in caption  # not the foreign device-wide latest
@@ -432,9 +447,49 @@ def test_registry_less_device_shows_snapshot_only(lab):
 def test_trends_never_mix_samples(lab):
     c = lab["client"]
     # q0 readout_freq_hz exists on BOTH samples ("q1 exists on every chip" problem):
-    # the default trend is scoped to the configured device, not the union.
-    dev = c.get("/trends", params={"target": "q0", "quantity": "readout_freq_hz"}).text
+    # there is NO silent default sample — bare /trends is the picker, and a chart
+    # is always explicitly device-scoped.
+    bare = c.get("/trends").text
+    assert "<svg" not in bare and "<circle" not in bare
+    assert "/trends?device=devV" in bare and "/trends?device=chipZ" in bare
+    dev = c.get("/trends", params={"target": "q0", "quantity": "readout_freq_hz", "device": "devV"}).text
     assert lab["res"]["run_id"] in dev
     assert lab["chipz"]["run_id"] not in dev
     z = c.get("/trends", params={"target": "q0", "quantity": "readout_freq_hz", "device": "chipZ"}).text
     assert lab["chipz"]["run_id"] in z and lab["res"]["run_id"] not in z
+
+
+def test_device_overview_lists_all_samples(lab):
+    """Bare /device is the lab-wide sample overview: EVERY known sample appears —
+    indexed ones and index-free ones (fresh folder+cycle, registry-only) alike —
+    with description, active cooldown, latest run, and detail + trends links."""
+    page = lab["client"].get("/device").text
+    for name in ("devV", "chipZ", "bare", "freshY", "paperX"):
+        assert f"/device?device={name}" in page
+        assert f"/trends?device={name}" in page
+    assert "second sample on the other fridge" in page  # devices.toml description
+    assert "registry-only sample" in page  # paperX exists ONLY in devices.toml
+    assert "cdV (2 setups)" in page
+    assert "cdF (1 setup)" in page  # freshY: cycle declared, nothing measured yet
+    assert "no runs yet" in page
+    assert "/run/20" in page  # some sample's latest run is linked
+
+
+def test_device_overview_tolerates_broken_cooldowns(lab):
+    """One sample's broken cooldowns.toml degrades to an inline per-row error —
+    the overview still renders every other sample (never a 500)."""
+    resp = lab["client"].get("/device")
+    assert resp.status_code == 200
+    row = resp.text.split("brokenB", 2)[2].split("</tr>", 1)[0]
+    assert "cooldowns.toml error:" in row
+    assert "cdV (2 setups)" in resp.text  # the healthy rows are unaffected
+
+
+def test_bare_trends_is_sample_picker(lab):
+    """Bare /trends renders the sample list and no chart — the page contract
+    behind the never-mix rule (a trend needs an explicit sample first)."""
+    page = lab["client"].get("/trends").text
+    assert "<svg" not in page
+    assert "scoped to ONE sample" in page
+    for name in ("devV", "chipZ", "freshY"):
+        assert f"/trends?device={name}" in page

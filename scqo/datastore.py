@@ -1112,6 +1112,22 @@ def load_device_registry(data_root: str | Path) -> dict:
     return _load_toml_registry(Path(data_root) / DEVICES_FILE)
 
 
+def known_devices(data_root: str | Path) -> set[str]:
+    """Sample names knowable WITHOUT the index: ``devices.toml`` keys, folders
+    holding a ``cooldowns.toml``, and top-level directories of the data_root.
+
+    A freshly added sample (``scqo device add``) appears here before its first
+    run reaches the index — union with :meth:`DataStore.distinct_devices` for
+    the complete lab menu. An absent data_root yields the empty set.
+    """
+    root = Path(data_root)
+    names: set[str] = set(load_device_registry(root))
+    if root.is_dir():
+        names |= {p.parent.name for p in root.glob(f"*/{COOLDOWNS_FILE}")}
+        names |= {p.name for p in root.iterdir() if p.is_dir()}
+    return names
+
+
 def load_cooldowns(data_root: str | Path, device: str) -> dict:
     """The device's cooldown-cycle registry ``<data_root>/<device>/cooldowns.toml``.
 

@@ -663,6 +663,21 @@ def test_device_registry_loader(tmp_path):
     assert load_device_registry(tmp_path) == {}  # broken hand-edit -> warn, not crash
 
 
+def test_known_devices_without_index(tmp_path):
+    """known_devices sees samples with a folder, a cooldowns.toml or a devices.toml
+    entry — BEFORE any run reaches the index (scqo device add, then browse)."""
+    from scqo.datastore import known_devices
+
+    assert known_devices(tmp_path / "nowhere") == set()  # absent root: empty, no crash
+    (tmp_path / "chipA").mkdir()  # bare folder
+    (tmp_path / "chipB").mkdir()
+    (tmp_path / "chipB" / "cooldowns.toml").write_text(
+        "[cd1]\nstart = 2026-08-01\n", encoding="utf-8")
+    (tmp_path / "devices.toml").write_text(
+        '[paperC]\ndescription = "registry only"\n', encoding="utf-8")
+    assert known_devices(tmp_path) == {"chipA", "chipB", "paperC"}
+
+
 def _write_cooldowns(data_root: Path, device: str, text: str) -> Path:
     ddir = data_root / device
     ddir.mkdir(parents=True, exist_ok=True)
