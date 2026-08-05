@@ -38,11 +38,13 @@ side renames it.
 AND: a backend or experiment that cannot realize the requested method must
 REFUSE IT BY NAME — never silently downgrade to thermal. A method the caller
 asked for and did not get is the one failure this field cannot survive: the run
-completes, the data looks plausible, and only the wall clock disagrees. Today
-``"active"`` is realized on the Qblox backend, on the four coherent-drive
-carriers whose readout condition is fixed for the whole run; everything else
-raises. That asymmetry is deliberate and is documented at each refusal site,
-not here — this module owns the vocabulary, not the per-backend policy.
+completes, the data looks plausible, and only the wall clock disagrees.
+``"active"`` is realized on BOTH backends, on the four coherent-drive carriers
+whose readout condition is fixed for the whole run; everything else raises. Which
+carriers, and the per-backend envelope (Qblox plays a fixed number of
+ConditionalResets, QM runs QUAM's repeat-until-success loop), are documented at
+each refusal site, not here — this module owns the vocabulary, not the
+per-backend policy.
 """
 
 from __future__ import annotations
@@ -77,9 +79,9 @@ ACTIVE_RESET_ROUNDS_DESC = (
     "one measurement plus a conditional pi pulse. NOT symmetric across "
     "backends: Qblox plays EXACTLY this many rounds, paying a full readout for "
     "each whether or not the qubit was already in |g>, because its conditional "
-    "playback cannot exit a loop early; a repeat-until-success backend would "
-    "read the same number as an upper bound. Raise it to 2 if an active run's "
-    "contrast is worse than its thermal reference."
+    "playback cannot exit a loop early; QM's repeat-until-success loop reads it "
+    "as an upper bound, exiting early on success. Raise it to 2 if an active "
+    "run's contrast is worse than its thermal reference."
 )
 
 

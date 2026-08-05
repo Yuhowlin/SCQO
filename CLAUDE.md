@@ -162,8 +162,9 @@ scqo/
                     #   qubit_reset.py = reset_method 'thermal'|'active' + the thermal
                     #   wait, resolved for both drivers by the ONE helper
                     #   reset_wait_ns; a backend that cannot realize a method must
-                    #   REFUSE it by name, never downgrade — 'active' is Qblox-only
-                    #   today and LCHQMDriver raises,
+                    #   REFUSE it by name, never downgrade — 'active' is realized on
+                    #   BOTH backends for the four coherent-drive carriers, and every
+                    #   other experiment refuses by name,
                     #   amplitude.py = the swept amplitude window + the ABSOLUTE amplitude
                     #   behind it. AmplitudeSweepParameters owns min/max_amp_factor +
                     #   num_amp_points on ONE axis, AMP_AXIS = `amp_prefactor` (scqat and
