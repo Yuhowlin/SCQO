@@ -63,10 +63,11 @@ class TomographyContract(DatasetContract):
 class QubitTomographyParameters(TargetSelection, AveragingParameters, QubitResetParameters):
     """Inputs for a Qubit Tomography experiment."""
 
-    qubit_configs: dict[str, dict[str, str]] = Field(
+    qubit_configs: dict[str, dict[str, Any]] = Field(
         default_factory=dict,
-        description="Qubit configurations mapping qubit name to init_state ('0','1','+','-','+i','-i') and target_gate ('I','X','X90','Y','Y90')"
+        description="Qubit configurations mapping qubit name to init_state ('0','1','+','-','+i','-i'), target_gate ('I','X','X90','Y','Y90'), and noise_mode (bool, default False)."
     )
+
     gate_counts: list[int] = Field(
         default_factory=lambda: list(range(0, 11)),
         description="Gate counts to sweep from 0 to 10 inclusive."

@@ -25,7 +25,9 @@ _COMMANDS = {
     "user": ("user", "show or set YOUR selection: device + setup (writes user.toml)"),
     "device": ("device", "device admin (manager): add, list, cooldown start/end"),
     "doctor": ("doctor", "health check: venv, drivers, config chain, registries (run me first)"),
+    "close_qm": ("close_qm", "close all open Quantum Machines on OPX to release locked resources"),
 }
+
 
 
 def _usage() -> str:
