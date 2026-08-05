@@ -215,6 +215,33 @@ def test_spectroscopy_cryoscope_fit_values_are_physical(session):
     assert fit["flux_pulse_amp_v"] == pytest.approx(0.1)
 
 
+def test_cryoscope_fit_tau_seeds_flow_through_and_validate(session):
+    """fit_tau_seeds (prior-knowledge taus, seconds) reach the estimator on BOTH
+    cryoscopes — the run succeeds with them set — and bad values are refused."""
+    out = session.run(
+        "qubit_spectroscopy_cryoscope",
+        {"targets": ["q0"], "fit_tau_seeds": [5e-6, 4e-7]},
+        update="none",
+    )
+    assert out["outcomes"]["q0"] == "successful"
+    out = session.run(
+        "qubit_ramsey_cryoscope",
+        {"targets": ["q0"], "fit_tau_seeds": [30e-9]},
+        update="none",
+    )
+    assert out["outcomes"]["q0"] == "successful"
+    from scqo.experiments.qubit_ramsey_cryoscope import QubitRamseyCryoscopeParameters
+    from scqo.experiments.qubit_spectroscopy_cryoscope import (
+        QubitSpectroscopyCryoscopeParameters,
+    )
+
+    for cls in (QubitRamseyCryoscopeParameters, QubitSpectroscopyCryoscopeParameters):
+        cls(targets=["q0"])  # None default stays legal
+        for bad in ([], [0.0], [-1e-9]):
+            with pytest.raises(ValueError, match="fit_tau_seeds"):
+                cls(targets=["q0"], fit_tau_seeds=bad)
+
+
 def test_spectroscopy_cryoscope_accept_roundtrips_paired_facts(session):
     """Accepting lands both arrays on the flux channel with equal length — the same
     paired batch apply the Ramsey cryoscope uses (REPLACE, last-writer-wins)."""

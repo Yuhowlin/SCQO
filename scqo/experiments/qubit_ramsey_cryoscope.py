@@ -41,11 +41,11 @@ from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
 from ._capabilities.qubit_reset import QubitResetParameters
 from ._capabilities.state_readout import (
-    STATE_ALT,
+    POPULATION_ALT,
     StateReadoutParameters,
     readout_vars,
     signal_rename,
-    state_row,
+    population_row,
 )
 from ._sim import iq_from_population, stable_seed
 from . import register
@@ -92,6 +92,14 @@ class QubitRamseyCryoscopeParameters(
         "component's fit starts (slowest component first). Forwarded to the "
         "estimator; length sets the number of tap components.",
     )
+    fit_tau_seeds: list[float] | None = Field(
+        None,
+        description="Optional EXPLICIT tau seeds in SECONDS — prior knowledge "
+        "(e.g. the previous run's taps). When set, a seeded joint fit races the "
+        "automatic path and the better residual wins (the fit metadata reports "
+        "seed_method='seeded' when it does); None = fully automatic "
+        "(MPM + start fractions, best of both).",
+    )
 
     @field_validator("fit_start_fractions")
     @classmethod
@@ -103,6 +111,16 @@ class QubitRamseyCryoscopeParameters(
             )
         if any(not (0.0 < f < 1.0) for f in value):
             raise ValueError(f"fit_start_fractions must lie in (0, 1), got {value}")
+        return value
+
+    @field_validator("fit_tau_seeds")
+    @classmethod
+    def _positive_tau_seeds(cls, value: list[float] | None) -> list[float] | None:
+        if value is not None and (not value or any(tau <= 0 for tau in value)):
+            raise ValueError(
+                f"fit_tau_seeds must be a non-empty list of positive seconds "
+                f"when given, got {value}"
+            )
         return value
 
 
@@ -139,7 +157,7 @@ class QubitRamseyCryoscope(Experiment):
         sweeps=(DURATION_AXIS, FRAME_AXIS),
         sweep_units=("ns", "turn"),
         variables=("I", "Q"),
-        alt_variables=STATE_ALT,
+        alt_variables=POPULATION_ALT,
     )
 
     params: QubitRamseyCryoscopeParameters
@@ -184,7 +202,7 @@ class QubitRamseyCryoscope(Experiment):
 
             # exactly one readout draw per target on the raveled 2-D fringe
             if use_state:
-                state[k] = state_row(population.ravel(), rng).reshape(n_dur, n_frame)
+                state[k] = population_row(population.ravel(), rng).reshape(n_dur, n_frame)
             else:
                 i_row, q_row = iq_from_population(population.ravel(), rng)
                 i_data[k] = i_row.reshape(n_dur, n_frame)
@@ -206,11 +224,16 @@ class QubitRamseyCryoscope(Experiment):
         prepared = self.dataset.rename(rename)
         prepared = prepared.assign_coords(duration=prepared["duration"] * 1e-9)
 
+        estimator_kwargs: dict = {
+            "start_fractions": list(self.params.fit_start_fractions),
+        }
+        if self.params.fit_tau_seeds is not None:
+            estimator_kwargs["tau_seeds"] = list(self.params.fit_tau_seeds)
         results = per_qubit_results(
             prepared,
             RamseyCryoscopeEstimator(),
             artifact_dir=self.artifact_dir,
-            start_fractions=list(self.params.fit_start_fractions),
+            **estimator_kwargs,
         )
 
         result = QubitRamseyCryoscopeResult()
