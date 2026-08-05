@@ -74,6 +74,36 @@ def _safe_progress(on_progress):
     return emit
 
 
+def _describe_error(err: BaseException) -> str:
+    """The run-record error line: the exception plus its cause chain.
+
+    ``f"{type(err).__name__}: {err}"`` alone loses the diagnostic whenever a
+    library re-raises bare — qualang_tools' qm_session does ``raise Exception
+    from e`` around a QM open failure, reducing the saved record to
+    ``"Exception: "`` while the real reason (e.g. a PHYSICAL CONFIG ERROR /
+    DEADLINE_EXCEEDED from a wedged gateway) survives only in the vendor log.
+    Walking ``__cause__``/``__context__`` (the same preference order as
+    Python's traceback: an explicit cause wins, an implicit context is
+    dropped after ``from None``) keeps that reason in the JSON result. The
+    chain is joined on ONE line because a campaign's progress display shows
+    only an error's first line."""
+    parts: list[str] = []
+    seen: set[int] = set()
+    node: BaseException | None = err
+    while node is not None and id(node) not in seen and len(parts) < 10:
+        seen.add(id(node))
+        text = str(node).strip()
+        parts.append(f"{type(node).__name__}: {text}" if text
+                     else type(node).__name__)
+        if node.__cause__ is not None:
+            node = node.__cause__
+        elif not node.__suppress_context__:
+            node = node.__context__
+        else:
+            node = None
+    return "; caused by ".join(parts)
+
+
 def _repeat_skeleton(row: dict) -> dict:
     """One repeat, without the fit VALUES — what ``repeats.jsonl`` stores.
 
@@ -742,7 +772,7 @@ class Session:
                    else Outcome.FAILED)
         targets = getattr(exp.params, "targets", [])
         return cls.Result(outcomes={t: outcome for t in targets},
-                          error=f"{type(err).__name__}: {err}")
+                          error=_describe_error(err))
 
     def _invalid_params(self, cls, merged, defaults, caller, err):
         from .result import Outcome

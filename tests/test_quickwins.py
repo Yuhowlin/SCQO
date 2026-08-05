@@ -2,7 +2,9 @@
 
 Covers:
   * A1 — simulator seeds are reproducible across processes (not PYTHONHASHSEED-dependent).
-  * A2 — Session.run returns a structured failure (never raises) on a contract violation.
+  * A2 — Session.run returns a structured failure (never raises) on a contract
+         violation, and the saved error walks the exception cause chain (a bare
+         ``raise Exception from e`` must not reduce the record to "Exception: ").
   * A3 — a partial run still writes back the qubits that succeeded.
   * B  — registry discovers experiments advertised via the ``scqo.experiments`` entry point.
 """
@@ -92,6 +94,60 @@ def test_session_returns_structured_failure_on_contract_violation():
     assert result["outcomes"]["q0"] == Outcome.NO_DATA.value
     # nothing was written back on failure
     assert sess.device_state()["q0_ro"]["readout_freq_hz"] == before
+
+
+@register
+class _ChainedBareFailure(ResonatorSpectroscopy):
+    """Raises the qualang_tools qm_session idiom: a bare ``raise Exception
+    from e`` whose message is empty — the real diagnostic lives only on
+    ``__cause__``."""
+
+    name = "chained_bare_failure"
+
+    def probe(self):
+        return None
+
+    def simulate(self, coords):
+        try:
+            raise RuntimeError(
+                "PHYSICAL CONFIG ERROR IN FEM3: DEADLINE_EXCEEDED")
+        except RuntimeError as e:
+            raise Exception from e
+
+
+def test_failure_record_carries_the_cause_chain():
+    sess = _session()
+
+    result = sess.run("chained_bare_failure", {"targets": ["q0"]})
+
+    assert result["outcomes"]["q0"] == Outcome.FAILED.value
+    assert result["error"].startswith("Exception")
+    assert "RuntimeError" in result["error"]
+    assert "DEADLINE_EXCEEDED" in result["error"]
+
+
+def test_describe_error_context_and_from_none():
+    """Implicit ``__context__`` is walked; ``from None`` suppresses it (the
+    same preference order as Python's own traceback rendering)."""
+    from scqo.session import _describe_error
+
+    try:
+        try:
+            raise ValueError("root diagnostic")
+        except ValueError:
+            raise KeyError("secondary")
+    except KeyError as err:
+        chained = _describe_error(err)
+    assert chained.startswith("KeyError")
+    assert "ValueError: root diagnostic" in chained
+
+    try:
+        try:
+            raise ValueError("hidden")
+        except ValueError:
+            raise RuntimeError("visible") from None
+    except RuntimeError as err:
+        assert _describe_error(err) == "RuntimeError: visible"
 
 
 # --------------------------------------------------------------------------- A3
