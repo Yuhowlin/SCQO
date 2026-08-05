@@ -50,10 +50,12 @@ def _run_cli(tmp_path: Path, *args: str, parameters_toml: str | None = None) -> 
             blocks.append(f"[{q}_res]\nf_r_hz = {_FR[i]:.6g}")
         design.write_text("\n".join(blocks) + "\n", encoding="utf-8")
     lines = ["[lab]", 'device = "simdev"', f"data_root = '{data_root.as_posix()}'"]
-    if parameters_toml is not None:
-        params = tmp_path / "parameters.toml"
-        params.write_text(parameters_toml, encoding="utf-8")
-        lines.append(f"parameters_file = '{params.as_posix()}'")
+    # Always pin parameters_file (empty when the test supplies none): without it the
+    # CLI falls back to the runner's real ~/.scqo/parameters.toml, whose standing
+    # defaults can flip a sim fit to failed (same guard as test_cli_campaign).
+    params = tmp_path / "parameters.toml"
+    params.write_text(parameters_toml if parameters_toml is not None else "", encoding="utf-8")
+    lines.append(f"parameters_file = '{params.as_posix()}'")
     config = tmp_path / "config.toml"
     config.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return subprocess.run(

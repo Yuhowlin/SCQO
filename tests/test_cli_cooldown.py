@@ -19,6 +19,10 @@ from pathlib import Path
 def _env(tmp_path: Path, user_config: str = "none") -> dict:
     """Hermetic subprocess env: SCQO_CONFIG -> a tmp lab config; the user overlay
     defaults to disabled ('none') — step 5 points it at a tmp user.toml instead."""
+    # Empty parameters_file: without it the CLI falls back to the runner's real
+    # ~/.scqo/parameters.toml (same guard as test_cli_run / test_cli_campaign).
+    params = tmp_path / "parameters.toml"
+    params.write_text("", encoding="utf-8")
     config = tmp_path / "config.toml"
     config.write_text(
         "\n".join(
@@ -26,6 +30,7 @@ def _env(tmp_path: Path, user_config: str = "none") -> dict:
                 "[lab]",
                 'device = "simdev"',
                 f"data_root = '{(tmp_path / 'data').as_posix()}'",
+                f"parameters_file = '{params.as_posix()}'",
             ]
         )
         + "\n",
