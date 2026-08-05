@@ -46,6 +46,7 @@ from scqo.datastore import (
     COOLDOWNS_FILE,
     SLUG_RE,
     active_cooldown,
+    known_devices,
     load_cooldowns,
     load_device_registry,
 )
@@ -118,10 +119,7 @@ def _list(cfg) -> int:
         return 0
 
     root = Path(cfg.data_root)
-    known: set[str] = set(load_device_registry(root))
-    if root.is_dir():
-        known |= {p.parent.name for p in root.glob(f"*/{COOLDOWNS_FILE}")}
-        known |= {p.name for p in root.iterdir() if p.is_dir()}
+    known: set[str] = known_devices(root)
     if cfg.device:
         known.add(cfg.device)
 

@@ -26,10 +26,9 @@ from pathlib import Path
 
 from scqo import DataStore, load_lab_config
 from scqo.datastore import (
-    COOLDOWNS_FILE,
     active_cooldown,
+    known_devices,
     load_cooldowns,
-    load_device_registry,
 )
 from scqo.labconfig import USER_DEFAULT_PATH, USER_ENV_VAR, _load_user_overlay
 
@@ -96,10 +95,7 @@ def _known_devices(cfg) -> set[str]:
         names.add(cfg.device)
     if cfg.data_root is not None:
         root = Path(cfg.data_root)
-        names |= set(load_device_registry(root))
-        if root.is_dir():
-            names |= {p.parent.name for p in root.glob(f"*/{COOLDOWNS_FILE}")}
-            names |= {p.name for p in root.iterdir() if p.is_dir()}
+        names |= known_devices(root)
         names |= set(DataStore(root, device_name=cfg.device or "device").distinct_devices())
     return names
 
