@@ -3,6 +3,68 @@
 # scqat at its pinned tag (scqat versions independently: its own pyproject/tag line).
 # Hand-edited at release time by the manager (see RELEASING.md).
 
+# ---------------------------------------------------------------------------
+# [unreleased] — the pending-release ledger.
+#
+# RULE for every session/agent: after committing a release-worthy feature,
+# append ONE [[unreleased.feature]] entry here (feature-level, not per-commit):
+#   name      = short slug
+#   repos     = { scqo = "<sha>", scqat = "<sha>", ... }   # LAST commit of the
+#               feature per repo (keys: scqo/scqat/lchqmdriver/lchqbdriver/
+#               scqo-contrib)
+#   kind      = "additive" | "breaking"
+#   coupling  = lockstep floors, esp. SILENT-failure ones ("" if none)
+#   validated = "offline" | "hardware <device> <date>" | "unverified"
+#   notes     = one release-facing sentence (feeds the [vX-Y-Z] notes; use
+#               UPGRADE REQUIRES / BEHAVIOR CHANGE phrasing when relevant)
+#
+# At RELEASE time the manager/agent: reads the entries -> picks versions (any
+# "breaking" drives the bump; couplings set the scqat floor) -> writes the
+# [vX-Y-Z] block from them -> DELETES the consumed entries -> then follows
+# RELEASING.md (pyproject bumps are PART of the release — editable installs
+# report stale versions otherwise — then tags, push, editable re-pins).
+# ---------------------------------------------------------------------------
+
+[[unreleased.feature]]
+name = "step-response-degeneracy-guard"
+repos = { scqat = "b0f326f" }
+kind = "additive"
+coupling = ""
+validated = "offline + re-fit of real 5Q4C runs 2026-08-06"
+notes = "fit_step_response degeneracy guard: bounded amplitudes (amp_max=2.0), identifiability tau floor (>= half the first sample time; caps the t=0 re-reference blow-up), cancelling close-tau pair collapse. Three real degenerate fits (+-22866, +-22, +-77.8 amplitude pairs) become honest single taps or clean failures; healthy fits are bit-identical. Both cryoscope estimators inherit via defaults."
+
+[[unreleased.feature]]
+name = "mpm-seeding"
+repos = { scqat = "8122c47" }
+kind = "additive"
+coupling = ""
+validated = "hardware 5Q4C q1 2026-08-06"
+notes = "Hankel-SVD Matrix Pencil seeding for the ramsey cryoscope: mpm_tau_seeds (model order + tau seeds from the data) + a tau-seeded joint bounded fit in fit_step_response; RamseyCryoscopeEstimator runs BOTH the MPM-seeded and fractions fits and keeps the better residual (provenance seed_method/mpm_n_modes/mpm_oscillatory — the oscillatory flag is the consider-FIR signal). BEHAVIOR CHANGE (benign): default ramsey fits may now resolve components the old sequential fit merged. Also fixes a hankel.py crash (growing noise-pole overflow) affecting any hankel_decompose consumer."
+
+[[unreleased.feature]]
+name = "fit-tau-seeds"
+repos = { scqo = "12a82a9", scqat = "42aafd8" }
+kind = "additive"
+coupling = "scqo >= 12a82a9 needs scqat >= 42aafd8: the tau_seeds estimator kwarg. SILENT failure — an older scqat IGNORES unknown estimator kwargs, so --set fit_tau_seeds=[...] would be a no-op, not an error. Floor scqat accordingly."
+validated = "hardware 5Q4C q1 2026-08-06"
+notes = "fit_tau_seeds parameter on BOTH cryoscopes: explicit prior-knowledge tau seeds (seconds) from the CLI (--set fit_tau_seeds=[1e-7,2.3e-9]); the seeded joint fit races the automatic path and the better residual wins (metadata seed_method='seeded'). Axis-agnostic — first seeding mechanism available on the spectroscopy cryoscope's log wait grid."
+
+[[unreleased.feature]]
+name = "qm-apply-distortion-tooling"
+repos = { lchqmdriver = "7870a65" }
+kind = "additive"
+coupling = ""
+validated = "hardware 5Q4C q1 2026-08-06 (full clear -> measure -> apply -> verify loop; ns window flat to noise)"
+notes = "One-command cryoscope-tap apply for the OPX z filter: python -m customized.scqo.apply_distortion --target qN [--run <run_id>] [--extend] [--clear] [--dry-run]. Resolves the active scqo device/setup offline (no cluster), reads taps from a named run's fit (accept-order independent) or the accepted facts, writes exponential_filter and saves the setup state.json; --clear is the fresh-line reset for a clean-slate characterization. Facts stay record-only — applying remains explicit/opt-in."
+
+[[unreleased.feature]]
+name = "readout-schema-qc-n-swap-amp"
+repos = { scqo = "ce50212", scqat = "de6dc06", lchqmdriver = "a3ca6bb", lchqbdriver = "c9aadfb" }
+kind = "breaking"
+coupling = "lockstep across all four repos (multi-qubit readout schema unification) — VERIFY exact floors from the commits before release"
+validated = "unverified — entry backfilled from commit messages by another session; confirm scope/validation with git show before cutting"
+notes = "Unified multi-qubit readout schema + the qc_n_swap_amp experiment landed (SCQO experiment, scqat estimator on joint_population, QM adapter, Qblox discriminated-data decode). Deferred from v0.24.0 ('NOT IN THIS COMBO' note there)."
+
 [v0-24-0]
 date = 2026-08-05
 scqo = "v0.24.0"                 # ramsey/spectroscopy cryoscope split + viewer decouple + error cause chain
