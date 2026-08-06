@@ -1,0 +1,6 @@
+name = "step-response-degeneracy-guard"
+repos = { scqat = "b0f326f" }
+kind = "additive"
+coupling = ""
+validated = "offline + re-fit of real 5Q4C runs 2026-08-06"
+notes = "fit_step_response degeneracy guard: bounded amplitudes (amp_max=2.0), identifiability tau floor (>= half the first sample time; caps the t=0 re-reference blow-up), cancelling close-tau pair collapse. Three real degenerate fits (+-22866, +-22, +-77.8 amplitude pairs) become honest single taps or clean failures; healthy fits are bit-identical. Both cryoscope estimators inherit via defaults."

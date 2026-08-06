@@ -1,0 +1,6 @@
+name = "mpm-seeding"
+repos = { scqat = "8122c47" }
+kind = "additive"
+coupling = ""
+validated = "hardware 5Q4C q1 2026-08-06"
+notes = "Hankel-SVD Matrix Pencil seeding for the ramsey cryoscope: mpm_tau_seeds (model order + tau seeds from the data) + a tau-seeded joint bounded fit in fit_step_response; RamseyCryoscopeEstimator runs BOTH the MPM-seeded and fractions fits and keeps the better residual (provenance seed_method/mpm_n_modes/mpm_oscillatory — the oscillatory flag is the consider-FIR signal). BEHAVIOR CHANGE (benign): default ramsey fits may now resolve components the old sequential fit merged. Also fixes a hankel.py crash (growing noise-pole overflow) affecting any hankel_decompose consumer."

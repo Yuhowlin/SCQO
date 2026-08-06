@@ -5,13 +5,13 @@ scqat tag, recorded in [RELEASES.toml](RELEASES.toml). Born from the v0.4.0 less
 tagging only SCQO left the server's checkout-by-tag procedure unable to bring the
 drivers forward, and nobody could tell which repo states belonged together.
 
-0. **Read the `[unreleased]` ledger** at the top of RELEASES.toml — one entry per
-   pending feature with its per-repo commits, breaking/additive kind, lockstep
-   couplings (the scqat floor comes from these) and validation status. Cross-check
-   against `git log <last-tag>..HEAD` per repo (an entry may be missing — the ledger
-   is maintained by whoever lands each feature; its format is documented in the
-   header there). Build the new `[vX-Y-Z]` block FROM the entries, then DELETE the
-   consumed entries in the same commit.
+0. **Read the pending-feature ledger `RELEASES.d/`** — ONE fragment file per
+   feature (format + the multi-agent rules in `RELEASES.d/README.md`): per-repo
+   commits, breaking/additive kind, lockstep couplings (the scqat floor comes from
+   these) and validation status. Cross-check against `git log <last-tag>..HEAD` per
+   repo (a fragment may be missing — the ledger is maintained by whoever lands each
+   feature). Build the new `[vX-Y-Z]` block FROM the fragments, then `git rm` the
+   consumed fragments in the same commit.
 
 1. **CI green** on SCQO main (3 OS). Driver + contrib test suites green in their venvs.
 2. **Version metadata matches the tag**: bump `version` in SCQO's `pyproject.toml` to

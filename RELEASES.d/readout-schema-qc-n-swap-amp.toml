@@ -1,0 +1,6 @@
+name = "readout-schema-qc-n-swap-amp"
+repos = { scqo = "ce50212", scqat = "de6dc06", lchqmdriver = "a3ca6bb", lchqbdriver = "c9aadfb" }
+kind = "breaking"
+coupling = "lockstep across all four repos (multi-qubit readout schema unification) — VERIFY exact floors from the commits before release"
+validated = "unverified — entry backfilled from commit messages by another session; confirm scope/validation with git show before cutting"
+notes = "Unified multi-qubit readout schema + the qc_n_swap_amp experiment landed (SCQO experiment, scqat estimator on joint_population, QM adapter, Qblox discriminated-data decode). Deferred from v0.24.0 ('NOT IN THIS COMBO' note there)."

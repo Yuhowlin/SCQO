@@ -1,0 +1,6 @@
+name = "qm-apply-distortion-tooling"
+repos = { lchqmdriver = "7870a65" }
+kind = "additive"
+coupling = ""
+validated = "hardware 5Q4C q1 2026-08-06 (full clear -> measure -> apply -> verify loop; ns window flat to noise)"
+notes = "One-command cryoscope-tap apply for the OPX z filter: python -m customized.scqo.apply_distortion --target qN [--run <run_id>] [--extend] [--clear] [--dry-run]. Resolves the active scqo device/setup offline (no cluster), reads taps from a named run's fit (accept-order independent) or the accepted facts, writes exponential_filter and saves the setup state.json; --clear is the fresh-line reset for a clean-slate characterization. Facts stay record-only — applying remains explicit/opt-in."
