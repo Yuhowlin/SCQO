@@ -8,7 +8,7 @@ same shape because it is the same logic one level over:
 ===================  ==============================  ==============================
 measured FACT        ``t1_s`` (qubit mode)           ``kappa_tot_hz`` (resonator)
 measured by          ``qubit_relaxation``            ``resonator_spectroscopy``
-per-run FACTOR       ``thermalization_factor`` 10    ``depletion_factor`` 5
+per-run FACTOR       ``thermalization_factor`` 10    ``depletion_factor`` 10
 proposed KNOB        ``thermalization_time_s``       ``readout_depletion_s``
    ... on            the DRIVE channel (q1_xy)       the READOUT channel (q1_ro)
 per-run override     ``thermalization_time_ns``      ``readout_depletion_ns``
@@ -26,7 +26,7 @@ disagree with each other and with the vendor.
 THE FACTOR IS A CHOICE, THE LINEWIDTH IS A FACT. ``kappa_tot_hz`` is the
 power-Lorentzian FWHM in Hz, so the photon-number decay time is
 ``1 / (2 pi x kappa_tot_hz)`` and the wait is ``depletion_factor`` of those.
-5 leaves e^-5 ~ 0.7% of the photons. At kappa/2pi = 1 MHz that is 796 ns.
+10 leaves e^-10 ~ 0.005% of the photons. At kappa/2pi = 1 MHz that is 1592 ns.
 
 WHY THIS RETURNS None RATHER THAN RAISING, unlike ``reset_wait_ns``: its two
 callers have legitimately different policies for "never calibrated". Active reset
@@ -57,9 +57,9 @@ READOUT_DEPLETION_NS_DESC = (
 DEPLETION_FACTOR_DESC = (
     "Multiple of the resonator's photon lifetime 1 / (2 pi x kappa_tot_hz) "
     "proposed as each target's readout_depletion_s knob (the wait every other "
-    "experiment then leaves between a readout and the next pulse). 5 leaves "
-    "~0.7% of the photons. This run's OWN readouts still use the standing knob "
-    "— the proposal takes effect once accepted."
+    "experiment then leaves between a readout and the next pulse). 10 leaves "
+    "~0.005% of the photons. This run's OWN readouts still use the standing "
+    "knob — the proposal takes effect once accepted."
 )
 
 

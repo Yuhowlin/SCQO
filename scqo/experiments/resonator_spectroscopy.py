@@ -35,7 +35,7 @@ class ResonatorSpectroscopyParameters(TargetSelection, AveragingParameters):
     readout_amplitude: float | None = Field(
         None, gt=0, description="Optional readout amplitude override; None "
                                 "keeps the device value.")
-    depletion_factor: float = Field(5.0, gt=0, description=DEPLETION_FACTOR_DESC)
+    depletion_factor: float = Field(10.0, gt=0, description=DEPLETION_FACTOR_DESC)
     analysis_method: Literal["lorentzian", "circle"] = Field(
         "lorentzian",
         description=(
