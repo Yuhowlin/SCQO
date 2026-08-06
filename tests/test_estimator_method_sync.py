@@ -9,7 +9,12 @@ gains a method axis.
 
 from typing import get_args
 
-from scqo.experiments.qubit_parity_switch import QubitParitySwitchParameters
+from scqo.experiments.qubit_parity_switch_continuous import (
+    QubitParitySwitchContinuousParameters,
+)
+from scqo.experiments.qubit_parity_switch_discrete import (
+    QubitParitySwitchDiscreteParameters,
+)
 from scqo.experiments.qubit_ramsey import QubitRamseyParameters
 from scqo.experiments.resonator_spectroscopy import ResonatorSpectroscopyParameters
 from scqo.experiments.resonator_spectroscopy_flux import ResonatorSpectroscopyFluxParameters
@@ -57,7 +62,11 @@ def test_ramsey_model_matches_registry():
 
 def test_parity_psd_model_matches_registry():
     # no SCQO-only value here (unlike ramsey's "auto") — the psd_model Literal is
-    # exactly the two telegraph fit models.
+    # exactly the two telegraph fit models. Both parity variants mirror it (the
+    # discrete Parameters inherit the field, but the sync test names each class
+    # explicitly — a future re-declaration must not drift).
     from scqat.tools.telegraph_psd import TELEGRAPH_MODELS
 
-    assert _literal_values(QubitParitySwitchParameters, "psd_model") == set(TELEGRAPH_MODELS)
+    for model in (QubitParitySwitchContinuousParameters,
+                  QubitParitySwitchDiscreteParameters):
+        assert _literal_values(model, "psd_model") == set(TELEGRAPH_MODELS)

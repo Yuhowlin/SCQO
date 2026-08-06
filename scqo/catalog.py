@@ -153,7 +153,8 @@ _TRANSMON_BASE: dict[str, FieldSpec] = {
     "parity_rate_hz": FieldSpec(
         "Hz", "Charge-parity (quasiparticle-tunneling) switching rate, per "
               "direction: pi x the Lorentzian corner of the parity-telegraph "
-              "PSD measured by qubit_parity_switch.", role="fact"),
+              "PSD measured by qubit_parity_switch_continuous or "
+              "qubit_parity_switch_discrete.", role="fact"),
 }
 
 MODES: dict[str, ModeKind] = {
@@ -377,7 +378,8 @@ CHANNELS: dict[str, ChannelKind] = {
             "parity_delta_f_hz": FieldSpec(
                 "Hz", "Charge-parity beat splitting |f_1 - f_2| of the Ramsey "
                       "fringe at the operating point (qubit_ramsey's beat "
-                      "model); qubit_parity_switch derives its fixed idle "
+                      "model); the parity-switch monitors (continuous and "
+                      "discrete) derive their fixed idle "
                       "1 / (2 x parity_delta_f_hz) from it. Drifts with the "
                       "offset charge, so it is a monitor, not a fact.",
                 role="monitor"),

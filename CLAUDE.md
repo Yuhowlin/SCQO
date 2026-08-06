@@ -237,14 +237,23 @@ scqo/
                                 #   REFUSES without an accepted single_shot_readout (one state
                                 #   cannot locate |e>) and refuses active reset (it would remove
                                 #   the population being counted)
-    qubit_parity_switch.py      # y90 - fixed idle (1/(2 x parity_delta_f_hz)) - x90, N single
-                                #   shots recorded individually, depletion-only between shots
-                                #   (deliberately NO qubit reset; no reset_method) -> telegraph
-                                #   PSD Lorentzian knee -> parity_rate_hz (mode fact, rate =
-                                #   pi x corner). Fed by qubit_ramsey's beat model (the
-                                #   drive-channel parity_delta_f_hz monitor); REQUIRES accepted
+    qubit_parity_switch_continuous.py  # y90 - fixed idle (1/(2 x parity_delta_f_hz)) - x90,
+                                #   N single shots back-to-back, depletion-only between shots
+                                #   (deliberately NO qubit reset; no reset_method): the readout
+                                #   is the RUNNING XOR of the parity, the consecutive-pair
+                                #   difference is the telegraph -> PSD Lorentzian knee ->
+                                #   parity_rate_hz (mode fact, rate = pi x corner). Fed by
+                                #   qubit_ramsey's beat model (the drive-channel
+                                #   parity_delta_f_hz monitor); REQUIRES accepted
                                 #   single_shot_readout (I/Q path) + resonator_spectroscopy
                                 #   (readout_depletion_s = the shot cadence / telegraph timebase)
+    qubit_parity_switch_discrete.py  # the two-measurement sibling: per cycle M1 - depletion -
+                                #   x90 - idle - y90 - M2 - pad at fixed cycle_period_ns;
+                                #   parity = m1 XOR m2 WITHIN each cycle (M1 re-projects, so a
+                                #   SLOW period is T1-safe — the point of the variant; two
+                                #   acquisition bins per cycle), p_intercycle_flip = QND-chain
+                                #   health; same idle derivation/requirements/writeback ->
+                                #   parity_rate_hz
     resonator_spectroscopy_flux.py   # 2D resonator flux map -> idle_flux + readout_freq_hz
                                 #   at the sweet spot; flux_offset/flux_per_phi0 (flux-channel
                                 #   facts) + f_r0_hz/g_hz (resonator facts)

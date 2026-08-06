@@ -34,12 +34,14 @@ RECORD_ONLY = {"qubit_sqrb", "qubit_tomography", "qubit_echo_flux_pulse",
 #: of PCA — the path the real instruments take, so the offline sweep exercises it.
 REFERENCE_BLOBS = {"pos_g_i": 0.0, "pos_g_q": 0.0, "pos_e_i": 4.0, "pos_e_q": 0.0}
 
-#: qubit_parity_switch derives its shot count from record_time_s, and the demo
-#: device's estimated shot period is ~3.9 us against a real chip's ~30 us — so
-#: the physically correct 30 s default would ask for 7.7M shots here and be
-#: refused by max_num_shots. Shorten it for the offline sweep rather than
-#: weakening the default: 0.4 s is ~103k shots, the size the suite used before.
-PARITY_DEFAULTS = {"qubit_parity_switch": {"record_time_s": 0.4}}
+#: the parity-switch monitors derive their shot count from record_time_s, and
+#: the demo device's estimated shot period is ~3.9 us against a real chip's
+#: ~30 us — so the physically correct 30 s default would ask for 7.7M shots
+#: here and be refused by max_num_shots. Shorten it for the offline sweep
+#: rather than weakening the default: 0.4 s is ~103k shots (continuous) /
+#: ~68k cycles (discrete, whose minimal cycle carries a second readout).
+PARITY_DEFAULTS = {"qubit_parity_switch_continuous": {"record_time_s": 0.4},
+                   "qubit_parity_switch_discrete": {"record_time_s": 0.4}}
 
 
 @pytest.fixture(scope="module")
@@ -56,9 +58,9 @@ def session(tmp_path_factory):
     s.set_values({f"{q}_ro.{field}": value
                   for q in ("q0", "q1")
                   for field, value in REFERENCE_BLOBS.items()})
-    # qubit_parity_switch REFUSES without a governed depletion wait (the shot
-    # cadence is its telegraph timebase) and a stored parity splitting (its
-    # fixed idle). 250 kHz -> idle = 1 / (2 x 250 kHz) = 2000 ns, on-grid.
+    # the parity-switch monitors REFUSE without a governed depletion wait (the
+    # shot cadence is their telegraph timebase) and a stored parity splitting
+    # (their fixed idle). 250 kHz -> idle = 1 / (2 x 250 kHz) = 2000 ns, on-grid.
     s.set_values({f"{q}_ro.readout_depletion_s": 1e-6 for q in ("q0", "q1")})
     s.set_values({f"{q}_xy.parity_delta_f_hz": 250e3 for q in ("q0", "q1")})
     return s
@@ -605,43 +607,43 @@ def test_ramsey_beat_proposes_the_parity_splitting(session):
     assert out["fit"]["q0"]["parity_delta_f_hz"] == pytest.approx(delta, rel=0.1)
 
 
-def test_parity_switch_writes_parity_rate_fact(session):
-    assert _suggest(session, "qubit_parity_switch") == {("q0", "parity_rate_hz")}
+def test_parity_switch_continuous_writes_parity_rate_fact(session):
+    assert _suggest(session, "qubit_parity_switch_continuous") == {("q0", "parity_rate_hz")}
 
 
-def test_parity_switch_recovers_the_planted_rate(session):
+def test_parity_switch_continuous_recovers_the_planted_rate(session):
     """The offline loop closes: the sim's Markov flip probability over the
     attached shot period comes back out of the PSD knee, at the idle the
     seeded 250 kHz splitting implies."""
     from scqo.experiments._sim import stable_seed
 
-    out = session.run("qubit_parity_switch", {"targets": ["q0"]}, update="none")
+    out = session.run("qubit_parity_switch_continuous", {"targets": ["q0"]}, update="none")
     assert out.get("error") is None, out.get("error")
     fit = out["fit"]["q0"]
     assert fit["idle_time_ns"] == pytest.approx(2000.0)  # 1 / (2 x 250 kHz)
     assert fit["parity_delta_f_hz"] == pytest.approx(250e3)
     assert "outlier_probability" in fit  # the discriminated-path marker
     assert 0.3 < fit["p_parity_odd"] < 0.7
-    rng = np.random.default_rng(stable_seed("qubit_parity_switch", "q0"))
+    rng = np.random.default_rng(stable_seed("qubit_parity_switch_continuous", "q0"))
     p_flip = rng.uniform(0.002, 0.01)
     expected = p_flip / fit["shot_period_s"]
     assert fit["parity_rate_hz"] == pytest.approx(expected, rel=0.2)
 
 
-def test_parity_switch_refuses_without_the_splitting(tmp_path):
+def test_parity_switch_continuous_refuses_without_the_splitting(tmp_path):
     s = _fresh_parity_session(tmp_path, splitting=False)
-    out = s.run("qubit_parity_switch", {"targets": ["q0"]})
+    out = s.run("qubit_parity_switch_continuous", {"targets": ["q0"]})
     assert "parity_delta_f_hz" in str(out.get("error"))
     assert "ramsey_model='beat'" in str(out.get("error"))
     # ... but an explicit idle override runs without the stored splitting
-    ok = s.run("qubit_parity_switch",
+    ok = s.run("qubit_parity_switch_continuous",
                {"targets": ["q0"], "idle_time_ns": 1000.0}, update="none")
     assert ok.get("error") is None, ok.get("error")
     assert ok["fit"]["q0"]["idle_time_ns"] == pytest.approx(1000.0)
     assert math.isnan(ok["fit"]["q0"]["parity_delta_f_hz"])
 
 
-def test_parity_switch_two_stage_chain(tmp_path):
+def test_parity_switch_continuous_two_stage_chain(tmp_path):
     """The full workflow on a fresh device: beat ramsey -> apply -> the parity
     monitor derives its idle from the just-measured splitting -> apply -> the
     rate lands in physical state."""
@@ -652,7 +654,7 @@ def test_parity_switch_two_stage_chain(tmp_path):
     assert out1.get("error") is None, out1.get("error")
     delta = out1["fit"]["q0"]["parity_delta_f_hz"]
 
-    out2 = s.run("qubit_parity_switch", {"targets": ["q0"]}, update="apply")
+    out2 = s.run("qubit_parity_switch_continuous", {"targets": ["q0"]}, update="apply")
     assert out2.get("error") is None, out2.get("error")
     fit = out2["fit"]["q0"]
     assert fit["parity_delta_f_hz"] == pytest.approx(delta)
@@ -661,7 +663,7 @@ def test_parity_switch_two_stage_chain(tmp_path):
     assert s.physical_state()["q0"]["parity_rate_hz"] is not None
 
 
-def test_parity_switch_reports_the_odd_fraction(session):
+def test_parity_switch_continuous_reports_the_odd_fraction(session):
     """p_switch explains a FAILED run whose fit otherwise looks healthy, so it
     has to reach the run record — and it must not be confused with
     p_parity_odd, which sits near 0.5 on every healthy run.
@@ -669,7 +671,7 @@ def test_parity_switch_reports_the_odd_fraction(session):
     The simulator plants a per-shot parity switch probability in (0.002, 0.01),
     so p_switch lands in that range; p_parity_odd is ~0.5 because the chip
     spends about half its time in each parity."""
-    out = session.run("qubit_parity_switch", {"targets": ["q0"]}, update="none")
+    out = session.run("qubit_parity_switch_continuous", {"targets": ["q0"]}, update="none")
     assert out.get("error") is None, out.get("error")
     fit = out["fit"]["q0"]
     assert 0.0 < fit["p_switch"] < 0.05
@@ -682,11 +684,11 @@ def test_parity_switch_reports_the_odd_fraction(session):
     assert out["outcomes"]["q0"] == "successful"
 
 
-def test_parity_switch_derives_shots_from_record_time(session):
+def test_parity_switch_continuous_derives_shots_from_record_time(session):
     """record_time_s is the knob, because the spectrum's lowest frequency is
     8 / record_time_s and THAT is what limits how slow a rate is measurable.
     The shot count follows from the estimated shot period."""
-    out = session.run("qubit_parity_switch",
+    out = session.run("qubit_parity_switch_continuous",
                       {"targets": ["q0"], "record_time_s": 0.8}, update="none")
     assert out.get("error") is None, out.get("error")
     fit = out["fit"]["q0"]
@@ -697,26 +699,26 @@ def test_parity_switch_derives_shots_from_record_time(session):
     n_shots = round(fit["record_time_s"] / fit["shot_period_s"])
     assert n_shots == pytest.approx(0.8 / fit["shot_period_s"], rel=0.01)
     # doubling the record halves the spectrum's low edge
-    half = session.run("qubit_parity_switch",
+    half = session.run("qubit_parity_switch_continuous",
                        {"targets": ["q0"], "record_time_s": 0.4}, update="none")
     assert (half["fit"]["q0"]["psd_freq_min_hz"]
             == pytest.approx(2 * fit["psd_freq_min_hz"], rel=0.1))
 
 
-def test_parity_switch_refuses_an_absurd_record_time(session):
+def test_parity_switch_continuous_refuses_an_absurd_record_time(session):
     """The ceiling guards the DERIVED count: a long record on a fast-cadence
     qubit asks for more shots than an instrument will hold."""
-    out = session.run("qubit_parity_switch",
+    out = session.run("qubit_parity_switch_continuous",
                       {"targets": ["q0"], "record_time_s": 3600.0})
     assert "max_num_shots" in str(out.get("error"))
     assert "record_time_s" in str(out.get("error"))
 
 
-def test_parity_switch_num_shots_overrides_and_bypasses_the_ceiling(session):
+def test_parity_switch_continuous_num_shots_overrides_and_bypasses_the_ceiling(session):
     """num_shots wins outright, exactly as idle_time_ns bypasses
     max_derived_idle_ns -- the ceiling is on the derived value only."""
     out = session.run(
-        "qubit_parity_switch",
+        "qubit_parity_switch_continuous",
         {"targets": ["q0"], "num_shots": 120000, "max_num_shots": 1000},
         update="none")
     assert out.get("error") is None, out.get("error")
@@ -724,24 +726,24 @@ def test_parity_switch_num_shots_overrides_and_bypasses_the_ceiling(session):
     assert round(fit["record_time_s"] / fit["shot_period_s"]) == 120000
 
 
-def test_parity_switch_reports_the_spectral_reach(session):
+def test_parity_switch_continuous_reports_the_spectral_reach(session):
     """A corner near the lowest bin is the readable symptom of 'record for
     longer', so the margin has to reach the run record."""
-    out = session.run("qubit_parity_switch", {"targets": ["q0"]}, update="none")
+    out = session.run("qubit_parity_switch_continuous", {"targets": ["q0"]}, update="none")
     fit = out["fit"]["q0"]
     assert fit["corner_margin_low"] == pytest.approx(
         fit["psd_corner_hz"] / fit["psd_freq_min_hz"], rel=1e-6)
     assert fit["psd_contrast"] > 3.0          # the gate that replaced p_switch
 
 
-def test_parity_switch_reports_the_mapping_fidelity_twice(session):
+def test_parity_switch_continuous_reports_the_mapping_fidelity_twice(session):
     """Under the INDEPENDENT model, A and B are the reference model's 4F^2 and
     (1-F^2)dt terms, so the same fit yields F two independent ways. Both must
     reach the run record with their ratio -- the ratio is the only number that
     notices the correlated-noise model failure that psd_contrast is blind to.
     (The default is now 'constrained', where the floor/ratio are NaN; this is
     the OPT-IN model, so it must be requested by name.)"""
-    out = session.run("qubit_parity_switch",
+    out = session.run("qubit_parity_switch_continuous",
                       {"targets": ["q0"], "psd_model": "independent"},
                       update="none")
     fit = out["fit"]["q0"]
@@ -760,13 +762,13 @@ def test_parity_switch_reports_the_mapping_fidelity_twice(session):
     assert fit["mapping_fidelity_ratio"] == pytest.approx(1.0, abs=0.2)
 
 
-def test_parity_switch_default_model_is_constrained(session):
+def test_parity_switch_continuous_default_model_is_constrained(session):
     """The DEFAULT run fits the reference single-F model, whose fingerprint is
     one mapping_fidelity plus NaN for the plateau/floor cross-check (the coupled
     model cannot produce it) and a finite residual as its quality number. The
     fitted-model STRING is a string, so it lives in the scqat metadata artifact
     and the run parameters, not in the float-only fit dict."""
-    out = session.run("qubit_parity_switch", {"targets": ["q0"]}, update="none")
+    out = session.run("qubit_parity_switch_continuous", {"targets": ["q0"]}, update="none")
     fit = out["fit"]["q0"]
     assert math.isfinite(fit["mapping_fidelity"])          # the single fitted F
     assert math.isnan(fit["mapping_fidelity_floor"])        # no independent floor
@@ -774,10 +776,10 @@ def test_parity_switch_default_model_is_constrained(session):
     assert math.isfinite(fit["psd_fit_residual"])           # its quality number
 
 
-def test_parity_switch_independent_model_selectable(session):
+def test_parity_switch_continuous_independent_model_selectable(session):
     """The opt-in model is reachable by name and still recovers the rate."""
-    base = session.run("qubit_parity_switch", {"targets": ["q0"]}, update="none")
-    indep = session.run("qubit_parity_switch",
+    base = session.run("qubit_parity_switch_continuous", {"targets": ["q0"]}, update="none")
+    indep = session.run("qubit_parity_switch_continuous",
                         {"targets": ["q0"], "psd_model": "independent"},
                         update="none")
     assert indep["outcomes"]["q0"] == "successful"
@@ -786,10 +788,10 @@ def test_parity_switch_independent_model_selectable(session):
         base["fit"]["q0"]["parity_rate_hz"], rel=0.3)
 
 
-def test_parity_switch_idle_multiple_stretches_the_derived_idle(session):
+def test_parity_switch_continuous_idle_multiple_stretches_the_derived_idle(session):
     """idle = N / (2 x parity_delta_f_hz). The seeded 250 kHz gives a 2000 ns
     base, so N=3 must play 6000 ns."""
-    out = session.run("qubit_parity_switch",
+    out = session.run("qubit_parity_switch_continuous",
                       {"targets": ["q0"], "idle_multiple": 3,
                        "max_derived_idle_ns": 100000.0}, update="none")
     assert out.get("error") is None, out.get("error")
@@ -798,35 +800,104 @@ def test_parity_switch_idle_multiple_stretches_the_derived_idle(session):
     assert fit["idle_multiple"] == 3
 
 
-def test_parity_switch_explicit_idle_is_not_multiplied(session):
+def test_parity_switch_continuous_explicit_idle_is_not_multiplied(session):
     """idle_time_ns is the escape hatch: it wins outright, so idle_multiple
     must NOT scale it (silently tripling an explicit request would be the worst
     kind of surprise)."""
-    out = session.run("qubit_parity_switch",
+    out = session.run("qubit_parity_switch_continuous",
                       {"targets": ["q0"], "idle_time_ns": 1000.0,
                        "idle_multiple": 5}, update="none")
     assert out.get("error") is None, out.get("error")
     assert out["fit"]["q0"]["idle_time_ns"] == pytest.approx(1000.0)
 
 
-def test_parity_switch_even_idle_multiple_warns_but_runs(session):
+def test_parity_switch_continuous_even_idle_multiple_warns_but_runs(session):
     """Even N puts both parities on the same pole (sin(N pi/2) == 0), so the
     run carries no signal. The user asked for it to be allowed, so it must warn
     loudly rather than refuse -- and then fail honestly in the fit."""
     with pytest.warns(UserWarning, match="EVEN"):
-        out = session.run("qubit_parity_switch",
+        out = session.run("qubit_parity_switch_continuous",
                           {"targets": ["q0"], "idle_multiple": 2,
                            "max_derived_idle_ns": 100000.0}, update="none")
     assert out.get("error") is None, out.get("error")
     assert out["fit"]["q0"]["idle_time_ns"] == pytest.approx(4000.0)
 
 
-def test_parity_switch_ceiling_names_the_multiple(session):
+def test_parity_switch_continuous_ceiling_names_the_multiple(session):
     """Two faults reach the same ceiling and need different remedies: here the
     BASE is fine and only the multiple pushed it over, so the message must say
     so instead of blaming a stale splitting."""
-    out = session.run("qubit_parity_switch",
+    out = session.run("qubit_parity_switch_continuous",
                       {"targets": ["q0"], "idle_multiple": 21})
     err = str(out.get("error"))
     assert "idle_multiple" in err
     assert "base" in err.lower()
+
+
+# ------------------------------------------------------- parity (discrete)
+
+
+def test_parity_switch_discrete_writes_parity_rate_fact(session):
+    assert _suggest(session, "qubit_parity_switch_discrete") == {
+        ("q0", "parity_rate_hz")}
+
+
+def test_parity_switch_discrete_recovers_the_planted_rate(session):
+    """The offline loop closes for the two-measurement variant: the sim's
+    per-cycle Markov flip probability over the attached cycle period comes
+    back out of the PSD knee, from the WITHIN-CYCLE m1 XOR m2 reduction."""
+    from scqo.experiments._sim import stable_seed
+
+    out = session.run("qubit_parity_switch_discrete", {"targets": ["q0"]},
+                      update="none")
+    assert out.get("error") is None, out.get("error")
+    fit = out["fit"]["q0"]
+    # same idle derivation as continuous: 1 / (2 x 250 kHz), on-grid
+    assert fit["idle_time_ns"] == pytest.approx(2000.0)
+    assert fit["parity_delta_f_hz"] == pytest.approx(250e3)
+    assert "outlier_probability" in fit  # the discriminated-path marker
+    assert 0.3 < fit["p_parity_odd"] < 0.7
+    # the sim's QND chain is exact and the blobs are 10 sigma apart, so the
+    # inter-cycle health check reads clean
+    assert fit["p_intercycle_flip"] < 0.01
+    rng = np.random.default_rng(stable_seed("qubit_parity_switch_discrete", "q0"))
+    p_flip = rng.uniform(0.002, 0.01)
+    expected = p_flip / fit["shot_period_s"]
+    assert fit["parity_rate_hz"] == pytest.approx(expected, rel=0.2)
+    assert out["outcomes"]["q0"] == "successful"
+
+
+def test_parity_switch_discrete_cycle_period_sets_the_timebase(session):
+    """cycle_period_ns IS the telegraph timebase: the recorded period must be
+    exactly the request (the sequence fits inside 20 us on the demo device)
+    and the cycle count follows record_time_s at that slower cadence."""
+    out = session.run("qubit_parity_switch_discrete",
+                      {"targets": ["q0"], "cycle_period_ns": 20000.0},
+                      update="none")
+    assert out.get("error") is None, out.get("error")
+    fit = out["fit"]["q0"]
+    assert fit["shot_period_s"] == pytest.approx(2e-5)
+    assert fit["cycle_period_ns"] == pytest.approx(20000.0)
+    n_cycles = round(fit["record_time_s"] / fit["shot_period_s"])
+    assert n_cycles == pytest.approx(0.4 / 2e-5, rel=0.01)
+    # ... and the default run reports NaN there (no pad requested)
+    base = session.run("qubit_parity_switch_discrete", {"targets": ["q0"]},
+                       update="none")
+    assert math.isnan(base["fit"]["q0"]["cycle_period_ns"])
+
+
+def test_parity_switch_discrete_dataset_carries_both_measurements(session):
+    """Two measurements per cycle: every cycle is its own parity sample (the
+    series has n entries, not n-1), and the per-slot diagnostics reach the
+    run record."""
+    out = session.run("qubit_parity_switch_discrete", {"targets": ["q0"]},
+                      update="none")
+    assert out.get("error") is None, out.get("error")
+    fit = out["fit"]["q0"]
+    for key in ("p_intercycle_flip", "p_m1_high", "p_m2_high"):
+        assert math.isfinite(fit[key]), key
+    n_cycles = round(fit["record_time_s"] / fit["shot_period_s"])
+    # p_switch = transitions / (n_samples - 1) with n_samples == n_cycles —
+    # the per-cycle reduction's fingerprint (continuous divides by n - 2)
+    assert fit["p_switch"] == pytest.approx(
+        fit["n_parity_switches"] / (n_cycles - 1), rel=1e-6)

@@ -165,7 +165,8 @@ from .qubit_drag_alternating import QubitDragAlternating  # noqa: E402
 from .qubit_drag_equator import QubitDragEquator  # noqa: E402
 from .qubit_echo import QubitEcho  # noqa: E402
 from .qubit_echo_flux_pulse import QubitEchoFluxPulse  # noqa: E402
-from .qubit_parity_switch import QubitParitySwitch  # noqa: E402
+from .qubit_parity_switch_continuous import QubitParitySwitchContinuous  # noqa: E402
+from .qubit_parity_switch_discrete import QubitParitySwitchDiscrete  # noqa: E402
 from .qubit_pi_pulse_error import QubitPiPulseError  # noqa: E402
 from .qubit_power_rabi import QubitPowerRabi  # noqa: E402
 from .qubit_ramsey import QubitRamsey  # noqa: E402
@@ -201,7 +202,8 @@ __all__ = [
     "states_to_joint_population",
     "PairSwapChevron", "PairSwapFluxMap",
     "PairZZCoupler", "QcNSwapAmp", "QubitRamseyCryoscope", "QubitDeterministicBenchmarking", "QubitDragAlternating", "QubitDragEquator", "QubitEcho",
-    "QubitEchoFluxPulse", "QubitParitySwitch", "QubitPiPulseError", "QubitPowerRabi", "QubitRamsey",
+    "QubitEchoFluxPulse", "QubitParitySwitchContinuous", "QubitParitySwitchDiscrete",
+    "QubitPiPulseError", "QubitPowerRabi", "QubitRamsey",
     "QubitRelaxation", "QubitRelaxationFluxPulse", "QubitSQRB",
     "QubitSpectroscopy", "QubitSpectroscopyCryoscope", "QubitSpectroscopyFluxPulse", "QubitSpectroscopyOverlap",
     "QubitThermalPopulation", "QubitTomography", "QubitXyzDelay",

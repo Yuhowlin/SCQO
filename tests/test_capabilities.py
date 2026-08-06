@@ -76,11 +76,13 @@ EXPECTED_TAGS = {
     "qubit_xyz_delay": ["state_readout", "qubit_reset"],
     "qubit_relaxation_flux_pulse": ["state_readout", "flux", "qubit_reset", "flux_pulse"],
     "qubit_echo_flux_pulse": ["state_readout", "flux", "qubit_reset", "flux_pulse"],
-    # parity monitor: state_readout only — deliberately NO qubit_reset. The
-    # readout is the running XOR of the parity (each shot inverts with the pole
-    # the last one left), so a reset would sever the chain the rate is fitted
-    # from; its depletion-only cadence is also the telegraph timebase.
-    "qubit_parity_switch": ["state_readout"],
+    # parity monitors: state_readout only — deliberately NO qubit_reset. In the
+    # continuous variant the readout is the running XOR of the parity (each
+    # shot inverts with the pole the last one left), so a reset would sever the
+    # chain the rate is fitted from; in the discrete variant M1's projection IS
+    # the initialization. Both keep the depletion-only wait as their timebase.
+    "qubit_parity_switch_continuous": ["state_readout"],
+    "qubit_parity_switch_discrete": ["state_readout"],
     "resonator_spectroscopy_flux": ["flux"],
     "qubit_spectroscopy_flux_pulse": ["flux", "flux_pulse"],
     # reset without discrimination: these pulse the qubit and read it out, so

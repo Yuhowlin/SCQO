@@ -1,4 +1,6 @@
-"""Charge-parity monitor — a fixed y90-idle-x90 sequence sampled as a shot trace.
+"""Charge-parity monitor, CONTINUOUS variant — a fixed y90-idle-x90 sequence
+sampled as a back-to-back shot trace. (The two-measurement-per-cycle sibling is
+``qubit_parity_switch_discrete``.)
 
 After a beat-model ``qubit_ramsey`` retunes the drive to the MEAN of the two
 charge-parity branches, the branches sit at +/- parity_delta_f_hz / 2 around
@@ -52,7 +54,7 @@ contain exactly the scheduled operations and a governed depletion wait.
 
 Driver contract (``probe()``):
 
-- per shot play ``y90`` — idle (:meth:`QubitParitySwitch.resolved_idle_ns`,
+- per shot play ``y90`` — idle (:meth:`QubitParitySwitchContinuous.resolved_idle_ns`,
   per target, ns) — ``x90`` — measure, and record EVERY shot (``shot_idx`` is
   a labeled sweep dim; no averaging exists here by design);
 - between shots insert ONLY the depletion wait
@@ -152,7 +154,7 @@ _NOMINAL_READOUT_S = 2e-6
 _NOMINAL_PI2_S = 40e-9
 
 
-class QubitParitySwitchParameters(TargetSelection, StateReadoutParameters):
+class QubitParitySwitchContinuousParameters(TargetSelection, StateReadoutParameters):
     """Inputs for a charge-parity switching-rate measurement."""
 
     record_time_s: float = Field(
@@ -221,7 +223,7 @@ class QubitParitySwitchParameters(TargetSelection, StateReadoutParameters):
                     "selected model's rate is what writes back to parity_rate_hz.")
 
 
-class QubitParitySwitchResult(Result):
+class QubitParitySwitchContinuousResult(Result):
     """``fit[qubit]``: ``parity_rate_hz`` (per-direction rate, pi x the PSD
     corner of the PARITY series — the value stored as the mode fact), the PSD
     fit scalars (``psd_corner_hz`` / ``psd_amplitude`` / ``psd_white_floor``),
@@ -239,10 +241,10 @@ class QubitParitySwitchResult(Result):
 
 
 @register
-class QubitParitySwitch(Experiment):
+class QubitParitySwitchContinuous(Experiment):
     """Backend-agnostic parity monitor. ``probe()`` is supplied by a driver."""
 
-    name: ClassVar[str] = "qubit_parity_switch"
+    name: ClassVar[str] = "qubit_parity_switch_continuous"
     description: ClassVar[str] = (
         "Fixed-sequence charge-parity monitor: y90 - idle - x90 - measure repeated as "
         "back-to-back single shots for record_time_s (the shot count is derived from it, "
@@ -261,10 +263,14 @@ class QubitParitySwitch(Experiment):
         "instead of I/Q (per-shot here, not averaged; needs a calibrated discriminator); "
         "the I/Q path REQUIRES an accepted single_shot_readout (the stored pos_* centers "
         "pin the trace discrimination). Also REQUIRES an accepted resonator_spectroscopy: "
-        "readout_depletion_s governs the shot cadence, which is the telegraph timebase."
+        "readout_depletion_s governs the shot cadence, which is the telegraph timebase. "
+        "This is the minimal-dead-time / fastest-sampling variant; prefer "
+        "qubit_parity_switch_discrete when a SLOW cycle period is wanted — there an "
+        "extra measurement re-projects the qubit each cycle, so T1 during the wait "
+        "cannot corrupt the parity record, whereas here slowing the cadence would."
     )
-    Parameters: ClassVar[type] = QubitParitySwitchParameters
-    Result: ClassVar[type] = QubitParitySwitchResult
+    Parameters: ClassVar[type] = QubitParitySwitchContinuousParameters
+    Result: ClassVar[type] = QubitParitySwitchContinuousResult
     Contract: ClassVar[DatasetContract] = DatasetContract(
         sweeps=("shot_idx",), sweep_units=("shot",), variables=("I", "Q"),
         alt_variables=SHOT_STATE_ALT,
@@ -277,7 +283,7 @@ class QubitParitySwitch(Experiment):
     #: the estimator discriminates the trace against exactly these.
     attach_readout_positions: ClassVar[bool] = True
 
-    params: QubitParitySwitchParameters
+    params: QubitParitySwitchContinuousParameters
 
     # ------------------------------------------------------------- pre-flight
     def _resolve_timing(self) -> dict[str, dict[str, float]]:
@@ -463,7 +469,8 @@ class QubitParitySwitch(Experiment):
     def simulate(self, coords: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         n_shots = coords["shot_idx"].size
         targets = self.params.targets
-        rng = np.random.default_rng(stable_seed("qubit_parity_switch", *targets))
+        rng = np.random.default_rng(
+            stable_seed("qubit_parity_switch_continuous", *targets))
         use_state = self.params.use_state_discrimination
         reference = None if use_state else self._reference_positions()
         i_data = np.empty((len(targets), n_shots))
@@ -496,21 +503,23 @@ class QubitParitySwitch(Experiment):
         return shot_state_vars(use_state, state, i_data, q_data)
 
     # ------------------------------------------------------------- analysis
-    def estimate(self) -> QubitParitySwitchResult:
+    def estimate(self) -> QubitParitySwitchContinuousResult:
         assert self.dataset is not None, "run() populates self.dataset before estimate()"
-        from scqat.estimators.parity_switch import ParitySwitchEstimator
+        from scqat.estimators.parity_switch_continuous import (
+            ParitySwitchContinuousEstimator,
+        )
 
         # The estimator self-serves everything from the dataset snapshot: the
         # 0/1 trace ('state', or I/Q discriminated against the attached
         # ref_pos_* centers) and the timebase (the attached shot_period_s) —
         # so a saved run re-analyzes offline unchanged.
         prepared = self.dataset.transpose("target", "shot_idx")
-        results = per_qubit_results(prepared, ParitySwitchEstimator(),
+        results = per_qubit_results(prepared, ParitySwitchContinuousEstimator(),
                                     artifact_dir=self.artifact_dir,
                                     model=self.params.psd_model)
 
         nan = float("nan")
-        result = QubitParitySwitchResult()
+        result = QubitParitySwitchContinuousResult()
         for qubit in self.params.targets:
             r = results[qubit]
             rate = float(r.get("parity_rate_hz", nan))
