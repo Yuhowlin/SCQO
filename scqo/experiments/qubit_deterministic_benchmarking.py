@@ -28,11 +28,11 @@ from ._capabilities.amplitude import (
 )
 from ._capabilities.qubit_reset import QubitResetParameters
 from ._capabilities.state_readout import (
-    STATE_ALT,
+    POPULATION_ALT,
     StateReadoutParameters,
     readout_vars,
     signal_rename,
-    state_row,
+    population_row,
 )
 from ._sim import iq_from_population, stable_seed
 from ..parameters import AveragingParameters, TargetSelection
@@ -141,7 +141,7 @@ class QubitDeterministicBenchmarking(Experiment):
         sweeps=(AMP_AXIS, "repetitions"),
         sweep_units=("", ""),
         variables=("I", "Q"),
-        alt_variables=(*STATE_ALT, ("I",)),
+        alt_variables=(*POPULATION_ALT, ("I",)),
     )
 
     required_operations: ClassVar[tuple[str, ...]] = ("rx", "readout")
@@ -184,7 +184,7 @@ class QubitDeterministicBenchmarking(Experiment):
                 omega = per_factor * (float(a) - a_ideal)
                 population = 0.5 - 0.45 * np.exp(-decay * reps) * np.cos(omega * reps)
                 if use_state:
-                    state[k, j] = state_row(population, rng)
+                    state[k, j] = population_row(population, rng)
                 else:
                     i_data[k, j], q_data[k, j] = iq_from_population(population, rng)
         return readout_vars(use_state, state, i_data, q_data)

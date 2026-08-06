@@ -22,6 +22,7 @@ from pydantic import Field, model_validator
 
 from ..contract import DatasetContract
 from ._capabilities.qubit_reset import QubitResetParameters
+from ._capabilities.state_readout import joint_state_labels
 from ._sim import stable_seed
 from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
@@ -31,8 +32,8 @@ from .pair_swap_chevron import (
     DRIVE_SIDE_DESC,
     MIN_TRANSFER_DESC,
     _flux_member_problems,
+    _joint_from_roles,
     _role_names,
-    _role_populations,
     summarize_transfer_map,
 )
 
@@ -110,7 +111,8 @@ class PairSwapFluxMap(Experiment):
     Contract: ClassVar[DatasetContract] = DatasetContract(
         # declared in RAW NESTING ORDER: outer loop = member flux, inner = coupler
         sweeps=("qubit_flux_v", "coupler_flux_v"), sweep_units=("V", "V"),
-        variables=("p_high", "p_low", "p_ee"),
+        # the readout schema's digital+average+joint form (see pair_swap_chevron)
+        variables=("joint_population",), readout_dims=("joint_state",),
     )
     target_kinds: ClassVar[tuple[str, ...]] = ("qubit_pair",)
     #: none, deliberately — see PairSwapChevron.required_operations.
@@ -171,11 +173,16 @@ class PairSwapFluxMap(Experiment):
             p_ee[k] = therm + rng.normal(0, 0.005, (vq.size, vc.size))
         for arr in (p_driven, p_partner, p_ee):
             np.clip(arr, 0.0, 1.0, out=arr)
-        return _role_populations(self.params.drive_side, p_driven, p_partner, p_ee)
+        joint = _joint_from_roles(self.params.drive_side, p_driven, p_partner, p_ee)
+        return {"joint_population": (
+            ("target", "joint_state", "qubit_flux_v", "coupler_flux_v"), joint)}
+
+    def readout_coords(self) -> dict:
+        return {"joint_state": joint_state_labels(2)}
 
     def estimate(self) -> PairSwapFluxMapResult:
         assert self.dataset is not None, "run() populates self.dataset before estimate()"
-        ds = self.dataset.transpose("target", "qubit_flux_v", "coupler_flux_v")
+        ds = self.dataset.transpose("target", "joint_state", "qubit_flux_v", "coupler_flux_v")
         # Raw joint-state-population maps -> scqat artifacts (figure + plotdata +
         # metadata, one folder per pair). Record-only: the SUCCESS verdict below
         # (min_transfer) stays here; the estimator only draws the populations.

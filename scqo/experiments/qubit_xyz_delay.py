@@ -26,11 +26,11 @@ from .._scqat import per_qubit_results
 from ..contract import DatasetContract
 from ._capabilities.qubit_reset import QubitResetParameters
 from ._capabilities.state_readout import (
-    STATE_ALT,
+    POPULATION_ALT,
     StateReadoutParameters,
     readout_vars,
     signal_rename,
-    state_row,
+    population_row,
 )
 from ._sim import stable_seed
 from ._time_grid import time_axis_ns
@@ -91,7 +91,7 @@ class QubitXyzDelay(Experiment):
         sweeps=("prepared_state", "relative_time_ns"),
         sweep_units=("state", "ns"),
         variables=("I", "Q"),
-        alt_variables=STATE_ALT,
+        alt_variables=POPULATION_ALT,
     )
     required_operations: ClassVar[tuple[str, ...]] = ("rx", "readout", "flux_bias")
     #: stored blob centers ride the dataset -> axial axis = the measured g->e vector
@@ -127,7 +127,7 @@ class QubitXyzDelay(Experiment):
             pops = {0: np.full(n_rt, 0.05), 1: 0.05 + 0.9 * tri}
             if use_state:
                 for j, s in enumerate(prepared):
-                    state[k, j] = state_row(pops[int(s)], rng)
+                    state[k, j] = population_row(pops[int(s)], rng)
             else:
                 # both prep slices share ONE IQ geometry (rotation/offset), so
                 # their difference is a clean signed triangle for the axial fit.

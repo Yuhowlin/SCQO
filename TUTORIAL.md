@@ -1015,7 +1015,204 @@ needed. *Cost* = one FieldSpec in the kind catalog + one hardware-tested
 channel-view setter per driver (conversions live only there) + the fieldmap
 binding + tests.
 
-## 11. Troubleshooting
+## 11. The readout schema (what a probe's dataset looks like)
+
+Every experiment's dataset is built from the same two questions plus one
+multi-qubit choice — declared, never inferred:
+
+1. **Analog or digital?** (`use_state_discrimination`) — does the instrument
+   return the raw I/Q voltages, or discriminate each shot on the FPGA?
+2. **Shot or average?** (`readout_mode`, on experiments that offer both) — is
+   every shot kept (full information, more memory), or does the instrument
+   average them (compact)?
+3. **For a multi-qubit target** (a pair), digital + average stores the **joint**
+   distribution — the probability of each joint outcome — because averaging the
+   members independently would throw the correlations away. Marginals are its
+   partial trace: derived, never stored.
+
+The variable NAME carries the semantics, so a dataset is self-describing:
+
+| Combo | Vars (units) | Dims |
+|---|---|---|
+| analog + shot | `I`, `Q` (V) | `(target[, member], *sweeps, shot_idx)` |
+| analog + average | `I`, `Q` (V) | `(target[, member], *sweeps)` |
+| digital + shot | `state` (int level ≥ 0) | `(target[, member], *sweeps, shot_idx)` |
+| digital + average, marginal | `population` (prob) | `(target[, member], *sweeps)` |
+| digital + average, joint (pairs) | `joint_population` (prob, sums to 1) | `(target, joint_state, *sweeps)` |
+
+Rules of the schema (each is checked, not a convention):
+
+- **`state` is ALWAYS a per-shot outcome; probabilities are `population` /
+  `joint_population`.** A per-shot `state` is an integer LEVEL, not a bit — a
+  qubit may read out |2⟩, and a binary reduction counts level ≥ 1 as excited.
+- **`sweeps` are the physics axes; readout adds its own dims** — `shot_idx`
+  (unit "shot"), `member`, `joint_state`. The experiment's `DatasetContract`
+  declares which readout dims each accepted form carries (`readout_dims` /
+  `alt_readout_dims`), and they are validated with the same rigor as sweeps.
+- **`member` order and `joint_state` digit order are the roster ROLES (high,
+  low)** — the leftmost label digit is the high member. The `member` coord
+  carries the role labels (`"high"`, `"low"`); the roster maps them to the
+  actual qubit names per pair (one flat coordinate cannot carry different
+  names for different pairs in a multi-pair run).
+- **`joint_state` labels are per-member level digits** — `"00" "01" "10" "11"`
+  for a binary pair, `"02"`/`"12"`/… when a member is f-resolved — always
+  generated (`joint_state_labels(m, n_levels)`), never hand-listed.
+- **A backend that cannot realize a requested combo REFUSES it by name, never
+  downgrades** — the same boundary rule as `reset_method`.
+- Cross-target correlations (several independently-targeted qubits in one
+  program) are NOT modeled — only per-target joints are. A pair is ONE target.
+
+The reduction helpers live once, in `scqo.experiments._capabilities.state_readout`
+(`states_to_joint_population`, `joint_to_marginals`, `joint_state_labels`,
+`member_order`): the simulated backend, the drivers' `reduce_raw` and the tests
+all share them. scqat never imports them — an estimator reads the dataset.
+
+Example — `qc_n_swap_amp` offers both modes on the same physics: `readout_mode=
+"average"` stores `joint_population @ (target, joint_state, flux_amp_v,
+swap_count)` (4 floats per point); `readout_mode="shot"` stores
+`state @ (target, member, flux_amp_v, swap_count, shot_idx)` (every shot,
+per member) and `estimate()` reduces it to the same joint distribution — both
+modes yield identical maps, the trade is disk vs information.
+
+## 12. Worked workflow: calibrating a partial swap (QCQ pair)
+
+Goal: turn the survey maps into a stored **partial-swap operation** of a chosen
+angle θ on a tunable-coupler (QCQ) pair, then verify and fine-tune it with
+`qc_n_swap_amp`. This is today's MANUAL chain — three `scqo` runs and one
+hand-edited register step; the honest-limits list at the end says what a future
+closed loop would automate.
+
+### The physics in five lines
+
+Each application of the swap pulse transfers population `P = sin²θ` with
+**θ = J_eff · t_p** (the model lives in
+`scqat/notebooks/calculator/repeated_partial_swap.ipynb`; θ = π/2 is a full
+iSWAP, and the collisional-reset link is θ = √(γ·dt)). The three knobs have
+three distinct roles:
+
+- **qubit (control) flux amplitude — the RESONANCE knob.** It brings the two
+  members onto resonance (δ = 0) during the pulse: maximum transfer envelope,
+  zero detuning phase per application. It is never the angle knob — an
+  off-resonance "partial transfer" is impure (it adds a δ-phase each swap and
+  loses contrast).
+- **coupler flux amplitude — the ANGLE knob.** `J_eff(Φ_c)` is continuous, so at
+  fixed duration θ tunes smoothly from ~0 (the decouple point) upward. This is
+  why the flux map is the entry point on a QCQ pair.
+- **duration t_p — coarse; keep it FIXED.** It is baked into the shaped pulse
+  (4 ns grid, raised-cosine edges), and `flattop_cosine` refuses duration
+  overrides for exactly that reason.
+
+Verification is built into `qc_n_swap_amp`'s N-axis: at the operating point the
+population oscillates with period **π/θ applications** — a full swap alternates
+every application, a √iSWAP (θ = π/4) cycles every 4, θ = π/8 every 8. You read
+the angle off the map by counting; no fit needed. (The peak transfer over N
+still reaches ~1 at N ≈ (π/2)/θ, so `min_transfer` keeps its meaning.)
+
+### Step 0 — prerequisites
+
+- accepted `single_shot_readout` on both members (the pair maps read out jointly
+  discriminated);
+- accepted `pair_zz_coupler` (the coupler parks at its decouple point —
+  `idle_flux` on the coupler's flux channel — so the swap only happens while the
+  coupler pulse plays);
+- the pair declared in `components.toml` with its `coupler` role.
+
+### Step 1 — survey the swap spot
+
+```
+scqo run pair_swap_flux_map --targets q1_q2
+```
+
+Run at the intended gate length: `flux_pulse_shape=flattop_cosine` with
+`swap_time_ns` UNSET plays the operation's own native length (a shaped pulse
+refuses overrides — truncating the edges changes the pulse area). Read the
+joint-population figure (`analysis/q1_q2/pair_swap_flux_map.png`): the
+resonance line in qubit flux, bending with coupler bias, and the transfer
+growing as the coupler activates. Then pick the operating point:
+
+- **full swap**: `best_qubit_flux_v` / `best_coupler_flux_v` from `result.fit`
+  (the transfer peak);
+- **arbitrary θ**: stay ON the resonance line and choose the coupler amplitude
+  where the transfer column reads `sin²θ_target` — e.g. θ = π/4 → the P ≈ 0.5
+  contour. Narrow the window and re-run until the contour is resolved by a few
+  grid points.
+
+### Step 2 — materialize the operation (once per pair per angle)
+
+The write-back is a hand-run register step in LCHQMDriver (one named
+(pulse, macro) pair PER ANGLE — keep `iswap` as the full swap and add e.g.
+`partial_swap` beside it):
+
+1. Edit + run `quam_config/register_flattop_cosine.py`: set `OP` to the angle's
+   pulse name (e.g. `partial_swap_flattop_cosine`), `LENGTH`/`EDGE_WIDTH` to the
+   surveyed duration, and the per-channel amplitudes — **control-z = the
+   resonance amplitude, coupler = the angle amplitude** (the script registers
+   separate pulse instances per channel for exactly this reason).
+2. Edit + run `quam_config/register_swap_macro.py`: attach
+   `pair.macros["partial_swap"] = ISwapImplementation(flux_pulse=<OP>)` — the
+   macro KEY is the operation name `qc_n_swap_amp` selects.
+3. Declare the operation on the pair in `components.toml`:
+   `operations = ["iswap", "partial_swap"]` (appending an operation is legal
+   even on a production-frozen roster).
+
+Constraints (the scripts and probes refuse violations by name): length a
+multiple of 4 ns and ≥ 16; `2·edge_width ≤ length`; amplitudes below the flux
+port's rail; the control-z amplitude ≠ 0 (it is the divisor of the probe's
+volts → amplitude_scale conversion).
+
+### Step 3 — verify and fine-tune
+
+```
+scqo run qc_n_swap_amp --targets q1_q2 --set swap_operation=partial_swap
+```
+
+Window the amplitude sweep around the registered control-z amplitude and give
+`swap_counts` at least two target periods (θ = π/4 → `[0..16]`). Read the map:
+
+- the **cleanest oscillation column** (maximum contrast, no drift with N) is the
+  resonance — if it sits off the registered amplitude, put the fitted amplitude
+  into the register script and re-run it;
+- the **oscillation period in N is π/θ** — if the period is off target, nudge
+  the COUPLER amplitude along the flux-map contour and re-register.
+
+`readout_mode=shot` keeps every shot (per-member states) when the downstream
+analysis wants raw trajectories (the collisional-model notebooks).
+
+### Pin the workflow
+
+`~/.scqo/parameters.toml`:
+
+```toml
+[pair_swap_flux_map]
+flux_pulse_shape = "flattop_cosine"
+drive_side = "low"
+flux_side = "low"
+
+[qc_n_swap_amp]
+swap_operation = "partial_swap"
+min_flux_amp_v = 0.12    # window around the registered control-z amplitude
+max_flux_amp_v = 0.18
+num_amp_points = 31
+swap_counts = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+drive_side = "low"
+flux_side = "low"
+```
+
+### What is manual today (and the future hooks)
+
+- **The angle is read by eye** (period counting). scqat's
+  `SwapOscillationEstimator` already fits `f = θ/π` per amplitude row and is
+  unused — wiring it per-amplitude is the natural first automation.
+- **The register scripts ARE the writeback.** The composite per-operation knobs
+  (`partial_swap_duration_s`, …) exist in the catalog, but the QM binding for a
+  pair duration is deliberately Unrealized until a calibrating experiment lands
+  ("promote to a coupled binding"), and no experiment proposes a composite knob
+  yet — the future closed loop gives the flux map and `qc_n_swap_amp` real
+  `update()`s.
+- **The chevron** (`pair_swap_chevron`) is the directly-coupled sibling survey
+  (member flux × duration); on a QCQ pair the flux map is the entry point.
+
+## 13. Troubleshooting
 
 **First move, always: `scqo doctor`** — it checks your venv, drivers, the whole
 config chain (shared config, user overlay, parameters file), data_root, the
@@ -1038,7 +1235,7 @@ roster-vs-vendor wiring), and tells you what is wrong and how to fix it.
 | Unknown `run_id` in `--show` | same — rebuild the index |
 | Want a clean slate | deleting `index.sqlite*` (all three files) is always safe; the folders are the data |
 
-## 12. What the system does NOT include yet
+## 14. What the system does NOT include yet
 
 Everything above is real: **both instruments are hardware-proven** through this path
 (Qblox cluster and OPX1000, since 2026-07-05), the catalog holds 21 experiments, and

@@ -207,10 +207,17 @@ class SimulatedBackend:
         raw = experiment.simulate(sweep)
         targets = experiment.params.targets
         default_dims = ["target", *sweep.keys()]
-        coords = {"target": list(targets), **sweep}
+        # readout_coords(): labels for the READOUT dims the contract adds on
+        # top of the physics sweeps (joint_state / member / shot_idx) — the
+        # simulated twin of a driver labeling its own reduce_raw output.
+        # getattr, not a direct call: duck-typed experiment stubs (tests) need
+        # not carry the hook — same tolerance as the drivers' reduce_raw.
+        readout = getattr(experiment, "readout_coords", None)
+        coords = {"target": list(targets), **sweep,
+                  **(readout() if readout is not None else {})}
         # A simulate() var is EITHER a bare ndarray spanning
         # (target, *sweeps) — the common case — OR a (dims_tuple, ndarray)
-        # when the var spans only a SUBSET of the axes.
+        # when the var spans only a SUBSET of the axes or carries readout dims.
         data_vars = {}
         for var, val in raw.items():
             if (isinstance(val, tuple) and len(val) == 2

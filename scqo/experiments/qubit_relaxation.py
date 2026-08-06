@@ -19,11 +19,11 @@ from .._scqat import per_qubit_results
 from ..contract import DatasetContract
 from ._capabilities.qubit_reset import QubitResetParameters
 from ._capabilities.state_readout import (
-    STATE_ALT,
+    POPULATION_ALT,
     StateReadoutParameters,
     readout_vars,
     signal_rename,
-    state_row,
+    population_row,
 )
 from ._sim import iq_from_population, stable_seed
 from ._time_grid import time_axis_ns
@@ -71,7 +71,7 @@ class QubitRelaxation(Experiment):
     Result: ClassVar[type] = QubitRelaxationResult
     Contract: ClassVar[DatasetContract] = DatasetContract(
         sweeps=("wait_time_ns",), sweep_units=("ns",), variables=("I", "Q"),
-        alt_variables=STATE_ALT,
+        alt_variables=POPULATION_ALT,
     )
     required_operations: ClassVar[tuple[str, ...]] = ("rx", "readout")
     #: stored blob centers ride the dataset -> axial axis = the measured g->e vector
@@ -96,7 +96,7 @@ class QubitRelaxation(Experiment):
             t1 = rng.uniform(20e-6, 60e-6)  # hidden truth the fit must recover
             population = np.exp(-t / t1)
             if use_state:
-                state[k] = state_row(population, rng)
+                state[k] = population_row(population, rng)
             else:
                 i_data[k], q_data[k] = iq_from_population(population, rng)
         return readout_vars(use_state, state, i_data, q_data)

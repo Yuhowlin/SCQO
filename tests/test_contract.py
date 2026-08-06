@@ -94,25 +94,26 @@ def test_validate_rejects_nonconforming():
         contract.validate(ds.rename({"idle_time_ns": "t"}))  # missing sweep dim/coord
 
 
-def test_alt_variables_accepts_state_only():
-    """A contract with alt_variables=(("state",),) accepts a discriminated probe's
-    state-only dataset — and still accepts the primary (I, Q) form."""
+def test_alt_variables_accepts_population_only():
+    """A contract with alt_variables=(("population",),) accepts a discriminated
+    probe's averaged dataset — and still accepts the primary (I, Q) form."""
     _, ds = _acquire(_Ram)
     contract = _Ram.Contract
-    assert contract.alt_variables == (("state",),)
+    assert contract.alt_variables == (("population",),)
 
     contract.validate(ds)  # primary (I, Q) form conforms
-    state_ds = ds.drop_vars("Q").rename({"I": "state"})
-    contract.validate(state_ds)  # alt (state,) form conforms
-    assert contract.conforms(state_ds)
+    pop_ds = ds.drop_vars("Q").rename({"I": "population"})
+    contract.validate(pop_ds)  # alt (population,) form conforms
+    assert contract.conforms(pop_ds)
 
 
 def test_alt_variables_enforce_dims_rigor():
-    """Alternative sets are held to the SAME rigor as the primary set: a 'state'
-    variable that does not span exactly (target, *sweeps) is rejected."""
+    """Alternative sets are held to the SAME rigor as the primary set: a
+    'population' variable that does not span exactly (target, *sweeps) is
+    rejected."""
     _, ds = _acquire(_Ram)
-    state_ds = ds.drop_vars("Q").rename({"I": "state"})
-    squashed = state_ds.isel(idle_time_ns=0, drop=True)  # state loses the sweep dim
+    pop_ds = ds.drop_vars("Q").rename({"I": "population"})
+    squashed = pop_ds.isel(idle_time_ns=0, drop=True)  # loses the sweep dim
     with pytest.raises(ContractError):
         _Ram.Contract.validate(squashed)
 
@@ -125,7 +126,7 @@ def test_alt_variables_failure_lists_all_accepted_sets():
     with pytest.raises(ContractError) as err:
         _Ram.Contract.validate(bogus)
     msg = str(err.value)
-    assert "('I', 'Q')" in msg and "('state',)" in msg
+    assert "('I', 'Q')" in msg and "('population',)" in msg
 
 
 class _Chev(PairSwapChevron):
@@ -142,24 +143,58 @@ class _Map(PairSwapFluxMap):
     (_Chev, ("flux_amp_v", "swap_time_ns")),
     (_Map, ("qubit_flux_v", "coupler_flux_v")),
 ])
-def test_multi_variable_contract(cls, sweeps):
-    """A contract may require MORE than one variable, and every one of them is
-    held to the same dims rigor. The swap maps need three: two role-named
-    marginals (an excitation that left one qubit must be seen arriving at the
-    other) plus the |ee> witness that separates a swap from heating."""
+def test_joint_population_contract(cls, sweeps):
+    """The swap maps store the readout schema's joint form: ONE variable
+    (``joint_population``) carrying an extra READOUT dim (``joint_state``) on
+    top of the physics sweeps — and that extra dim is held to the same rigor
+    as the sweeps (dim + coord, exact spans)."""
     backend = SimulatedBackend(demo_device(tunable=True)[2])
     exp = cls(backend, cls.Parameters(targets=["q0_q1"]))
     exp.sweep_axes = exp.define_sweep()
     ds = backend.acquire(exp)
 
     assert cls.Contract.sweeps == sweeps
-    assert cls.Contract.variables == ("p_high", "p_low", "p_ee")
+    assert cls.Contract.variables == ("joint_population",)
+    assert cls.Contract.readout_dims == ("joint_state",)
     cls.Contract.validate(ds)  # does not raise
+    assert [str(v) for v in ds["joint_state"].values] == ["00", "01", "10", "11"]
 
     with pytest.raises(ContractError):
-        cls.Contract.validate(ds.drop_vars("p_ee"))  # every variable is required
+        cls.Contract.validate(ds.rename({"joint_population": "pops"}))
+    with pytest.raises(ContractError):
+        # collapsing the readout dim breaks the joint form
+        cls.Contract.validate(ds.isel(joint_state=0, drop=True))
     with pytest.raises(ContractError):
         cls.Contract.validate(ds.isel({sweeps[0]: 0}, drop=True))  # dims rigor
+
+
+def test_shot_form_is_an_accepted_alternative():
+    """qc_n_swap_amp's contract accepts BOTH readout forms: the averaged
+    joint_population AND the per-shot per-member ``state`` (readout dims
+    member + shot_idx) — the readout_mode param selects which one the probe
+    emits, and each form is validated with full rigor."""
+    from scqo.experiments import QcNSwapAmp
+
+    class _NSwap(QcNSwapAmp):
+        def probe(self):
+            return None
+
+    backend = SimulatedBackend(demo_device(tunable=True)[2])
+    for mode in ("average", "shot"):
+        exp = _NSwap(backend, _NSwap.Parameters(targets=["q0_q1"], num_averages=50,
+                                                readout_mode=mode))
+        exp.sweep_axes = exp.define_sweep()
+        ds = backend.acquire(exp)
+        _NSwap.Contract.validate(ds)
+        if mode == "shot":
+            assert "state" in ds.data_vars
+            assert ds["state"].dims == ("target", "member", "flux_amp_v",
+                                        "swap_count", "shot_idx")
+            with pytest.raises(ContractError):
+                # a shot-form dataset without its shot axis conforms to NEITHER form
+                _NSwap.Contract.validate(ds.isel(shot_idx=0, drop=True))
+        else:
+            assert "joint_population" in ds.data_vars
 
 
 def test_two_axis_contract():

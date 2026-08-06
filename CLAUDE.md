@@ -404,6 +404,22 @@ verb over a different INPUT (a plan, not an experiment name), and it REFUSES a b
 experiment name in code, pointing at `scqo run <name> --repeat N` — so "exactly one way
 to run one experiment" is a checked property, not a convention.
 
+### The readout schema (digest — full text: TUTORIAL §11)
+Readout output is DECLARED, never inferred: `use_state_discrimination` (analog I/Q vs
+digital) × `readout_mode` (shot vs average; `ReadoutModeParameters`, only on experiments
+realizing both) + the multi-qubit joint form. Variable names carry the semantics —
+`state` is ALWAYS a per-shot integer LEVEL (qutrit-capable, never a probability),
+`population` the averaged marginal, `joint_population` the averaged joint distribution
+of a multi-qubit target (a pair stores JOINT; marginals = partial trace, derived not
+stored). `sweeps` are physics axes; readout adds its own dims (`shot_idx`, `member`,
+`joint_state`) declared per accepted form via `DatasetContract.readout_dims` /
+`alt_readout_dims` and validated with sweep rigor. `member`/label-digit order = roster
+roles (high, low; `member` coord carries the ROLE labels). `joint_state` labels are
+generated per-member level digits ("00".."11", "02" when f-resolved), never hand-listed.
+A backend that cannot realize a combo REFUSES by name. Helpers live once in
+`_capabilities/state_readout.py` (`states_to_joint_population` / `joint_to_marginals` /
+`joint_state_labels` / `member_order`); drivers import them, scqat only reads datasets.
+
 ### The placement rule (digest — full text: TUTORIAL §10; bench: `scqo state --rule`)
 Classify each USE of a quantity, in order, first match wins:
 (1) gone when the run ends → per-run Parameters; (2) true of the chip in the dark

@@ -95,6 +95,7 @@ EXPECTED_TAGS = {
     # probes hardcode discrimination, so no state_readout tag either.
     "pair_swap_chevron": ["qubit_reset"],
     "pair_swap_flux_map": ["qubit_reset"],
+    "qc_n_swap_amp": ["qubit_reset"],
     "single_shot_readout": ["qubit_reset"],
     "single_shot_readout_gef": ["qubit_reset"],
     "qubit_thermal_population": ["qubit_reset"],
@@ -364,10 +365,10 @@ def test_foreign_flux_source_guard():
     ("qubit_relaxation_flux_pulse", {"num_flux_points": 5, "num_wait_points": 11}),
     ("qubit_echo_flux_pulse", {"num_flux_points": 5, "num_wait_points": 11}),
 ])
-def test_state_contract_accepted_for_newly_wired(name, params):
-    """The newly wired carriers emit `state` (no I/Q) in discriminated mode and
-    I/Q otherwise — and their Contract validates BOTH shapes (the old contracts
-    of the flux pair rejected `state`)."""
+def test_population_contract_accepted_for_newly_wired(name, params):
+    """The newly wired carriers emit `population` (no I/Q) in discriminated mode
+    and I/Q otherwise — and their Contract validates BOTH shapes (`state` is
+    reserved for PER-SHOT outcomes under the readout schema)."""
     ensure_demo_experiments()
     cls = get(name)
     _roster, _design, vendor = demo_device(tunable=True)  # flux carriers need z lines
@@ -378,7 +379,7 @@ def test_state_contract_accepted_for_newly_wired(name, params):
         exp.sweep_axes = exp.define_sweep()
         ds = backend.acquire(exp)
         cls.Contract.validate(ds)
-        assert ("state" in ds.data_vars) is use_state
+        assert ("population" in ds.data_vars) is use_state
         assert ("I" in ds.data_vars) is not use_state
 
 

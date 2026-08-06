@@ -26,6 +26,7 @@ from pydantic import Field
 
 from ..contract import DatasetContract
 from ._capabilities.qubit_reset import QubitResetParameters
+from ._capabilities.state_readout import joint_state_labels
 from ._sim import stable_seed
 from ._time_grid import time_axis_ns
 from ..parameters import AveragingParameters, TargetSelection
@@ -101,7 +102,10 @@ class PairSwapChevron(Experiment):
     Result: ClassVar[type] = PairSwapChevronResult
     Contract: ClassVar[DatasetContract] = DatasetContract(
         sweeps=("flux_amp_v", "swap_time_ns"), sweep_units=("V", "ns"),
-        variables=("p_high", "p_low", "p_ee"),
+        # the readout schema's digital+average+joint form: the stored variable
+        # is the joint distribution over the pair's basis states (digit order
+        # high, low); member marginals are its partial trace, derived not stored.
+        variables=("joint_population",), readout_dims=("joint_state",),
     )
     target_kinds: ClassVar[tuple[str, ...]] = ("qubit_pair",)
     #: none, deliberately: a composite's operations are DECLARED, and this
@@ -165,11 +169,16 @@ class PairSwapChevron(Experiment):
             p_ee[k] = therm + rng.normal(0, 0.005, (v.size, t_ns.size))
         for arr in (p_driven, p_partner, p_ee):
             np.clip(arr, 0.0, 1.0, out=arr)
-        return _role_populations(self.params.drive_side, p_driven, p_partner, p_ee)
+        joint = _joint_from_roles(self.params.drive_side, p_driven, p_partner, p_ee)
+        return {"joint_population": (
+            ("target", "joint_state", "flux_amp_v", "swap_time_ns"), joint)}
+
+    def readout_coords(self) -> dict:
+        return {"joint_state": joint_state_labels(2)}
 
     def estimate(self) -> PairSwapChevronResult:
         assert self.dataset is not None, "run() populates self.dataset before estimate()"
-        ds = self.dataset.transpose("target", "flux_amp_v", "swap_time_ns")
+        ds = self.dataset.transpose("target", "joint_state", "flux_amp_v", "swap_time_ns")
         # Raw joint-state-population maps -> scqat artifacts (figure + plotdata +
         # metadata, one folder per pair). Record-only: the SUCCESS verdict below
         # (min_transfer) stays here; the estimator only draws the populations.
@@ -204,42 +213,48 @@ class PairSwapChevron(Experiment):
         raise NotImplementedError("a driver backend supplies probe()")
 
 
-def _role_populations(drive_side: str, p_driven: np.ndarray, p_partner: np.ndarray,
-                      p_ee: np.ndarray) -> dict[str, np.ndarray]:
-    """Label the simulated driven/partner traces by ROSTER role.
+def _joint_from_roles(drive_side: str, p_driven: np.ndarray, p_partner: np.ndarray,
+                      p_ee: np.ndarray) -> np.ndarray:
+    """Package simulated driven/partner marginals as the joint distribution.
 
-    Branching on ``drive_side`` is what makes an offline test exercise the role
-    mapping instead of silently accepting either orientation."""
+    The sim kernels produce role-free marginals (driven / partner / |ee>);
+    this labels them by ROSTER role and stacks the four basis populations on a
+    new axis 1 in ``joint_state_labels(2)`` order ("00", "01", "10", "11" —
+    digit order high, low). Branching on ``drive_side`` is what makes an
+    offline test exercise the role mapping instead of silently accepting
+    either orientation."""
     driven_is_high = drive_side == "high"
     p_high = p_driven if driven_is_high else p_partner
     p_low = p_partner if driven_is_high else p_driven
-    return {
-        "p_high": p_high,
-        "p_low": p_low,
-        "p_ee": p_ee,
-        "p_gg": np.clip(1.0 - (p_high + p_low) + p_ee, 0.0, 1.0),
-    }
+    p11 = np.clip(p_ee, 0.0, 1.0)
+    p10 = np.clip(p_high - p_ee, 0.0, 1.0)
+    p01 = np.clip(p_low - p_ee, 0.0, 1.0)
+    p00 = np.clip(1.0 - (p01 + p10 + p11), 0.0, 1.0)
+    return np.stack([p00, p01, p10, p11], axis=1)
 
 
 def summarize_transfer_map(one_pair, drive_side: str, axes: tuple[str, str],
                            min_transfer: float) -> tuple[dict, bool]:
     """The record-only summary of one pair's 2D transfer map.
 
-    ``one_pair`` is the dataset sliced to a single target. The reported peak is
-    of the UNDRIVEN member's population — that is the excitation transfer, and
-    the driven member's own decay cannot be told from a swap. Returns
-    ``(fit, ok)``; ``ok`` is the SUCCESSFUL/FAILED verdict."""
-    partner = "p_high" if drive_side == "low" else "p_low"
-    transfer = np.asarray(one_pair[partner].values, dtype=float)
+    ``one_pair`` is the dataset sliced to a single target, carrying the joint
+    form (``joint_population`` over ``joint_state``). The reported peak is of
+    the UNDRIVEN member's marginal (its partial trace) — that is the excitation
+    transfer, and the driven member's own decay cannot be told from a swap.
+    Returns ``(fit, ok)``; ``ok`` is the SUCCESSFUL/FAILED verdict."""
+    jp = one_pair["joint_population"]
+    p_high = (jp.sel(joint_state="10") + jp.sel(joint_state="11")).values
+    p_low = (jp.sel(joint_state="01") + jp.sel(joint_state="11")).values
+    transfer = np.asarray(p_high if drive_side == "low" else p_low, dtype=float)
     # `fit` is the NUMERIC extraction surface (Result.fit is dict[str, float]);
-    # which variable the peak came from is derivable from the persisted
+    # which member the peak came from is derivable from the persisted
     # drive_side parameter, so it does not belong here as a string.
     fit = {
-        "p_high_min": float(np.nanmin(one_pair["p_high"])),
-        "p_high_max": float(np.nanmax(one_pair["p_high"])),
-        "p_low_min": float(np.nanmin(one_pair["p_low"])),
-        "p_low_max": float(np.nanmax(one_pair["p_low"])),
-        "p_ee_max": float(np.nanmax(one_pair["p_ee"])),
+        "p_high_min": float(np.nanmin(p_high)),
+        "p_high_max": float(np.nanmax(p_high)),
+        "p_low_min": float(np.nanmin(p_low)),
+        "p_low_max": float(np.nanmax(p_low)),
+        "p_ee_max": float(np.nanmax(jp.sel(joint_state="11").values)),
         **{f"n_{axis}": int(one_pair.sizes[axis]) for axis in axes},
     }
     if not np.isfinite(transfer).any():

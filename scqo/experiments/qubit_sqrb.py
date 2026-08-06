@@ -17,10 +17,10 @@ from .._scqat import per_qubit_results
 from ..contract import DatasetContract
 from ._capabilities.qubit_reset import QubitResetParameters
 from ._capabilities.state_readout import (
-    STATE_ALT,
+    POPULATION_ALT,
     StateReadoutParameters,
     readout_vars,
-    state_row,
+    population_row,
 )
 from ._sim import stable_seed
 from ..parameters import AveragingParameters, TargetSelection
@@ -95,7 +95,7 @@ class QubitSQRB(Experiment):
         sweeps=("sequence_idx", "depth"),
         sweep_units=("", ""),
         variables=("I", "Q"),
-        alt_variables=(*STATE_ALT, ("I",)),
+        alt_variables=(*POPULATION_ALT, ("I",)),
     )
 
     required_operations: ClassVar[tuple[str, ...]] = ("rx", "readout")
@@ -136,7 +136,7 @@ class QubitSQRB(Experiment):
                 # Shot noise (per sequence, at this depth) — one draw in either mode,
                 # so the I/Q stream is unchanged when discrimination is off.
                 if use_state:
-                    state[q_idx, :, d_idx] = state_row(seq_p0, rng, noise=shot_noise)
+                    state[q_idx, :, d_idx] = population_row(seq_p0, rng, noise=shot_noise)
                 else:
                     I_data[q_idx, :, d_idx] = seq_p0 + rng.normal(0, shot_noise, n_seqs)
 

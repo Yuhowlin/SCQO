@@ -30,11 +30,11 @@ from ._capabilities.amplitude import (
 )
 from ._capabilities.qubit_reset import QubitResetParameters
 from ._capabilities.state_readout import (
-    STATE_ALT,
+    POPULATION_ALT,
     StateReadoutParameters,
     readout_vars,
     signal_rename,
-    state_row,
+    population_row,
 )
 from ._sim import iq_from_population, stable_seed
 from ..parameters import AveragingParameters, TargetSelection
@@ -79,7 +79,7 @@ class QubitPowerRabi(Experiment):
     Result: ClassVar[type] = QubitPowerRabiResult
     Contract: ClassVar[DatasetContract] = DatasetContract(
         sweeps=(AMP_AXIS,), sweep_units=("",), variables=("I", "Q"),
-        alt_variables=STATE_ALT,
+        alt_variables=POPULATION_ALT,
     )
     required_operations: ClassVar[tuple[str, ...]] = ("rx", "readout")
     #: stored blob centers ride the dataset -> axial axis = the measured g->e vector
@@ -107,7 +107,7 @@ class QubitPowerRabi(Experiment):
             factor_pi = rng.uniform(0.85, 1.15)  # miscalibration to recover (1.0 == perfect)
             population = 0.5 - 0.5 * np.cos(np.pi * factor / factor_pi)
             if use_state:
-                state[k] = state_row(population, rng)
+                state[k] = population_row(population, rng)
             else:
                 i_data[k], q_data[k] = iq_from_population(population, rng)
         return readout_vars(use_state, state, i_data, q_data)

@@ -76,7 +76,7 @@ from pydantic import Field
 
 from .._scqat import per_qubit_results
 from ..contract import DatasetContract
-from ._capabilities.state_readout import STATE_ALT, StateReadoutParameters, readout_vars
+from ._capabilities.state_readout import SHOT_STATE_ALT, StateReadoutParameters, shot_state_vars
 from ._depletion import READOUT_DEPLETION_NS_DESC, depletion_wait_ns
 from ._sim import stable_seed
 from ..parameters import TargetSelection
@@ -267,7 +267,7 @@ class QubitParitySwitch(Experiment):
     Result: ClassVar[type] = QubitParitySwitchResult
     Contract: ClassVar[DatasetContract] = DatasetContract(
         sweeps=("shot_idx",), sweep_units=("shot",), variables=("I", "Q"),
-        alt_variables=STATE_ALT,
+        alt_variables=SHOT_STATE_ALT,
     )
     #: charge parity is transmon physics — matches the parity_rate_hz fact's
     #: catalog scope (fluxonium has no charge-Ramsey beat to derive the idle from).
@@ -493,7 +493,7 @@ class QubitParitySwitch(Experiment):
                 # the same reason
                 i_data[k] = np.where(trace, e_i, g_i) + rng.normal(0, 0.4, n_shots)
                 q_data[k] = np.where(trace, e_q, g_q) + rng.normal(0, 0.4, n_shots)
-        return readout_vars(use_state, state, i_data, q_data)
+        return shot_state_vars(use_state, state, i_data, q_data)
 
     # ------------------------------------------------------------- analysis
     def estimate(self) -> QubitParitySwitchResult:

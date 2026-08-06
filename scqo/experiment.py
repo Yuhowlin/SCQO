@@ -126,6 +126,16 @@ class Experiment(ABC):
     def probe(self) -> Any:
         """Compile ``params`` + device state into a native program."""
 
+    def readout_coords(self) -> dict[str, Any]:
+        """Labels for the READOUT dims this run's dataset carries (the
+        contract's ``readout_dims`` — e.g. ``{"joint_state": [...]}``).
+
+        Consumed by the simulated backend when it assembles ``simulate()``'s
+        arrays into the dataset; a hardware driver labels its own output (its
+        ``reduce_raw`` builds the coords via the shared capability helpers).
+        Base: no readout dims."""
+        return {}
+
     # ------------------------------------------------------------ orchestration
     #: (dataset variable, readout-channel monitor field) pairs.
     _POSITION_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = (

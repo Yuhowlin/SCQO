@@ -32,11 +32,11 @@ from ._capabilities.flux import (
 )
 from ._capabilities.qubit_reset import QubitResetParameters
 from ._capabilities.state_readout import (
-    STATE_ALT,
+    POPULATION_ALT,
     StateReadoutParameters,
     readout_vars,
     signal_rename,
-    state_row,
+    population_row,
 )
 from ._sim import stable_seed
 from ._time_grid import time_axis_ns
@@ -87,7 +87,7 @@ class QubitRelaxationFluxPulse(Experiment):
         sweeps=("flux_bias_v", "wait_time_ns"),
         sweep_units=("V", "ns"),
         variables=("I", "Q"),
-        alt_variables=STATE_ALT,
+        alt_variables=POPULATION_ALT,
     )
 
     params: QubitRelaxationFluxPulseParameters
@@ -137,7 +137,7 @@ class QubitRelaxationFluxPulse(Experiment):
 
                 noise = 0.02
                 if use_state:
-                    state[k, f_idx] = state_row(decay, rng)
+                    state[k, f_idx] = population_row(decay, rng)
                 else:
                     i_data[k, f_idx] = decay + rng.normal(0, noise, n_wait)
                     q_data[k, f_idx] = rng.normal(0, noise, n_wait)

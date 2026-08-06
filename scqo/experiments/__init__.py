@@ -144,14 +144,21 @@ def catalog() -> list[dict]:
 # ResonatorSpectroscopy` to subclass with a probe).
 #: the driver-facing slice of the capability package: a probe resolves its
 #: thermal-reset wait through reset_wait_ns rather than reading the knob or the
-#: override itself (the precedence rule has exactly one home).
+#: override itself (the precedence rule has exactly one home), and a driver's
+#: reduce_raw builds the readout schema's joint form through the SAME helpers
+#: the simulators use.
 from ._capabilities import (  # noqa: E402
     QubitResetParameters,
+    joint_state_labels,
+    joint_to_marginals,
+    member_order,
     reset_wait_ns,
+    states_to_joint_population,
 )
 from .pair_swap_chevron import PairSwapChevron  # noqa: E402
 from .pair_swap_flux_map import PairSwapFluxMap  # noqa: E402
 from .pair_zz_coupler import PairZZCoupler  # noqa: E402
+from .qc_n_swap_amp import QcNSwapAmp  # noqa: E402
 from .qubit_ramsey_cryoscope import QubitRamseyCryoscope  # noqa: E402
 from .qubit_deterministic_benchmarking import QubitDeterministicBenchmarking  # noqa: E402
 from .qubit_drag_alternating import QubitDragAlternating  # noqa: E402
@@ -190,8 +197,10 @@ from .single_shot_readout_gef import SingleShotReadoutGEF  # noqa: E402
 __all__ = [
     "catalog", "get", "register",
     "QubitResetParameters", "reset_wait_ns",
+    "joint_state_labels", "joint_to_marginals", "member_order",
+    "states_to_joint_population",
     "PairSwapChevron", "PairSwapFluxMap",
-    "PairZZCoupler", "QubitRamseyCryoscope", "QubitDeterministicBenchmarking", "QubitDragAlternating", "QubitDragEquator", "QubitEcho",
+    "PairZZCoupler", "QcNSwapAmp", "QubitRamseyCryoscope", "QubitDeterministicBenchmarking", "QubitDragAlternating", "QubitDragEquator", "QubitEcho",
     "QubitEchoFluxPulse", "QubitParitySwitch", "QubitPiPulseError", "QubitPowerRabi", "QubitRamsey",
     "QubitRelaxation", "QubitRelaxationFluxPulse", "QubitSQRB",
     "QubitSpectroscopy", "QubitSpectroscopyCryoscope", "QubitSpectroscopyFluxPulse", "QubitSpectroscopyOverlap",
