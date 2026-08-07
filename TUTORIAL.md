@@ -84,6 +84,8 @@ qubit_relaxation_flux_pulse [state_readout,flux,flux_pulse] T1 vs flux-PULSE map
 qubit_spectroscopy               Sweep a weak saturation drive ... recalibrates drive_freq_hz.
 qubit_spectroscopy_flux_pulse [flux,flux_pulse]  2D flux arch, window relative to idle_flux ... proposes flux_offset/flux_per_phi0 (z channel) + ej_sum_hz/f_q_max_hz (mode facts) + idle_flux (re-parks at the sweet spot).
 qubit_sqrb [state_readout]       Randomized benchmarking ... average gate fidelity.
+qubit_t1_ade [qubit_reset]       Track T1 vs lab time: 3-delay closed-form decay rate on the FPGA (ADE; record-only; QM backend only).
+qubit_t1_bayesian [qubit_reset]  Track T1 vs lab time: per-shot adaptive Bayesian estimation, tau = c*T1_est (record-only; QM backend only).
 qubit_tomography                 State tomography ... populations + gate error trajectory.
 readout_frequency                Per-shot fidelity vs freq ... updates readout_freq_hz.
 readout_power                    Per-shot fidelity vs amp ... updates readout_amp.
@@ -371,6 +373,12 @@ qubit_relaxation       q1       t1_s                   98     2  4.1310e-05  3.1
 The last column is the one to read. **`std/err` is the across-repeat scatter divided
 by the mean per-fit standard error**: much greater than 1 means the qubit really moved
 between repeats; around 1 means the spread is just fit noise and the qubit was stable.
+
+(For T1 specifically there is also an IN-RUN alternative on the QM backend:
+`qubit_t1_ade` and `qubit_t1_bayesian` produce a whole T1-vs-lab-time trace inside
+one run — hundreds of estimates per minute with per-point error bars, versus one
+estimate per repeat here. The campaign remains the cross-experiment, cross-backend
+tool; the trackers are the high-cadence single-quantity ones.)
 A `-` means that fit publishes no standard error for that quantity (`t2_star_s` is
 the common case), not that the scatter is zero.
 
@@ -1238,7 +1246,7 @@ roster-vs-vendor wiring), and tells you what is wrong and how to fix it.
 ## 14. What the system does NOT include yet
 
 Everything above is real: **both instruments are hardware-proven** through this path
-(Qblox cluster and OPX1000, since 2026-07-05), the catalog holds 21 experiments, and
+(Qblox cluster and OPX1000, since 2026-07-05), the catalog holds 35 experiments, and
 the GUI you read about in section 4 (viewer + datasette) is shipped. Still ahead:
 
 - **Device-level inference** (Phase 3): combining runs into EJ/EC, anharmonicity,

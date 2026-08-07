@@ -101,6 +101,11 @@ EXPECTED_TAGS = {
     "single_shot_readout": ["qubit_reset"],
     "single_shot_readout_gef": ["qubit_reset"],
     "qubit_thermal_population": ["qubit_reset"],
+    # T1 trackers: qubit_reset only — their probes ALWAYS discriminate (the
+    # on-FPGA math consumes the state bit), so there is no I/Q-vs-state choice
+    # and no StateReadoutParameters mixin.
+    "qubit_t1_ade": ["qubit_reset"],
+    "qubit_t1_bayesian": ["qubit_reset"],
     "readout_power": ["qubit_reset", "amplitude"],
     "readout_frequency": ["qubit_reset"],
     "qubit_spectroscopy": ["qubit_reset"],

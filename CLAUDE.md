@@ -270,6 +270,15 @@ scqo/
                                 #   diagnostic (per-flux fits in result.fit)
     qubit_echo_flux_pulse.py    # T2_echo vs swept z PULSE (idle-relative) - record-only
     qubit_sqrb.py               # single-qubit randomized benchmarking - record-only gate fidelities
+    qubit_t1_ade.py             # T1 vs LAB TIME by 3-delay Analytical Decay Estimation
+                                #   (arXiv:2602.11912: on-FPGA closed form + analytic sigma,
+                                #   SPAM cancels; host bootstrap cross-check) - record-only
+                                #   tracking (qubit_relaxation stays the t1_s authority);
+                                #   QM-only probe
+    qubit_t1_bayesian.py        # T1 vs LAB TIME by per-shot adaptive Bayes (arXiv:2506.09576,
+                                #   u = 1/k so k grows past fixed-point range; tau = c*T1_est;
+                                #   interleaved classical-decay validation; needs discriminator
+                                #   + confusion matrix) - record-only tracking; QM-only probe
     qubit_tomography.py         # state tomography (custom contract) - record-only
     qubit_xyz_delay.py          # slide XY x180 vs same-length Z pulse (prepared_state x
                                 #   relative_time_ns), triangle-overlap fit -> flux_delay_s

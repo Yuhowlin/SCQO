@@ -24,7 +24,7 @@ from scqo.testing import (
 #: zero suggestions is their CORRECT outcome.
 RECORD_ONLY = {"qubit_sqrb", "qubit_tomography", "qubit_echo_flux_pulse",
                "qubit_relaxation_flux_pulse", "pair_swap_chevron", "pair_swap_flux_map",
-               "qc_n_swap_amp"}
+               "qc_n_swap_amp", "qubit_t1_ade", "qubit_t1_bayesian"}
 
 
 #: the readout reference an accepted single_shot_readout would have left behind.
@@ -901,3 +901,36 @@ def test_parity_switch_discrete_dataset_carries_both_measurements(session):
     # the per-cycle reduction's fingerprint (continuous divides by n - 2)
     assert fit["p_switch"] == pytest.approx(
         fit["n_parity_switches"] / (n_cycles - 1), rel=1e-6)
+
+
+def test_t1_ade_recovers_the_planted_t1(session):
+    """The ADE closed form must track the T1 the simulator planted, with a
+    finite analytic sigma and the bootstrap cross-check on the same shots."""
+    from scqo.experiments._sim import stable_seed
+
+    planted = np.random.default_rng(stable_seed("qubit_t1_ade", "q0")).uniform(20e-6, 60e-6)
+    out = session.run("qubit_t1_ade", {"targets": ["q0"]}, update="none")
+    assert out.get("error") is None, out.get("error")
+    fit = out["fit"]["q0"]
+    assert fit["t1_median_s"] == pytest.approx(planted, rel=0.1)
+    assert math.isfinite(fit["t1_sigma_median_s"])
+    assert math.isfinite(fit["t1_boot_sigma_median_s"])  # shots were streamed
+    assert fit["n_valid"] >= fit["n_blocks"] * 0.9
+    assert out["outcomes"]["q0"] == "successful"
+
+
+def test_t1_bayesian_recovers_the_planted_t1(session):
+    """The adaptive posterior must converge from the default prior to the
+    planted T1, and the interleaved validation fit must agree with it."""
+    from scqo.experiments._sim import stable_seed
+
+    planted = np.random.default_rng(
+        stable_seed("qubit_t1_bayesian", "q0")).uniform(20e-6, 60e-6)
+    out = session.run("qubit_t1_bayesian", {"targets": ["q0"]}, update="none")
+    assert out.get("error") is None, out.get("error")
+    fit = out["fit"]["q0"]
+    assert fit["t1_median_s"] == pytest.approx(planted, rel=0.2)
+    assert fit["k_final_median"] > 5  # the u = 1/k trick let k grow past ~7
+    assert fit["t1_lin_s"] == pytest.approx(planted, rel=0.2)
+    assert fit["validation_disagrees"] == 0.0
+    assert out["outcomes"]["q0"] == "successful"

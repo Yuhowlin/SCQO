@@ -15,6 +15,7 @@ from scqo.experiments import (
     PairSwapFluxMap,
     QubitPowerRabi,
     QubitRamsey,
+    QubitT1Ade,
     ResonatorSpectroscopy,
 )
 from scqo.testing import InMemoryDevice, SimulatedBackend, demo_device
@@ -218,3 +219,22 @@ def test_two_axis_contract():
 
     with pytest.raises(ContractError):
         contract.validate(ds2.isel(power_dbm=0, drop=True))  # lost an axis -> reject
+
+
+class _Ade(QubitT1Ade):
+    def probe(self):
+        return None
+
+
+def test_extras_ride_alongside_the_primary_form():
+    """The T1 trackers' contract names only the per-block streams; the
+    per-shot arrays, timestamps and delay labels ride as EXTRA vars/dims,
+    which validate() must tolerate (extra variables/coords are allowed) —
+    while a missing PRIMARY var still refuses."""
+    exp, ds = _acquire(_Ade)
+    assert QubitT1Ade.Contract.sweeps == ("block_idx",)
+    exp.Contract.validate(ds)  # extras present: state, block_time_s
+    assert "state" in ds.data_vars and "block_time_s" in ds.data_vars
+    assert set(ds["state"].dims) == {"target", "block_idx", "delay_idx", "shot_idx"}
+    with pytest.raises(ContractError):
+        exp.Contract.validate(ds.drop_vars("estimated_gamma"))
