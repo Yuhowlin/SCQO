@@ -1,0 +1,6 @@
+name = "viewer-drop-trends-picker"
+repos = { scqo = "44984a6" }
+kind = "breaking"
+coupling = ""
+validated = "offline"
+notes = "BEHAVIOR CHANGE: the viewer's bare /trends sample picker and the Trends nav entry are removed — device-less /trends redirects to the /device overview; the chart page /trends?device=... is unchanged (reached from a sample's device page or the overview's trends column). Bare-/trends bookmarks land on /device."
