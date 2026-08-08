@@ -1,6 +1,0 @@
-name = "release-version-rule"
-repos = { scqo = "e576985", scqat = "21fc4eb" }
-kind = "fix"
-coupling = ""
-validated = "offline"
-notes = "Process/docs only, no runtime change: the 0.x version rule is codified in RELEASING.md (bump = max fragment severity: breaking/additive -> y+1, all-fix -> z+1; full SemVer at a deliberate v1.0.0; breaking REQUIRES the upgrade action in the notes line) and the fragment kind vocabulary gains \"fix\" (this fragment is its first use)."

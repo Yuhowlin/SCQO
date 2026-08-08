@@ -1,6 +1,0 @@
-name = "fit-tau-seeds"
-repos = { scqo = "12a82a9", scqat = "42aafd8" }
-kind = "additive"
-coupling = "scqo >= 12a82a9 needs scqat >= 42aafd8: the tau_seeds estimator kwarg. SILENT failure — an older scqat IGNORES unknown estimator kwargs, so --set fit_tau_seeds=[...] would be a no-op, not an error. Floor scqat accordingly."
-validated = "hardware 5Q4C q1 2026-08-06"
-notes = "fit_tau_seeds parameter on BOTH cryoscopes: explicit prior-knowledge tau seeds (seconds) from the CLI (--set fit_tau_seeds=[1e-7,2.3e-9]); the seeded joint fit races the automatic path and the better residual wins (metadata seed_method='seeded'). Axis-agnostic — first seeding mechanism available on the spectroscopy cryoscope's log wait grid."

@@ -1,6 +1,0 @@
-name = "t1-tracking-experiments"
-repos = { scqat = "ad883f0", scqo = "0cb7c7a", lchqmdriver = "a47481d" }
-kind = "additive"
-coupling = "scqo needs scqat >= ad883f0: qubit_t1_ade/qubit_t1_bayesian estimate() lazy-imports scqat.estimators.qubit_t1_ade / .qubit_t1_bayesian (new subpackages + tools timeseries_psd/allan/ade_decay); on an older scqat both experiments fail at estimate() after acquisition."
-validated = "offline (full suites + simulated end-to-end in all three repos; QUA build proven on live quam_state; NO hardware run yet)"
-notes = "NEW: qubit_t1_ade + qubit_t1_bayesian T1-vs-lab-time tracking experiments (record-only, QM-realized / Qblox-unrealized; both join the QM active-reset carrier census 4 -> 6). UPGRADE REQUIRES nothing — purely additive."

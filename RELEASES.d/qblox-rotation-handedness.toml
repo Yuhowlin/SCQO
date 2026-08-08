@@ -1,6 +1,0 @@
-name = "qblox-rotation-handedness"
-repos = { lchqbdriver = "1554f61" }
-kind = "additive"
-coupling = ""
-validated = "offline (chipA re-validation pending: re-run single_shot_readout + a discriminated qubit_relaxation)"
-notes = "BEHAVIOR CHANGE: the Qblox view now NEGATES readout_rotation_rad at the vendor boundary (acq_rotation is opposite-handed to QM's integration_weights_angle; the old push mirrored the frame — chipA 2026-08-08 discriminated runs classified every shot |g>). UPGRADE REQUIRES re-pushing the discriminator on every Qblox device config: the persisted acq_rotation in dut_config.json is the mirror of the calibrated angle, so re-run single_shot_readout + accept (or `scqo set <q>_ro.readout_rotation_rad=<current neutral value>` to re-push through the fixed boundary) before any use_state_discrimination or active-reset run."
