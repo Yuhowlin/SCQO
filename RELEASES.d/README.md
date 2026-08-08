@@ -12,7 +12,11 @@ construction.
 name = "fit-tau-seeds"            # = the filename stem
 repos = { scqo = "12a82a9", scqat = "42aafd8" }   # LAST commit per repo
 # keys: scqo / scqat / lchqmdriver / lchqbdriver / scqo-contrib
-kind = "additive"                 # or "breaking"
+kind = "additive"                 # "breaking" (an existing user artifact must
+                                  #   change to keep working) | "additive" (new
+                                  #   experiments/features; nothing existing
+                                  #   changes) | "fix" (behavior-preserving
+                                  #   repair or cosmetic)
 coupling = "scqo needs scqat >= 42aafd8: ..."     # lockstep floors, esp.
                                   # SILENT-failure ones ("" if none)
 validated = "hardware 5Q4C q1 2026-08-06"         # or "offline" / "unverified"
@@ -56,8 +60,10 @@ venvs are editable installs of them and hardware sessions import them. Hence:
 ## At release time (the consuming agent)
 
 Read every `*.toml` here → cross-check `git log <last-tag>..HEAD` per repo (a
-fragment may be missing — flag it) → pick versions (any `kind = "breaking"` drives
-the bump; `coupling` sets the scqat floor) → write the `[vX-Y-Z]` block in
+fragment may be missing — flag it) → pick versions per RELEASING.md's version
+rule — bump = max severity over the fragments (0.x: any breaking/additive → y+1,
+all-fix → z+1; breaking additionally REQUIRES the upgrade action in the notes
+line); `coupling` sets the scqat floor → write the `[vX-Y-Z]` block in
 [RELEASES.toml](../RELEASES.toml) from the fragments → `git rm` the consumed
 fragments in the same commit → then follow RELEASING.md steps 1–6 (pyproject bumps
 are PART of the release; tags; editable re-pins).

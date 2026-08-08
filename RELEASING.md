@@ -5,6 +5,32 @@ scqat tag, recorded in [RELEASES.toml](RELEASES.toml). Born from the v0.4.0 less
 tagging only SCQO left the server's checkout-by-tag procedure unable to bring the
 drivers forward, and nobody could tell which repo states belonged together.
 
+## The version rule (0.x)
+
+One combo number covers the scqo-versioned repos; scqat versions independently on
+its own line under the SAME rule, tied to the combo by the coupling floors.
+**Bump = max severity over the consumed fragments** (each fragment's `kind`):
+
+- While x = 0 (now): any `breaking` or `additive` fragment → **y+1**; every
+  fragment `fix` → **z+1**. The full SemVer rule (breaking → x+1, additive → y+1,
+  fix → z+1) takes effect at **v1.0.0**, declared deliberately when the public
+  surface stabilizes — never reached by accident.
+- **Breaking** is judged against OUR consumers, not just the Python API: an
+  existing user artifact (script, campaign plan, parameters.toml,
+  config.toml/user.toml, stored state) must change to keep working. That includes
+  renamed/removed registered experiment names or Parameters fields, renamed
+  catalog fields/knobs, state-file `schema` number bumps, config key changes, and
+  contract/dataset changes that break re-analysis of old runs.
+- **Fix** = behavior-preserving repair or cosmetic change (figure labels,
+  annotations, docs). Repairing a BROKEN fit is still `fix` even though numbers
+  change — its notes must say re-analysis refreshes old artifacts (run folders
+  stay immutable). Changing a WORKING estimator's numbers is a behavior change =
+  `additive`.
+- **Breaking ⇒ the RELEASES.toml notes line carries the upgrade action**,
+  aggregated from the fragments' UPGRADE REQUIRES phrasing (v0.24.0's notes are
+  the model). No shims or aliases ship (house rule) — the notes ARE the migration
+  path.
+
 0. **Read the pending-feature ledger `RELEASES.d/`** — ONE fragment file per
    feature (format + the multi-agent rules in `RELEASES.d/README.md`): per-repo
    commits, breaking/additive kind, lockstep couplings (the scqat floor comes from
