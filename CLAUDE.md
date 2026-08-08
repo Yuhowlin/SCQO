@@ -264,8 +264,11 @@ scqo/
     resonator_spectroscopy_power_chain.py  # CAREFUL punchout: steps the output chain per point
                                 #   (amp ~0.5 for SNR; wide, cross-backend) -> readout_power_dbm + readout_freq_hz
     qubit_pi_pulse_error.py     # pi-amplitude error amplification -> pi_amp (drive channel)
-    qubit_drag_equator.py       # 3-line symmetric DRAG calibration -> drag_beta (drive channel)
-    qubit_drag_alternating.py   # alternating-pulse DRAG calibration -> drag_beta (drive channel)
+    qubit_drag_equator.py       # 3-line symmetric DRAG calibration -> drag_beta, or
+                                #   drag_beta_x90 with target_gate="x90" (drive channel;
+                                #   knob picked by _gate_target.drag_knob)
+    qubit_drag_alternating.py   # alternating-pulse DRAG calibration -> same
+                                #   target_gate-selected drag knob (drive channel)
     qubit_relaxation_flux_pulse.py  # T1 vs swept z PULSE (idle-relative) - record-only
                                 #   diagnostic (per-flux fits in result.fit)
     qubit_echo_flux_pulse.py    # T2_echo vs swept z PULSE (idle-relative) - record-only

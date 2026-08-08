@@ -34,21 +34,12 @@ from ._capabilities.state_readout import (
     signal_rename,
     population_row,
 )
+from ._gate_target import X90_GATES, amp_knob, normalize_gate
 from ._sim import iq_from_population, stable_seed
 from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
 from ..experiment import Experiment
 from . import register
-
-#: the pi/2 gates. Their amplitude lives on the x90 storage node (y90/-y90 are
-#: reference aliases that follow it), so they calibrate `pi_amp_x90`; everything
-#: else is a pi gate and calibrates `pi_amp`.
-X90_GATES = frozenset({"x90", "-x90", "y90", "-y90"})
-
-
-def amp_knob(target_gate: str) -> str:
-    """Which neutral drive-channel knob this target gate calibrates."""
-    return "pi_amp_x90" if str(target_gate).strip().lower() in X90_GATES else "pi_amp"
 
 
 class QubitDeterministicBenchmarkingParameters(
@@ -89,10 +80,10 @@ class QubitDeterministicBenchmarkingParameters(
     def get_repetitions(self) -> list[int]:
         if self.repetitions is not None:
             return [int(x) for x in self.repetitions]
-        tg = str(self.target_gate).strip().lower()
+        tg = normalize_gate(self.target_gate)
         if self.step is not None:
             st = self.step
-        elif tg in ("x90", "y90", "-x90", "-y90", "pi_half"):
+        elif tg in X90_GATES or tg == "pi_half":
             st = 4
         else:
             st = 2

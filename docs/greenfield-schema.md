@@ -251,9 +251,9 @@ flux-activated `<op>_coupler_flux`; microwave-activated `<op>_drive_freq_hz`, `<
 
 | kind | knobs | monitors | facts |
 |---|---|---|---|
-| `drive` | `drive_freq_hz`, `drive_amp`, `drive_power_dbm`, `pi_amp`, `drag_beta`, `pi_duration_s`, `thermalization_time_s` | — | — |
+| `drive` | `drive_freq_hz`, `drive_amp`, `drive_power_dbm`, `pi_amp`, `pi_amp_x90`, `drag_beta`, `drag_beta_x90`, `pi_duration_s`, `thermalization_time_s` | `parity_delta_f_hz` | — |
 | `readout` | `readout_freq_hz`, `readout_amp`, `readout_power_dbm`, `readout_duration_s`, `readout_integration_s`, `readout_rotation_rad`, `readout_threshold`, `readout_rus_threshold` | `fidelity_g`, `fidelity_e`, `fidelity_f`, `pos_g_i`, `pos_g_q`, `pos_e_i`, `pos_e_q`, `pos_f_i`, `pos_f_q` | — |
-| `flux` | `idle_flux` | — | `flux_offset`, `flux_per_phi0`, `distortion_amp[]`, `distortion_tau_s[]` |
+| `flux` | `idle_flux`, `flux_delay_s` | — | `flux_offset`, `flux_per_phi0`, `distortion_amp[]`, `distortion_tau_s[]` |
 | `pump` | `pump_freq_hz`, `pump_amp`, `pump_phase_rad`, `pump_duration_s` | — | — |
 
 Notes: `drive_amp`+`drive_power_dbm` (and the readout twins) are the settled portable/non-portable
@@ -464,7 +464,8 @@ j_hz = 1.0e7
 
 // scqo_state.json — operated
 { "schema": 3, "values": {
-    "q1_xy":     { "drive_freq_hz": 5.136e9, "pi_amp": 0.209, "drag_beta": -1.0,
+    "q1_xy":     { "drive_freq_hz": 5.136e9, "pi_amp": 0.209, "pi_amp_x90": 0.104,
+                   "drag_beta": -1.0, "drag_beta_x90": -1.9,
                    "thermalization_time_s": 3.7e-4 },
     "q1_ro":     { "readout_freq_hz": 5.934e9, "fidelity_g": 0.96, "fidelity_e": 0.94 },
     "q1_z":      { "idle_flux": 0.118 },

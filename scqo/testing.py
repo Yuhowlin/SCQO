@@ -96,6 +96,10 @@ def demo_vendor_state(roster: Roster, design: Design) -> dict:
             # before qubit_deterministic_benchmarking calibrates the pi/2 in its own
             # right — the knob is INDEPENDENT, not derived, so it needs a real value
             fields.setdefault("pi_amp_x90", 0.05)
+            # DRAG off is where a real config starts; both knobs seeded so the
+            # x180 AND x90 branches of the drag calibrations run offline
+            fields.setdefault("drag_beta", 0.0)
+            fields.setdefault("drag_beta_x90", 0.0)
             fields.setdefault("drive_amp", 0.05)
             fields.setdefault("drive_power_dbm", -13.0)
             fields.setdefault("thermalization_time_s", 200e-6)

@@ -142,6 +142,25 @@ def test_ramsey_moves_the_drive_toward_the_qubit(session):
     assert fit["f_01_hz"] == fit["drive_freq_hz"]  # the fact twin rides the same fit
 
 
+@pytest.mark.parametrize("name", ["qubit_drag_equator", "qubit_drag_alternating"])
+@pytest.mark.parametrize("gate,knob", [("x180", "drag_beta"), ("x90", "drag_beta_x90")])
+def test_drag_writes_the_knob_of_the_target_gate(session, name, gate, knob):
+    """target_gate picks the storage pair: the fitted beta lands on drag_beta
+    for the pi gate and drag_beta_x90 for the pi/2 — never the other (issue #24:
+    the x90 branch crashed on QM and leaked KeyError on the strict views)."""
+    out = session.run(name, {"targets": ["q0"], "target_gate": gate})
+    assert out.get("error") is None, out.get("error")
+    assert {(s["entity"], s["field"]) for s in out["suggestions"]} == {("q0_xy", knob)}
+
+
+def test_drag_target_gate_rejects_unnormalized_spellings(session):
+    """'X90' once slipped through three disagreeing normalizations and wrote the
+    x180 knob; the Literal refuses it loudly instead."""
+    out = session.run("qubit_drag_equator",
+                      {"targets": ["q0"], "target_gate": "X90"}, update="none")
+    assert out.get("error") is not None
+
+
 def test_flux_map_writes_the_sweet_spot_on_the_flux_channel(session):
     assert _suggest(session, "resonator_spectroscopy_flux") == {
         ("q0_z", "idle_flux"), ("q0_z", "flux_offset"),

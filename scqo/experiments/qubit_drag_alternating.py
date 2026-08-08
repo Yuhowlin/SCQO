@@ -8,13 +8,14 @@ name but now lives on the target's DRIVE CHANNEL
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 import numpy as np
 from pydantic import Field
 
 from ..contract import DatasetContract
 from ._capabilities.qubit_reset import QubitResetParameters
+from ._gate_target import drag_knob
 from ._sim import stable_seed
 from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
@@ -30,7 +31,10 @@ class QubitDragAlternatingParameters(TargetSelection, AveragingParameters, Qubit
     num_beta_points: int = Field(41, gt=1, description="Number of beta sweep points.")
     max_pulses: int = Field(20, gt=0, description="Maximum number of alternating pulses.")
     num_pulse_points: int = Field(10, gt=1, description="Number of pulse sweep points.")
-    target_gate: str = Field("x180", description="Gate to calibrate: 'x180' or 'x90'.")
+    target_gate: Literal["x180", "x90"] = Field(
+        "x180",
+        description="Gate to calibrate: 'x180' writes drag_beta, 'x90' writes drag_beta_x90.",
+    )
 
 
 class QubitDragAlternatingResult(Result):
@@ -125,17 +129,10 @@ class QubitDragAlternating(Experiment):
     def update(self) -> None:
         if self.result is None:
             return
-        target_gate = getattr(self.params, "target_gate", "x180")
+        knob = drag_knob(self.params.target_gate)
         for qubit, fit in self.result.fit.items():
             if self.result.outcomes[qubit] is Outcome.SUCCESSFUL and fit.get("opt_beta") is not None:
-                chan = self.device.channel(qubit, "drive")
-                if target_gate == "x90":
-                    if hasattr(chan, "drag_beta_x90"):
-                        chan.drag_beta_x90 = fit["opt_beta"]
-                    elif hasattr(chan, "set_drag_beta"):
-                        chan.set_drag_beta(fit["opt_beta"], operation="x90", lock_x90=False)
-                else:
-                    chan.drag_beta = fit["opt_beta"]
+                setattr(self.device.channel(qubit, "drive"), knob, fit["opt_beta"])
 
 
 
