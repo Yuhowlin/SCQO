@@ -62,7 +62,7 @@ from pydantic import BaseModel, Field
 from ._state_io import _file_lock
 from .stores import _current_operator
 
-SCHEMA_VERSION = 9  # v9: campaigns — run campaign/repeat_idx/step_idx + the campaigns table
+SCHEMA_VERSION = 10  # v10: campaign suggestions — campaigns.suggestions_pending
 RECORD_FILE = "record.json"
 INDEX_FILE = "index.sqlite"
 DEVICES_FILE = "devices.toml"  # optional human-edited sample registry (see load_device_registry)
@@ -158,6 +158,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
   statistics     TEXT NOT NULL DEFAULT '{}', -- JSON aggregate
   tags           TEXT NOT NULL DEFAULT '[]',
   note           TEXT NOT NULL DEFAULT '',
+  suggestions_pending INTEGER NOT NULL DEFAULT 0,
   path           TEXT NOT NULL,              -- campaign folder, relative to data_root
   schema_version INTEGER NOT NULL DEFAULT 1,
   PRIMARY KEY (campaign_id, device)
@@ -740,6 +741,7 @@ class DataStore:
         until: str | None = None,
         cooldown: str | None = None,
         setup: str | None = None,
+        pending: bool | None = None,
         limit: int = 50,
     ) -> list[dict]:
         """Query the campaigns index; newest first."""
@@ -768,6 +770,9 @@ class DataStore:
         if setup is not None:
             where.append("setup = ?")
             args.append(setup)
+        if pending is not None:  # same clause as find_runs' pending filter
+            where.append("suggestions_pending > 0" if pending
+                         else "suggestions_pending = 0")
         sql = "SELECT * FROM campaigns"
         if where:
             sql += " WHERE " + " AND ".join(where)
@@ -877,6 +882,46 @@ class DataStore:
                 ),
             )
         return record
+
+    def edit_campaign_suggestions(
+        self,
+        campaign_id: str,
+        editor,
+        problems: list[str] | None = None,
+    ) -> dict:
+        """Edit a campaign's suggestion list ATOMICALLY: lock, re-read, edit, write.
+
+        The campaign twin of :meth:`edit_suggestions`, over ``campaign.json``.
+        ``editor(rows)`` receives the FRESH stored list and returns the list to
+        store; ``problems`` (when given) replaces ``suggestion_problems``.
+
+        The lock protects edit-vs-edit only. ``persist_campaign`` is a LOCKLESS
+        whole-file write owned by the running-campaign process (rewritten after
+        every repeat from its in-memory manifest) — anything written here while
+        that process is alive is silently erased on its next repeat. So: the
+        finalize-path suggestions ride the campaign's own final write, and
+        **after finalize this method is the only legal writer of decisions**
+        (``Session.suggest_campaign`` refuses a still-running campaign for the
+        same reason).
+        """
+        campaign_dir = self._campaign_dir(campaign_id)
+        with _file_lock(campaign_dir / CAMPAIGN_FILE):
+            manifest = json.loads(
+                (campaign_dir / CAMPAIGN_FILE).read_text(encoding="utf-8"))
+            manifest["suggestions"] = _scrub(
+                editor(list(manifest.get("suggestions", []))))
+            if problems is not None:
+                manifest["suggestion_problems"] = list(problems)
+            _write_json(campaign_dir / CAMPAIGN_FILE, manifest)
+        pending = sum(1 for s in manifest["suggestions"]
+                      if s.get("status") == "pending")
+        with self._connect() as db:
+            db.execute(
+                "UPDATE campaigns SET suggestions_pending = ?"
+                " WHERE campaign_id = ?",
+                (pending, campaign_id),
+            )
+        return manifest
 
     # -------------------------------------------------------------------- index
     def reindex(self) -> int:
@@ -989,8 +1034,8 @@ class DataStore:
             "INSERT OR REPLACE INTO campaigns (campaign_id, device, label, started_at,"
             " ended_at, status, stop_reason, backend, operator, cooldown, setup,"
             " experiments, targets, repeat_planned, repeat_done, repeats_failed, plan,"
-            " statistics, tags, note, path, schema_version)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " statistics, tags, note, suggestions_pending, path, schema_version)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 manifest["campaign_id"],
                 manifest["device"],
@@ -1012,6 +1057,8 @@ class DataStore:
                 json.dumps(_scrub(manifest.get("statistics", {}))),
                 json.dumps(manifest.get("tags", [])),
                 manifest.get("note", ""),
+                sum(1 for s in manifest.get("suggestions") or []
+                    if s.get("status") == "pending"),
                 manifest["path"],
                 int(manifest.get("schema", 1)),
             ),

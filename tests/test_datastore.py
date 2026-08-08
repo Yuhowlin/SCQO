@@ -922,7 +922,8 @@ def test_old_index_auto_reindexes_to_v8(tmp_path):
     con = sqlite3.connect(db_path)
     (version,) = con.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
     con.close()
-    assert version == "9"
+    from scqo.datastore import SCHEMA_VERSION
+    assert version == str(SCHEMA_VERSION)
 
 
 def test_setup_validation_rejects_any_typed_instrument_config(tmp_path):
@@ -1021,3 +1022,89 @@ def test_cooldown_registry_tolerates_powershell_bom(tmp_path):
     (dev / "cooldowns.toml").write_bytes(b"\xef\xbb\xbf" + body.encode("utf-8"))
     cycles = load_cooldowns(tmp_path, "bomdev")
     assert cycles["cd1"]["setup"]["practice"]["backend"] == "simulated"
+
+
+# ------------------------------------------------------- campaign suggestions
+
+def _pending_row(field="t1_s", after=4.13e-05):
+    """A campaign-level suggestion row as stored in campaign.json (plain dict —
+    the datastore layer is model-agnostic)."""
+    return {"entity": "q0", "field": field, "role": "fact", "kind": "transmon",
+            "unit": "s", "before": None, "after": after, "status": "pending"}
+
+
+def _campaign_with_suggestions(sess, label="stab", suggestions=None):
+    """Persist a minimal FINISHED campaign manifest carrying suggestion rows."""
+    store = sess.datastore
+    campaign_id, campaign_dir = store.new_campaign_dir(label)
+    store.persist_campaign(campaign_id=campaign_id, campaign_dir=campaign_dir,
+                           manifest={
+                               "started_at": "2026-08-09T10:00:00",
+                               "ended_at": "2026-08-09T10:05:00",
+                               "status": "complete",
+                               "backend": "simulated",
+                               "experiments": ["qubit_relaxation"],
+                               "targets": ["q0"],
+                               "plan": {},
+                               "statistics": {},
+                               "suggestions": suggestions or [],
+                           })
+    return campaign_id, campaign_dir
+
+
+def test_edit_campaign_suggestions_rereads_fresh_and_patches_pending(tmp_path):
+    """The campaign twin of edit_suggestions: the editor sees the FRESH stored
+    list (a concurrent writer's appended row is not erased), campaign.json —
+    the truth — is rewritten, and the index's suggestions_pending follows."""
+    from scqo.suggestions import decision_editor
+
+    sess = _session(tmp_path)
+    store = sess.datastore
+    cid, cdir = _campaign_with_suggestions(
+        sess, suggestions=[_pending_row(), _pending_row(field="t2_echo_s")])
+    assert store.find_campaigns()[0]["suggestions_pending"] == 2
+
+    # a concurrent writer appends a third row directly to campaign.json — the
+    # editor must receive the fresh 3-row list, never a stale 2-row snapshot
+    path = cdir / "campaign.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest["suggestions"].append(_pending_row(field="f_01_hz"))
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    accepted = {**_pending_row(), "status": "accepted", "decided_by": "tim"}
+    fresh = store.edit_campaign_suggestions(cid, decision_editor({0: accepted}))
+    assert [s["status"] for s in fresh["suggestions"]] == [
+        "accepted", "pending", "pending"]
+
+    on_disk = json.loads(path.read_text(encoding="utf-8"))
+    assert on_disk["suggestions"] == fresh["suggestions"]
+    assert store.find_campaigns()[0]["suggestions_pending"] == 2
+
+    # problems replace as a whole when given, and stay put when omitted
+    store.edit_campaign_suggestions(cid, lambda rows: rows,
+                                    problems=["qubit_ramsey: KeyError: 'f_01_hz'"])
+    on_disk = json.loads(path.read_text(encoding="utf-8"))
+    assert on_disk["suggestion_problems"] == ["qubit_ramsey: KeyError: 'f_01_hz'"]
+
+
+def test_find_campaigns_pending_filter(tmp_path):
+    sess = _session(tmp_path)
+    store = sess.datastore
+    cid_p, _ = _campaign_with_suggestions(sess, label="haspend",
+                                          suggestions=[_pending_row()])
+    cid_n, _ = _campaign_with_suggestions(sess, label="nopend")
+    assert [c["campaign_id"] for c in store.find_campaigns(pending=True)] == [cid_p]
+    assert [c["campaign_id"] for c in store.find_campaigns(pending=False)] == [cid_n]
+    assert len(store.find_campaigns()) == 2
+
+
+def test_campaign_suggestions_pending_survives_reindex(tmp_path):
+    """campaign.json is the truth: a full rebuild re-derives the pending count
+    from the manifest, exactly like a run's pending state from record.json."""
+    sess = _session(tmp_path)
+    store = sess.datastore
+    cid, _ = _campaign_with_suggestions(sess, suggestions=[_pending_row()])
+    store.reindex()
+    row = store.find_campaigns()[0]
+    assert row["campaign_id"] == cid
+    assert row["suggestions_pending"] == 1
