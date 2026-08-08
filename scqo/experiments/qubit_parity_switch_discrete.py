@@ -7,11 +7,16 @@ Per cycle: ``M1`` (measure) — depletion wait — ``x90`` — fixed idle — ``
 re-initialization), the mapping block flips the pole iff the charge parity is
 odd, and M2 reads the result — so the parity of cycle ``i`` is the
 WITHIN-CYCLE difference ``m1[i] XOR m2[i]``, self-contained per cycle. The
-idle derivation is identical to the continuous sibling
-(``idle_multiple / (2 x parity_delta_f_hz)``, odd multiples only), and the
-pulse order (x90 first, y90 second) is physically equivalent to the
-continuous y90-first order up to a global sign flip of the telegraph, which
-the PSD cannot see.
+idle is ``1 / (2 x parity_delta_f_hz)`` (the same derivation the continuous
+sibling uses at its default), and the pulse order (x90 first, y90 second) is
+physically equivalent to the continuous y90-first order up to a global sign
+flip of the telegraph, which the PSD cannot see.
+
+There is deliberately NO ``idle_multiple`` here (unlike the continuous
+variant): the reason to lengthen the shot is to reach a lower spectral edge,
+and this variant does that with the decay-immune ``cycle_period_ns`` pad
+instead — stretching the idle would only spend T2* for no benefit M1's
+re-projection does not already give.
 
 WHY A SECOND MEASUREMENT: in ``qubit_parity_switch_continuous`` the previous
 shot's measurement plays M1's role, so the readout is the running XOR of the
@@ -65,15 +70,17 @@ from .qubit_parity_switch_continuous import (
     _NOMINAL_PI2_S,
     _NOMINAL_READOUT_S,
     QubitParitySwitchContinuous,
-    QubitParitySwitchContinuousParameters,
+    _ParitySwitchParameters,
 )
 
 
-class QubitParitySwitchDiscreteParameters(QubitParitySwitchContinuousParameters):
+class QubitParitySwitchDiscreteParameters(_ParitySwitchParameters):
     """Inputs for the discrete (two-measurement-per-cycle) parity monitor.
 
     A "shot" here is one CYCLE = two measurements; ``record_time_s`` /
-    ``num_shots`` / ``max_num_shots`` all count cycles.
+    ``num_shots`` / ``max_num_shots`` all count cycles. There is no
+    ``idle_multiple`` (the continuous variant's odd-N idle stretch) — the
+    period is extended with the decay-immune ``cycle_period_ns`` pad instead.
     """
 
     cycle_period_ns: float | None = Field(
@@ -121,10 +128,11 @@ class QubitParitySwitchDiscrete(QubitParitySwitchContinuous):
         "makes a slow cycle period safe: T1 or readout error between cycles shows up "
         "only as the p_intercycle_flip diagnostic and corrupts no parity sample (the "
         "continuous variant cannot slow down without corruption; it costs half the "
-        "readouts, this one tolerates slow sampling). idle = idle_multiple / (2 x "
-        "parity_delta_f_hz) exactly as in qubit_parity_switch_continuous (odd multiples "
-        "only), from the drive channel's stored beat splitting (accepted "
-        "ramsey_model='beat' qubit_ramsey). The Lorentzian corner of the parity series' "
+        "readouts, this one tolerates slow sampling). idle = 1 / (2 x "
+        "parity_delta_f_hz) from the drive channel's stored beat splitting (accepted "
+        "ramsey_model='beat' qubit_ramsey); the period is extended with cycle_period_ns, "
+        "not by stretching the idle (there is no idle_multiple here). The Lorentzian "
+        "corner of the parity series' "
         "Welch PSD gives the per-direction switching rate (rate = pi x corner), written "
         "back as the mode fact parity_rate_hz. Records BOTH measurements per cycle "
         "(shot_idx x meas_idx; two acquisition bins per cycle — the Qblox bin-limited "
@@ -252,7 +260,6 @@ class QubitParitySwitchDiscrete(QubitParitySwitchContinuous):
                 "record_time_s": self._acquired("record_time_s", qubit),
                 "requested_record_time_s": float(self.params.record_time_s),
                 "idle_time_ns": self._acquired("idle_time_ns", qubit),
-                "idle_multiple": float(self.params.idle_multiple),
                 "parity_delta_f_hz": self._acquired("parity_delta_f_hz", qubit),
                 "cycle_period_ns": (float(self.params.cycle_period_ns)
                                     if self.params.cycle_period_ns is not None

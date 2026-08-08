@@ -154,8 +154,13 @@ _NOMINAL_READOUT_S = 2e-6
 _NOMINAL_PI2_S = 40e-9
 
 
-class QubitParitySwitchContinuousParameters(TargetSelection, StateReadoutParameters):
-    """Inputs for a charge-parity switching-rate measurement."""
+class _ParitySwitchParameters(TargetSelection, StateReadoutParameters):
+    """The inputs shared by both parity monitors (continuous and discrete).
+
+    Everything here is common; the two variants add exactly one field each —
+    continuous the ``idle_multiple`` stretch, discrete the ``cycle_period_ns``
+    pad — which is why the shared base exists rather than one subclassing the
+    other (a subclass cannot cleanly DROP an inherited field)."""
 
     record_time_s: float = Field(
         30.0, gt=0,
@@ -184,24 +189,10 @@ class QubitParitySwitchContinuousParameters(TargetSelection, StateReadoutParamet
     idle_time_ns: float | None = Field(
         None, gt=0,
         description="Fixed free-evolution time between the two pi/2 pulses, ns. None (the "
-                    "normal case) derives idle_multiple / (2 x parity_delta_f_hz) from the "
-                    "drive channel's stored monitor (an accepted beat qubit_ramsey). Given "
-                    "explicitly it wins outright and is NOT multiplied by idle_multiple. "
-                    "Given or derived, the value is snapped to the 4 ns cross-backend grid "
-                    "with a 16 ns floor.")
-    idle_multiple: int = Field(
-        1, gt=0,
-        description="Stretch the DERIVED idle to N / (2 x parity_delta_f_hz). ONLY ODD N "
-                    "CARRIES SIGNAL: the parity phase is +/- N x pi/2 and the readout goes "
-                    "as sin of it, so odd N gives full contrast and EVEN N gives exactly "
-                    "zero (both parities land on the same pole) — even values are allowed "
-                    "but warn. Raise it when runs are acquisition-BIN limited rather than "
-                    "time limited: a longer shot means the same bin budget covers more "
-                    "wall-clock, which lowers the spectrum's reach, and it also suppresses "
-                    "the readout-error bias (~1 + 2 x eps / (rate x shot_period)). The "
-                    "limit is T2*: contrast decays as exp(-idle / T2*), which is NOT "
-                    "checked here because t2_star_s is a mode fact and unreachable "
-                    "pre-run. Ignored when idle_time_ns is given.")
+                    "normal case) derives 1 / (2 x parity_delta_f_hz) from the drive "
+                    "channel's stored monitor (an accepted beat qubit_ramsey). Given "
+                    "explicitly it wins outright. Given or derived, the value is snapped "
+                    "to the 4 ns cross-backend grid with a 16 ns floor.")
     max_derived_idle_ns: float = Field(
         20000, gt=0,
         description="Refusal ceiling for the DERIVED idle time: a splitting so small that "
@@ -221,6 +212,26 @@ class QubitParitySwitchContinuousParameters(TargetSelection, StateReadoutParamet
                     "which yields the fidelity twice — from the plateau and the "
                     "floor — plus their ratio as a model-consistency check. The "
                     "selected model's rate is what writes back to parity_rate_hz.")
+
+
+class QubitParitySwitchContinuousParameters(_ParitySwitchParameters):
+    """Inputs for the continuous charge-parity switching-rate measurement."""
+
+    idle_multiple: int = Field(
+        1, gt=0,
+        description="Stretch the DERIVED idle to N / (2 x parity_delta_f_hz). ONLY ODD N "
+                    "CARRIES SIGNAL: the parity phase is +/- N x pi/2 and the readout goes "
+                    "as sin of it, so odd N gives full contrast and EVEN N gives exactly "
+                    "zero (both parities land on the same pole) — even values are allowed "
+                    "but warn. Raise it when runs are acquisition-BIN limited rather than "
+                    "time limited: a longer shot means the same bin budget covers more "
+                    "wall-clock, which lowers the spectrum's reach, and it also suppresses "
+                    "the readout-error bias (~1 + 2 x eps / (rate x shot_period)). The "
+                    "limit is T2*: contrast decays as exp(-idle / T2*), which is NOT "
+                    "checked here because t2_star_s is a mode fact and unreachable "
+                    "pre-run. Ignored when idle_time_ns is given. (The discrete variant "
+                    "has NO idle_multiple — it extends the period with the decay-immune "
+                    "cycle_period_ns pad instead.)")
 
 
 class QubitParitySwitchContinuousResult(Result):
@@ -312,7 +323,7 @@ class QubitParitySwitchContinuous(Experiment):
                     continue
                 delta_f = float(value)
                 base_ns = 1e9 / (2.0 * delta_f)
-                idle_ns = base_ns * self.params.idle_multiple
+                idle_ns = base_ns * self._idle_multiple()
                 if idle_ns > self.params.max_derived_idle_ns:
                     # Two different faults reach here and they have different
                     # remedies, so say which one this is: a base already over
@@ -324,7 +335,7 @@ class QubitParitySwitchContinuous(Experiment):
                                 else _MULTIPLIED_IDLE_TOO_LONG)
                     raise ValueError(template.format(
                         idle_ns=idle_ns, base_ns=base_ns, delta_f=delta_f,
-                        n=self.params.idle_multiple,
+                        n=self._idle_multiple(),
                         ceiling=self.params.max_derived_idle_ns, target=target))
             # cross-backend legal fixed delay: QM plays waits on a 4 ns clock
             # with a 16 ns floor, Qblox on a 1 ns grid — snap to the coarser.
@@ -402,8 +413,15 @@ class QubitParitySwitchContinuous(Experiment):
                 target=max(per_target, key=lambda t: per_target[t])))
         return int(n)
 
+    def _idle_multiple(self) -> int:
+        """The odd-N idle stretch. Read defensively so the discrete subclass —
+        whose Parameters deliberately drop the field — transparently behaves as
+        multiple 1 (it extends the period with the cycle_period_ns pad instead,
+        which is decay-immune, so stretching the idle would only cost T2*)."""
+        return int(getattr(self.params, "idle_multiple", 1))
+
     def define_sweep(self) -> dict[str, np.ndarray]:
-        n = self.params.idle_multiple
+        n = self._idle_multiple()
         # only meaningful on the derived path — an explicit idle_time_ns is not
         # multiplied, so an even multiple there is simply unused, not a defect.
         if self.params.idle_time_ns is None and n % 2 == 0:
