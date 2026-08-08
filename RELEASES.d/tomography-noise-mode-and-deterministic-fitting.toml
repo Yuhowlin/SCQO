@@ -1,0 +1,6 @@
+name = "tomography-noise-mode-and-deterministic-fitting"
+repos = { scqat = "533435b", scqo = "50c0db6", lchqmdriver = "bbdde24" }
+kind = "additive"
+coupling = "scqo/LCHQMDriver noise_mode needs scqat >= 533435b: an older scqat feeds a noise_mode spectator's all-zero I/Q into discriminate_states (SILENT garbage fit or crash) instead of short-circuiting to the success=0 dummy record"
+validated = "offline (suites green in all three repos); hardware validation of the restructured QM probe + noise_mode pending — chipA currently sick"
+notes = "Squash of Yuhowlin's PR set (SCQO#23/LCHQM#27/scqat#27): qubit_tomography gains noise_mode spectators (play target gates, skip init/basis/measure, dummy-zero record, success=0) + identity-gate wait fix + phase-aligned multiplexing; qubit_deterministic_benchmarking fit is FFT-seeded multi-start. BEHAVIOR CHANGE: an identity target_gate now advances time by the x180 length per rep (was zero-time). The PRs' close-QM tooling was dropped, not deferred."
