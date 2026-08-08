@@ -3,7 +3,9 @@
     scqo campaign t1_stability.toml               # run it
     scqo campaign t1_stability.toml --dry-run     # validate + show what would run
     scqo campaign --list                          # recent campaigns
-    scqo campaign --show <campaign_id>            # plan + statistics + children
+    scqo campaign --show <campaign_id>            # plan + statistics + suggestions + children
+    scqo campaign --suggest <campaign_id>         # (re)generate the aggregate suggestions
+                                                  # for a campaign that predates the feature
 
 A campaign is OUTER repetition: every (repeat, step) is a separate saved run with
 its own timestamp, so drift is visible rather than averaged away. The outer loop is
@@ -40,6 +42,7 @@ import sys
 from pathlib import Path
 
 from scqo import DataStore, load_campaign_plan, load_lab_config
+from scqo.suggestions import pending_count
 
 from ._backends import build_session
 from ._campaign import (
@@ -49,6 +52,7 @@ from ._campaign import (
     parameter_default_lines,
     plot_statistics,
 )
+from ._review import format_table
 
 
 def _refuse_experiment_name(plan_arg: str) -> None:
@@ -89,6 +93,13 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
                         help="with --show --plot: re-derive the single_shot Gaussian "
                              "populations from the saved dataset.nc, for campaigns run "
                              "before pop_e_prep_g was recorded; no instrument is touched")
+    parser.add_argument("--suggest", metavar="CAMPAIGN_ID",
+                        help="(re)generate a finished campaign's aggregate suggestions "
+                             "from its stored statistics (campaigns that predate the "
+                             "writeback feature); decide them with scqo accept --campaign")
+    parser.add_argument("--force", action="store_true",
+                        help="with --suggest: regenerate over an existing suggestion "
+                             "set (its decisions are discarded)")
     parser.add_argument("--repeat", type=int, metavar="N", help="override the plan's repeat count")
     parser.add_argument("--period", type=float, metavar="SECONDS",
                         help="override the plan's minimum seconds between repeat starts")
@@ -110,6 +121,11 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
                         help="print the raw manifest instead of the table")
     parser.add_argument("--config", help="lab config path (default: $SCQO_CONFIG or ~/.scqo/config.toml)")
     args = parser.parse_args(argv)
+
+    if args.suggest:
+        if args.plan or args.list_campaigns or args.show:
+            parser.error("--suggest takes only a campaign id (and --force)")
+        return _suggest(args)
 
     if args.list_campaigns or args.show:
         return _read_only(args)
@@ -171,6 +187,20 @@ def _dry_run(sess, plan, cfg) -> int:
     return 0
 
 
+def _suggest(args) -> int:
+    """``--suggest``: regenerate the aggregate suggestions for one campaign.
+
+    Needs the backend session — generation replays each experiment's update()
+    against the live device views to capture honest ``before`` values."""
+    sess, _ = build_session(args.config)
+    try:
+        summary = sess.suggest_campaign(args.suggest, force=args.force)
+    except (RuntimeError, KeyError) as err:
+        raise SystemExit(err.args[0] if err.args else str(err))
+    print(json.dumps(summary, indent=2))
+    return 0
+
+
 def _read_only(args) -> int:
     """``--list`` / ``--show``: query the index, touch no instrument."""
     cfg = load_lab_config(args.config)
@@ -188,6 +218,18 @@ def _read_only(args) -> int:
         print(format_summary({**manifest, "data_path": loaded["path"]}))
         print()
         print(format_statistics(manifest.get("statistics") or {}))
+        # The aggregate suggestions live IN the manifest, so showing them
+        # keeps --show manifest-only (no child records are opened).
+        rows = manifest.get("suggestions") or []
+        if rows:
+            pending = pending_count(rows)
+            print(f"\nsuggested updates ({pending} pending / "
+                  f"{len(rows) - pending} decided):")
+            print(format_table(rows))
+            if pending:
+                print(f"decide with: scqo accept --campaign {args.show}")
+        for problem in manifest.get("suggestion_problems") or []:
+            print(f"writeback problem: {problem}")
         if args.plot:
             plot_statistics(store, manifest, refit=args.refit)
         children = store.campaign_runs(args.show)

@@ -305,3 +305,104 @@ def test_dry_run_refuses_a_shadowing_label(tmp_path):
     assert proc.returncode == 2
     assert "REFUSED" in proc.stderr
     assert "shadows a registered experiment name" in proc.stderr
+
+
+# ------------------------------------------------------ accept --campaign
+
+PLAN3 = PLAN.replace("repeat = 2", "repeat = 3")  # min_n default 3: proposals appear
+
+
+def _finished_campaign(tmp_path: Path) -> str:
+    """Run the 3-repeat plan and return its campaign_id (scraped from --list)."""
+    proc = _cli(tmp_path, "campaign", _plan(tmp_path, PLAN3))
+    assert proc.returncode == 0, proc.stderr
+    listed = _cli(tmp_path, "campaign", "--list")
+    return listed.stdout.split()[0]
+
+
+def test_accept_campaign_end_to_end(tmp_path):
+    cid = _finished_campaign(tmp_path)
+
+    listed = _cli(tmp_path, "accept", "--campaign", cid, "--list")
+    assert listed.returncode == 0
+    assert "pending" in listed.stdout and "experiment" in listed.stdout
+    assert "qubit_relaxation" in listed.stdout and "t1_s" in listed.stdout
+
+    # non-TTY apply-all, exactly like the run path
+    applied = _cli(tmp_path, "accept", "--campaign", cid)
+    assert applied.returncode == 0, applied.stderr
+    summary = json.loads(applied.stdout)
+    assert summary["campaign_id"] == cid and summary["pending_left"] == 0
+    assert {a["field"] for a in summary["applied"]} >= {"t1_s", "t2_echo_s"}
+    assert all(a["experiment"] for a in summary["applied"])
+    assert "applied" in applied.stderr
+
+    # a second apply finds nothing pending and stays exit 0
+    again = _cli(tmp_path, "accept", "--campaign", cid)
+    assert again.returncode == 0
+    assert json.loads(again.stdout)["applied"] == []
+
+    # --show renders the decided table; provenance names the campaign
+    shown = _cli(tmp_path, "campaign", "--show", cid)
+    assert "suggested updates (0 pending" in shown.stdout
+    assert "accepted" in shown.stdout
+    sources = _cli(tmp_path, "state", "--sources")  # covers both stores
+    assert sources.returncode == 0, sources.stderr
+    assert f"campaign {cid}" in sources.stdout
+
+
+def test_accept_campaign_reject_and_filters(tmp_path):
+    cid = _finished_campaign(tmp_path)
+
+    rejected = _cli(tmp_path, "accept", "--campaign", cid, "--reject",
+                    "--field", "t2_echo_s", "--comment", "chip was sick")
+    assert rejected.returncode == 0
+    assert [r["field"] for r in json.loads(rejected.stdout)["rejected"]] == ["t2_echo_s"]
+
+    only_t1 = _cli(tmp_path, "accept", "--campaign", cid, "--field", "t1_s")
+    assert only_t1.returncode == 0, only_t1.stderr
+    summary = json.loads(only_t1.stdout)
+    assert [a["field"] for a in summary["applied"]] == ["t1_s"]
+    assert summary["pending_left"] == 1  # the thermalization knob still waits
+
+    knob = _cli(tmp_path, "accept", "--campaign", cid, "--entity", "q0_xy")
+    assert json.loads(knob.stdout)["pending_left"] == 0
+
+
+def test_accept_refuses_run_id_and_campaign_together(tmp_path):
+    proc = _cli(tmp_path, "accept", "some-run-id", "--campaign", "some-cid")
+    assert proc.returncode == 2
+    assert "not both" in proc.stderr
+
+
+def test_bare_accept_lists_pending_campaigns(tmp_path):
+    cid = _finished_campaign(tmp_path)
+    proc = _cli(tmp_path, "accept")
+    assert proc.returncode == 0
+    assert "no runs with pending suggestions" in proc.stdout  # children carry none
+    assert cid in proc.stdout
+    assert "scqo accept --campaign <campaign_id>" in proc.stdout
+
+
+def test_campaign_suggest_regenerates_for_an_old_campaign(tmp_path):
+    cid = _finished_campaign(tmp_path)
+    # simulate a pre-feature campaign: strip the stored suggestions entirely
+    manifest_path = (tmp_path / "data" / "simdev" / "campaigns" / cid
+                     / "campaign.json")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    del manifest["suggestions"]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    proc = _cli(tmp_path, "campaign", "--suggest", cid)
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout)["suggestions"] > 0
+
+    refused = _cli(tmp_path, "campaign", "--suggest", cid)
+    assert refused.returncode != 0
+    assert "force" in refused.stderr
+
+    forced = _cli(tmp_path, "campaign", "--suggest", cid, "--force")
+    assert forced.returncode == 0, forced.stderr
+    shown = _cli(tmp_path, "campaign", "--show", cid)
+    assert "suggested updates" in shown.stdout
+    assert "scqo accept --campaign" in shown.stdout

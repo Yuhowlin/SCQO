@@ -1,6 +1,6 @@
 """Review / apply / reject a run's suggested updates — by run id, any time later.
 
-    scqo accept                                  # list runs with pending suggestions
+    scqo accept                                  # list runs AND campaigns with pending suggestions
     scqo accept RUN_ID --list                    # show the suggestion table, decide nothing
     scqo accept RUN_ID                           # terminal: pick interactively; script: apply ALL pending
     scqo accept RUN_ID --entity q0 --field readout_freq_hz --comment "looks right"
@@ -9,6 +9,9 @@
     scqo accept RUN_ID --reapply --field readout_freq_hz --comment "rolling back to this run"
                                                  # re-decide ALREADY accepted/rejected items:
                                                  # deliberately overwrites the newer value
+    scqo accept --campaign CAMPAIGN_ID           # decide a campaign's AGGREGATE suggestions
+                                                 # (same flags, same guards; values are stamped
+                                                 # with the campaign as their provenance)
 
 Applying builds the device's backend session (calibration knobs must reach the live
 instrument config, vendor-push-first, ChangeRecords stamped with the ORIGINATING
@@ -39,15 +42,32 @@ import json
 import sys
 
 from scqo import DataStore, load_lab_config
-from scqo.suggestions import pending_count, reject_suggestions
+from scqo.suggestions import (
+    pending_count,
+    reject_campaign_suggestions,
+    reject_suggestions,
+)
 
-from ._review import format_summary, format_table, review_interactively
+from ._review import (
+    format_summary,
+    format_table,
+    review_campaign_interactively,
+    review_interactively,
+)
 
 
 def _load_record(store: DataStore, run_id: str) -> dict:
     """load_run with the KeyError turned into a clean exit (typos are the common case)."""
     try:
         return store.load_run(run_id)["record"]
+    except KeyError as err:
+        raise SystemExit(err.args[0] if err.args else str(err))
+
+
+def _load_manifest(store: DataStore, campaign_id: str) -> dict:
+    """load_campaign with the KeyError turned into a clean exit, like _load_record."""
+    try:
+        return store.load_campaign(campaign_id)["manifest"]
     except KeyError as err:
         raise SystemExit(err.args[0] if err.args else str(err))
 
@@ -66,11 +86,24 @@ def _no_suggestions_hint(run_id: str, targets: list[str]) -> str:
     )
 
 
+def _no_campaign_suggestions_hint(campaign_id: str) -> str:
+    """The campaign carries no aggregate suggestions (it predates the writeback
+    feature, proposed nothing, or ran with --accept): name the escape hatch."""
+    return (
+        f"{campaign_id}: no suggested updates recorded - the campaign predates "
+        f"the writeback feature, proposed nothing, or ran with --accept.\n"
+        f"Generate them from its stored statistics:\n"
+        f"  scqo campaign --suggest {campaign_id}"
+    )
+
+
 def main(argv: list[str] | None = None, prog: str | None = None) -> int:
     parser = argparse.ArgumentParser(prog=prog, description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("run_id", nargs="?",
                         help="the run whose suggestions to decide (omit to list pending runs)")
+    parser.add_argument("--campaign", metavar="CAMPAIGN_ID",
+                        help="decide a CAMPAIGN's aggregate suggestions instead of a run's")
     parser.add_argument("--list", action="store_true", dest="show",
                         help="show the run's suggestion table and exit (decides nothing)")
     parser.add_argument("--reject", action="store_true",
@@ -89,21 +122,34 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
     parser.add_argument("--limit", type=int, default=20, help="max rows for the pending list")
     parser.add_argument("--config", help="lab config path (default: $SCQO_CONFIG or ~/.scqo/config.toml)")
     args = parser.parse_args(argv)
+    if args.run_id and args.campaign:
+        parser.error("give a run_id OR --campaign, not both")
 
     cfg = load_lab_config(args.config)
     if cfg.data_root is None:
         raise SystemExit(f"no data_root configured in {cfg.source or 'the lab config'} — nothing is saved")
     store = DataStore(cfg.data_root, device_name=cfg.device or "device")
 
-    if args.run_id is None:  # ---------------------------------- pending-run list
+    if args.campaign is not None:
+        return _campaign_main(args, store)
+
+    if args.run_id is None:  # ------------------------- pending run/campaign list
         runs = store.find_runs(pending=True, limit=args.limit)
         if not runs:
             print("no runs with pending suggestions")
-            return 0
-        for r in runs:
-            n = r.get("suggestions_pending", 0)
-            print(f"{r['run_id']:44s} {r['outcome']:10s} pending:{n:<3d} {r['path']}")
-        print(f"\n({len(runs)} run(s); decide with: scqo accept <run_id>)")
+        else:
+            for r in runs:
+                n = r.get("suggestions_pending", 0)
+                print(f"{r['run_id']:44s} {r['outcome']:10s} pending:{n:<3d} {r['path']}")
+            print(f"\n({len(runs)} run(s); decide with: scqo accept <run_id>)")
+        campaigns = store.find_campaigns(pending=True, limit=args.limit)
+        if campaigns:
+            print()
+            for c in campaigns:
+                n = c.get("suggestions_pending", 0)
+                print(f"{c['campaign_id']:52s} {c['status']:9s} pending:{n:<3d} {c['path']}")
+            print(f"\n({len(campaigns)} campaign(s); decide with: "
+                  f"scqo accept --campaign <campaign_id>)")
         return 0
 
     if args.show:  # -------------------------------------------- table only
@@ -154,6 +200,58 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
                               comment=args.comment, force=args.force, reapply=args.reapply)
     # device mismatch / era guard / unknown run_id — the message says the fix; a
     # 44-character run id makes typos the COMMON case, so never show a traceback.
+    except (RuntimeError, KeyError) as err:
+        raise SystemExit(err.args[0] if err.args else str(err))
+    print(format_summary(summary), file=sys.stderr)
+    print(json.dumps(summary, indent=2))
+    return 1 if summary["errors"] or summary["stale"] else 0
+
+
+def _campaign_main(args, store: DataStore) -> int:
+    """The --campaign branches, mirroring the run branches step for step:
+    --list and --reject are datastore-only; only the apply path builds the
+    backend session (the aggregate's knobs must reach the live instrument)."""
+    manifest = _load_manifest(store, args.campaign)
+    suggestions = manifest.get("suggestions") or []
+
+    if args.show:  # -------------------------------------------- table only
+        if not suggestions:
+            print(_no_campaign_suggestions_hint(args.campaign))
+            return 0
+        print(f"{args.campaign} ({pending_count(suggestions)} pending):")
+        print(format_table(suggestions))
+        return 0
+
+    if args.reject:  # ------------------------------------------ datastore-only
+        summary = reject_campaign_suggestions(
+            store, args.campaign, entities=args.entity, fields=args.field,
+            comment=args.comment)
+        print(json.dumps(summary, indent=2))
+        return 0
+
+    # ------------------------------------------------------------ apply
+    if not suggestions and manifest.get("device") == store.device_name:
+        print(_no_campaign_suggestions_hint(args.campaign), file=sys.stderr)
+        # stdout stays parseable: the same empty summary accept_campaign returns
+        print(json.dumps({"campaign_id": args.campaign, "applied": [],
+                          "stale": [], "errors": [], "pending_left": 0},
+                         indent=2))
+        return 0
+
+    from ._backends import build_session  # imports drivers: only the apply path pays
+
+    sess, _ = build_session(args.config)
+    interactive = (args.entity is None and args.field is None
+                   and sys.stdin.isatty() and sys.stderr.isatty())
+    try:
+        if interactive:
+            summary = review_campaign_interactively(
+                sess, args.campaign, suggestions,
+                force=args.force, comment=args.comment, reapply=args.reapply)
+            return 0 if summary is None else (1 if summary["errors"] or summary["stale"] else 0)
+        summary = sess.accept_campaign(
+            args.campaign, entities=args.entity, fields=args.field,
+            comment=args.comment, force=args.force, reapply=args.reapply)
     except (RuntimeError, KeyError) as err:
         raise SystemExit(err.args[0] if err.args else str(err))
     print(format_summary(summary), file=sys.stderr)

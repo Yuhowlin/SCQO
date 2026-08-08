@@ -971,9 +971,11 @@ def test_suggestion_experiment_field_roundtrips():
 
 def test_preflight_refuses_a_label_shadowing_an_experiment_name(session, tmp_path):
     """run_id and campaign_id share the {stamp}-{device}-{name}-{seq} format,
-    so a shadowing label would mint campaign ids indistinguishable from that
-    experiment's run ids — refused whole, before any disk or hardware."""
-    plan = CampaignPlan(label="qubit_relaxation", repeat=2,
+    so a label shadowing a DIFFERENT experiment mints campaign ids that read
+    as that experiment's run ids — refused whole, before any disk or hardware.
+    The degenerate self-named 1-step plan is exempt: `scqo run --repeat`
+    builds exactly that, and there the label truthfully names the content."""
+    plan = CampaignPlan(label="qubit_ramsey", repeat=2,
                         defaults={"targets": ["q0"]},
                         steps=[{"experiment": "qubit_relaxation"}])
     out = session.run_campaign(plan)
@@ -983,6 +985,19 @@ def test_preflight_refuses_a_label_shadowing_an_experiment_name(session, tmp_pat
     assert not problem.startswith("step ")  # plan-level, unprefixed
     assert not list((tmp_path / "data" / "chipT").glob("*"))
     assert session.check_campaign(plan) == out["problems"]  # the same gate
+
+    # a bundle labeled with one of its own steps is still misleading: refused
+    bundle = CampaignPlan(label="qubit_relaxation", repeat=2,
+                          defaults={"targets": ["q0"]},
+                          steps=[{"experiment": "qubit_relaxation"},
+                                 {"experiment": "qubit_echo"}])
+    assert any("shadows" in p for p in session.check_campaign(bundle))
+
+    # the scqo run --repeat shape: one step, self-named — allowed
+    degenerate = CampaignPlan(label="qubit_relaxation", repeat=2,
+                              defaults={"targets": ["q0"]},
+                              steps=[{"experiment": "qubit_relaxation"}])
+    assert session.check_campaign(degenerate) == []
 
 
 # ------------------------------------------------------- accept_campaign

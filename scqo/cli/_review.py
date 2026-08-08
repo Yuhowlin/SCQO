@@ -26,9 +26,14 @@ def _fmt_value(value: Any) -> str:
 
 
 def format_table(suggestions: list[dict]) -> str:
-    """Numbered table of a run's suggestions (row numbers are stable: stored order)."""
+    """Numbered table of suggestions (row numbers are stable: stored order).
+
+    The experiment column appears only when some row carries one — campaign
+    rows do, run rows don't — so run-path output stays byte-identical."""
+    with_exp = any(s.get("experiment") for s in suggestions)
+    exp_header = f"{'experiment':22} " if with_exp else ""
     header = (
-        f"  {'#':>3} {'entity':10} {'field':18} {'role':10} "
+        f"  {'#':>3} {'entity':10} {'field':18} {exp_header}{'role':10} "
         f"{'current':>14}    {'suggested':>14}   status"
     )
     lines = [header]
@@ -40,8 +45,9 @@ def format_table(suggestions: list[dict]) -> str:
         if s.get("origin") == "operator":  # human-proposed (scqo suggest), not a fit
             status += f" [operator: {s['proposed_by']}]" if s.get("proposed_by") else " [operator]"
         note = f"  # {s['comment']}" if s.get("comment") else ""
+        exp = f"{s.get('experiment') or '-':22} " if with_exp else ""
         lines.append(
-            f"  {i:>3} {s['entity']:10} {s['field']:18} {s['role']:10} "
+            f"  {i:>3} {s['entity']:10} {s['field']:18} {exp}{s['role']:10} "
             f"{_fmt_value(s.get('before')):>14} -> {_fmt_value(s['after']):>14}{unit}"
             f"   {status}{note}"
         )
@@ -145,13 +151,40 @@ def review_interactively(
     typed at the prompt overrides the ``comment`` flag. The happy path — all
     pending, era matches, nothing stale — asks nothing beyond the selection.
     """
+    return _review_core(
+        lambda **kw: sess.accept(run_id, **kw),
+        f"scqo accept {run_id}", "run", suggestions,
+        force=force, comment=comment, reapply=reapply)
+
+
+def review_campaign_interactively(
+    sess, campaign_id: str, suggestions: list[dict], *,
+    force: bool = False, comment: str = "", reapply: bool = False,
+) -> dict | None:
+    """The campaign twin of :func:`review_interactively` — same prompts and
+    guards over ``Session.accept_campaign``."""
+    return _review_core(
+        lambda **kw: sess.accept_campaign(campaign_id, **kw),
+        f"scqo accept --campaign {campaign_id}", "campaign", suggestions,
+        force=force, comment=comment, reapply=reapply)
+
+
+def _review_core(
+    accept_fn, decide_cmd: str, noun: str, suggestions: list[dict], *,
+    force: bool = False, comment: str = "", reapply: bool = False,
+) -> dict | None:
+    """The shared review flow. ``accept_fn(**kwargs)`` proxies the Session
+    accept method with its id already bound; ``decide_cmd`` is the paste-ready
+    decide-later command; ``noun`` names the container in the era warning.
+    The dry-run plan's era dict keys the measured-under stamps by that
+    container ("run" or "campaign") — read tolerantly here."""
     if not suggestions:
         return None
     print(f"\nsuggested updates ({pending_count(suggestions)} pending):", file=sys.stderr)
     print(format_table(suggestions), file=sys.stderr)
     if not (sys.stdin.isatty() and sys.stderr.isatty()):
         # ASCII only: this line reaches consoles in whatever codepage the lab runs
-        print(f"not a terminal - the device is unchanged; decide later with: scqo accept {run_id}",
+        print(f"not a terminal - the device is unchanged; decide later with: {decide_cmd}",
               file=sys.stderr)
         return None
     while True:
@@ -166,19 +199,20 @@ def review_interactively(
         except ValueError as err:
             print(f"  {err}", file=sys.stderr)
     if not selected:
-        print(f"nothing applied - the device is unchanged; decide later with: scqo accept {run_id}",
+        print(f"nothing applied - the device is unchanged; decide later with: {decide_cmd}",
               file=sys.stderr)
         return None
 
-    plan = sess.accept(run_id, indices=selected, dry_run=True)
+    plan = accept_fn(indices=selected, dry_run=True)
     by_index = {item["index"]: item for item in plan["items"]}
+    measured_era = plan["era"].get("run") or plan["era"].get("campaign")
 
     if not plan["era"]["match"] and not force:
-        print(f"WARNING: this run was measured under cooldown/setup {_fmt_era(plan['era']['run'])} "
+        print(f"WARNING: this {noun} was measured under cooldown/setup {_fmt_era(measured_era)} "
               f"but the device is now on {_fmt_era(plan['era']['current'])} - "
               f"its values may not transfer.", file=sys.stderr)
         if not _confirm("apply anyway? [y/N]: "):
-            print(f"nothing applied - the device is unchanged; decide later with: scqo accept {run_id}",
+            print(f"nothing applied - the device is unchanged; decide later with: {decide_cmd}",
                   file=sys.stderr)
             return None
 
@@ -210,7 +244,7 @@ def review_interactively(
         kept.append(i)
 
     if not kept:
-        print(f"nothing applied - the device is unchanged; decide later with: scqo accept {run_id}",
+        print(f"nothing applied - the device is unchanged; decide later with: {decide_cmd}",
               file=sys.stderr)
         return None
 
@@ -221,7 +255,7 @@ def review_interactively(
     force_flag = force or not plan["era"]["match"] or any(
         by_index[i]["stale"] and by_index[i]["status"] == "pending" for i in kept
     )
-    summary = sess.accept(run_id, indices=kept, comment=typed or comment,
-                          force=force_flag, reapply=reapply_flag)
+    summary = accept_fn(indices=kept, comment=typed or comment,
+                        force=force_flag, reapply=reapply_flag)
     print(format_summary(summary), file=sys.stderr)
     return summary
