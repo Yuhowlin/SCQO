@@ -63,9 +63,16 @@ class TomographyContract(DatasetContract):
 class QubitTomographyParameters(TargetSelection, AveragingParameters, QubitResetParameters):
     """Inputs for a Qubit Tomography experiment."""
 
-    qubit_configs: dict[str, dict[str, str]] = Field(
+    qubit_configs: dict[str, dict[str, Any]] = Field(
         default_factory=dict,
-        description="Qubit configurations mapping qubit name to init_state ('0','1','+','-','+i','-i') and target_gate ('I','X','X90','Y','Y90')"
+        description=(
+            "Qubit configurations mapping qubit name to init_state "
+            "('0','1','+','-','+i','-i'), target_gate ('I','X','X90','Y','Y90') "
+            "and noise_mode (bool, default False). A noise_mode qubit is a "
+            "spectator noise source: it still plays its target gates but skips "
+            "init, basis rotation and measurement — its record holds dummy "
+            "zero I/Q and the estimator marks it success=0."
+        )
     )
     gate_counts: list[int] = Field(
         default_factory=lambda: list(range(0, 11)),
