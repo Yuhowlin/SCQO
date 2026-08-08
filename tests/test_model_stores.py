@@ -295,3 +295,21 @@ def test_history_rows_do_not_alias_live_values(stores):
     row = physical.history()[0]
     row.new.append(9.9)                              # a consumer misbehaving
     assert physical.get("q1_z", "distortion_tau_s") == [1e-6]
+
+
+def test_record_stamps_campaign_id(tmp_path, roster):
+    """A campaign-level accept stamps campaign_id (run_id stays None); the row
+    survives the sidecar round trip, and a plain record() leaves it None."""
+    physical = physical_store(tmp_path, roster)
+    physical.record("q1", "f_01_hz", 5.1e9, experiment="qubit_ramsey",
+                    campaign_id="20260809-100000-000-devA-stab-01")
+    row = physical.history()[-1]
+    assert row.campaign_id == "20260809-100000-000-devA-stab-01"
+    assert row.run_id is None
+    assert row.as_dict()["campaign_id"] == row.campaign_id
+    physical.save()
+
+    again = physical_store(tmp_path, roster)
+    assert again.history()[-1].campaign_id == row.campaign_id
+    again.record("q1", "f_01_hz", 5.2e9)  # no kwarg -> no stamp
+    assert again.history()[-1].campaign_id is None

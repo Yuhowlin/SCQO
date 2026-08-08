@@ -11,9 +11,9 @@ Pure functions over plain dicts, no I/O: the viewer feeds them a context's state
 files (``scqo_state.json`` / ``physical.json`` values plus their
 ``.history.jsonl`` sidecars in the same ``<cooldown>/<setup>/scqo/`` folder — all
 per (cooldown, setup), so the whole store belongs to one context and no
-slicing/filtering is needed), the Session feeds them its live state
-(:meth:`scqo.session.Session.live_sources`), and both get the same answer for the
-same facts.
+slicing/filtering is needed), the CLI feeds them a Session's live state
+(``scqo state --sources`` via :func:`scqo.report.live_sources`), and both get
+the same answer for the same facts.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from __future__ import annotations
 from typing import Any
 
 #: source-info ``status`` values (see :func:`live_sources`).
-SOURCE_STATUSES = ("run", "manual", "external", "unrecorded")
+SOURCE_STATUSES = ("run", "campaign", "manual", "external", "unrecorded")
 
 
 def live_sources(values: dict, history: list[dict]) -> dict[str, dict[str, dict]]:
@@ -33,10 +33,12 @@ def live_sources(values: dict, history: list[dict]) -> dict[str, dict[str, dict]
 
         {"entity", "field", "value",             # the CURRENT value
          "status":  "run"         # last record has a run_id AND still matches
+                  | "campaign"    # last record has a campaign_id (no run) and matches
                   | "manual"      # last record was a manual write (no run) and matches
                   | "external"    # a record exists but the value drifted -> NO run credited
                   | "unrecorded", # value present, no record at all (vendor pull-seed)
          "run_id",                              # only for status == "run"
+         "campaign_id",                         # only for status == "campaign"
          "timestamp", "operator", "experiment", # from the last record (None if unrecorded)
          "recorded"}                            # the last record's value (differs iff external)
     """
@@ -57,8 +59,8 @@ def live_sources(values: dict, history: list[dict]) -> dict[str, dict[str, dict]
             record = last.get((entity, field))
             info: dict[str, Any] = {
                 "entity": entity, "field": field, "value": value,
-                "run_id": None, "timestamp": None, "operator": None,
-                "experiment": None, "recorded": None,
+                "run_id": None, "campaign_id": None, "timestamp": None,
+                "operator": None, "experiment": None, "recorded": None,
             }
             if record is None:
                 info["status"] = "unrecorded"
@@ -72,6 +74,9 @@ def live_sources(values: dict, history: list[dict]) -> dict[str, dict[str, dict]
                 elif record.get("run_id"):
                     info["status"] = "run"
                     info["run_id"] = record.get("run_id")
+                elif record.get("campaign_id"):  # a campaign-level accept
+                    info["status"] = "campaign"
+                    info["campaign_id"] = record.get("campaign_id")
                 else:
                     info["status"] = "manual"
             out.setdefault(entity, {})[field] = info
@@ -83,6 +88,8 @@ def live_run_map(*sources: dict) -> dict[str, list[tuple[str, str]]]:
 
     Only ``status == "run"`` entries contribute; pass the instrument and physical
     maps together to get the device's full "built from these runs" picture.
+    Campaign-sourced values deliberately do not contribute — a campaign is not a
+    run row; its credit renders on the campaign's own page.
     """
     out: dict[str, list[tuple[str, str]]] = {}
     for source in sources:

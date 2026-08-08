@@ -233,6 +233,9 @@ def create_app(data_root: str | Path) -> FastAPI:
                 on_device.append({"kind": "live"})
             elif src["status"] == "run":
                 on_device.append({"kind": "superseded", "run_id": src["run_id"]})
+            elif src["status"] == "campaign":
+                on_device.append({"kind": "campaign",
+                                  "campaign_id": src["campaign_id"]})
             elif src["status"] == "external":
                 on_device.append({"kind": "external"})
             else:  # manual

@@ -811,6 +811,7 @@ class Session:
         *,
         experiment: str | None,
         run_id: str | None,
+        campaign_id: str | None = None,
         comment: str = "",
         reapply: bool = False,
     ) -> tuple[list[Suggestion], list[str]]:
@@ -831,7 +832,7 @@ class Session:
         groups: dict[str, list[Suggestion]] = {}
         for s in eligible:
             groups.setdefault(s.entity, []).append(s)
-        self.device.set_context(experiment, run_id)
+        self.device.set_context(experiment, run_id, campaign_id=campaign_id)
         try:
             for entity, group in groups.items():
                 order = {f: i for i, f
@@ -852,7 +853,8 @@ class Session:
                         if s.role == "fact":
                             self.physical.record(s.entity, s.field, s.after,
                                                  experiment=experiment,
-                                                 run_id=run_id)
+                                                 run_id=run_id,
+                                                 campaign_id=campaign_id)
                         else:
                             self._write_state(s.entity, s.field, s.after)
                     except Exception as err:

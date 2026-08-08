@@ -355,6 +355,7 @@ def _print_sources(sess, entity_filter: str | None) -> int:
         value = f"{info['value']:.6g}" if isinstance(info["value"], float) else str(info["value"])
         source = {
             "run": info["run_id"],
+            "campaign": f"campaign {info['campaign_id']}",
             "manual": "(manual)",
             "external": "(externally changed)",
             "unrecorded": "(no record)",

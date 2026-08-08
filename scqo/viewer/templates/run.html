@@ -43,6 +43,7 @@ folder <code>{{ path }}</code></p>
         {%- if s.origin == "operator" %} <span class="badge operator" title="proposed by a human ({{ s.proposed_at or '?' }}), not a fit">operator{% if s.proposed_by %} · {{ s.proposed_by }}{% endif %}</span>{% endif %}</td>
     <td>{% if od and od.kind == "live" %}<span class="live">LIVE on device</span>
         {%- elif od and od.kind == "superseded" %}<a href="/run/{{ od.run_id }}" title="{{ od.run_id }}">superseded</a>
+        {%- elif od and od.kind == "campaign" %}superseded (<a href="/campaign/{{ od.campaign_id }}" title="{{ od.campaign_id }}">campaign</a>)
         {%- elif od and od.kind == "external" %}superseded <span class="ext">(externally changed)</span>
         {%- elif od and od.kind == "manual" %}superseded <span class="muted">(manual write)</span>
         {%- else %}-{% endif %}</td>

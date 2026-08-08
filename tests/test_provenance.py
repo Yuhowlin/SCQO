@@ -107,3 +107,44 @@ def test_live_run_map_merges_stores_and_keeps_runs_only():
 def test_summarize_live_groups_by_field():
     pairs = [("q0_ro", "readout_freq_hz"), ("q1_ro", "readout_freq_hz"), ("q1", "t1_s")]
     assert summarize_live(pairs) == "readout_freq_hz (q0_ro,q1_ro), t1_s (q1)"
+
+
+def test_campaign_accept_is_credited_as_campaign():
+    """A row stamped with campaign_id (no run_id) is a first-class source:
+    status "campaign" with the id exposed, never "(manual)"."""
+    values = {"q0": {"t1_s": 4.13e-5}}
+    history = [_rec("q0", "t1_s", 4.13e-5, campaign_id="camp-1")]
+    info = live_sources(values, history)["q0"]["t1_s"]
+    assert info["status"] == "campaign"
+    assert info["campaign_id"] == "camp-1"
+    assert info["run_id"] is None
+
+
+def test_campaign_drifted_value_is_external():
+    """Strict match applies to campaigns exactly as to runs: a drifted value
+    credits nobody."""
+    values = {"q0": {"t1_s": 9.9e-5}}
+    history = [_rec("q0", "t1_s", 4.13e-5, campaign_id="camp-1")]
+    info = live_sources(values, history)["q0"]["t1_s"]
+    assert info["status"] == "external"
+    assert info["campaign_id"] is None
+
+
+def test_run_id_outranks_campaign_id():
+    """A row carrying both is credited to the run — the finer provenance."""
+    values = {"q0": {"t1_s": 4.13e-5}}
+    history = [_rec("q0", "t1_s", 4.13e-5, run_id="run-1", campaign_id="camp-1")]
+    info = live_sources(values, history)["q0"]["t1_s"]
+    assert info["status"] == "run"
+    assert info["run_id"] == "run-1"
+
+
+def test_live_run_map_ignores_campaign_entries():
+    """Campaign-sourced values stay out of the runs list's "live" credit —
+    a campaign is not a run row; its credit renders on its own page."""
+    sources = live_sources(
+        {"q0": {"t1_s": 4.13e-5}, "q1": {"t1_s": 3.0e-5}},
+        [_rec("q0", "t1_s", 4.13e-5, campaign_id="camp-1"),
+         _rec("q1", "t1_s", 3.0e-5, run_id="run-1")],
+    )
+    assert live_run_map(sources) == {"run-1": [("q1", "t1_s")]}

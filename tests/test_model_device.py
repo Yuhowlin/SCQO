@@ -328,3 +328,19 @@ def test_loud_error_lists_only_fields_not_kind(device):
         device.component("q1_xy").bogus = 1
     except AttributeError as err:
         assert "kind" not in str(err).split("fields:")[1]
+
+
+def test_set_context_campaign_id_reaches_coupled_echoes(device, vendor):
+    """The campaign stamp rides every row a write produces — including the
+    chain-reconcile echo — and the plain two-arg reset clears it."""
+    device.set_context("single_shot_readout", campaign_id="camp-1")
+    device.component("q1_ro").readout_power_dbm = -20.0
+    rows = {r.field: r for r in device.history()}
+    assert rows["readout_power_dbm"].campaign_id == "camp-1"
+    assert rows["readout_power_dbm"].run_id is None
+    assert rows["readout_amp"].coupled_to == "readout_power_dbm"
+    assert rows["readout_amp"].campaign_id == "camp-1"  # the echo inherits
+
+    device.set_context(None, None)  # the existing reset clears every stamp
+    device.component("q1_xy").pi_amp = 0.222
+    assert {r.field: r for r in device.history()}["pi_amp"].campaign_id is None

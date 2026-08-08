@@ -75,6 +75,7 @@ Values link to the run that set them{% if sec.latest_run %} · latest run: <a hr
   <tr><td>{{ q }}</td>
     {% for f in sec.state_fields %}{% set v = fields.get(f) %}{% set src = sec.sources.get(q, {}).get(f) %}{% set fmt = "%.8g" | format(v) if v is number else (v if v is not none else "-") %}<td>
       {%- if src and src.status == "run" %}<a href="/run/{{ src.run_id }}" title="{{ (src.timestamp or '')[:19] }} · {{ src.operator or '-' }}">{{ fmt }}</a>
+      {%- elif src and src.status == "campaign" %}<a href="/campaign/{{ src.campaign_id }}" title="{{ (src.timestamp or '')[:19] }} · {{ src.operator or '-' }}">{{ fmt }}</a> <span class="muted">(campaign)</span>
       {%- elif src and src.status == "external" %}{{ fmt }} <span class="ext">(externally changed)</span>
       {%- elif src and src.status == "manual" %}{{ fmt }} <span class="muted">(manual)</span>
       {%- else %}{{ fmt }}{% endif %}</td>{% endfor %}
@@ -93,7 +94,7 @@ Values link to the run that set them{% if sec.latest_run %} · latest run: <a hr
     <td>{{ "%.8g" | format(h.new) if h.new is number else h.new }}</td>
     <td>{{ h.experiment }}</td>
     <td>{{ h.operator or "-" }}</td>
-    <td>{% if h.run_id %}<a href="/run/{{ h.run_id }}">{{ h.run_id }}</a>{% else %}-{% endif %}</td>
+    <td>{% if h.run_id %}<a href="/run/{{ h.run_id }}">{{ h.run_id }}</a>{% elif h.campaign_id %}<a href="/campaign/{{ h.campaign_id }}">{{ h.campaign_id }}</a>{% else %}-{% endif %}</td>
   </tr>
   {% endfor %}
 </table>
@@ -110,6 +111,7 @@ THROUGH this setup; compare across setups/cooldowns via the trends page, never a
   <tr><td>{{ r.entity }}</td><td>{{ r.field }}</td>
     {% set src = r.source %}{% set fmt = "%.8g" | format(r.value) if r.value is number else r.value %}<td>
       {%- if src and src.status == "run" %}<a href="/run/{{ src.run_id }}" title="{{ (src.timestamp or '')[:19] }} · {{ src.operator or '-' }}">{{ fmt }}</a>
+      {%- elif src and src.status == "campaign" %}<a href="/campaign/{{ src.campaign_id }}" title="{{ (src.timestamp or '')[:19] }} · {{ src.operator or '-' }}">{{ fmt }}</a> <span class="muted">(campaign)</span>
       {%- elif src and src.status == "external" %}{{ fmt }} <span class="ext">(externally changed)</span>
       {%- elif src and src.status == "manual" %}{{ fmt }} <span class="muted">(manual)</span>
       {%- else %}{{ fmt }}{% endif %}</td>
@@ -126,7 +128,7 @@ THROUGH this setup; compare across setups/cooldowns via the trends page, never a
     <td>{{ "%.8g" | format(h.new) if h.new is number else h.new }}</td>
     <td>{{ h.experiment }}</td>
     <td>{{ h.operator or "-" }}</td>
-    <td>{% if h.run_id %}<a href="/run/{{ h.run_id }}">{{ h.run_id }}</a>{% else %}-{% endif %}</td>
+    <td>{% if h.run_id %}<a href="/run/{{ h.run_id }}">{{ h.run_id }}</a>{% elif h.campaign_id %}<a href="/campaign/{{ h.campaign_id }}">{{ h.campaign_id }}</a>{% else %}-{% endif %}</td>
   </tr>
   {% endfor %}
 </table>

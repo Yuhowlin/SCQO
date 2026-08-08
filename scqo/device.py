@@ -263,6 +263,7 @@ class RecordingDevice:
         self._store = store
         self._experiment: str | None = None
         self._run_id: str | None = None
+        self._campaign_id: str | None = None
         #: runtime knob config: entity -> field -> value|None. Seeded from
         #: the vendor (pull) or the store (push). Seeding writes no rows —
         #: it is not a change — with one honest exception: push-mode chain
@@ -340,10 +341,15 @@ class RecordingDevice:
     # ------------------------------------------------------------- context
 
     def set_context(self, experiment: str | None,
-                    run_id: str | None = None) -> None:
-        """Tag subsequent changes with the experiment/run causing them."""
+                    run_id: str | None = None,
+                    campaign_id: str | None = None) -> None:
+        """Tag subsequent changes with the experiment/run — or, for a
+        campaign-level accept, the campaign — causing them. The keyword
+        defaults make the existing ``set_context(None, None)`` reset clear
+        every stamp."""
         self._experiment = experiment
         self._run_id = run_id
+        self._campaign_id = campaign_id
 
     # ------------------------------------------------------------- surface
 
@@ -440,14 +446,16 @@ class RecordingDevice:
         value = self._store.check(entity, field, value)
         self._vendor_write(entity, field, value)
         self._store.record(entity, field, value,
-                           experiment=self._experiment, run_id=self._run_id)
+                           experiment=self._experiment, run_id=self._run_id,
+                           campaign_id=self._campaign_id)
         self._config.setdefault(entity, {})[field] = self._store.get(
             entity, field)
         self._sync_coupled(entity, field)
 
     def _record_only(self, entity: str, field: str, value) -> None:
         self._store.record(entity, field, value,
-                           experiment=self._experiment, run_id=self._run_id)
+                           experiment=self._experiment, run_id=self._run_id,
+                           campaign_id=self._campaign_id)
 
     def _sync_coupled(self, entity: str, changed_field: str) -> None:
         """Reconcile vendor-side write echoes so the config never desyncs.
@@ -478,5 +486,6 @@ class RecordingDevice:
             self._store.record(entity, other, current,
                                experiment=self._experiment,
                                run_id=self._run_id,
+                               campaign_id=self._campaign_id,
                                coupled_to=changed_field)
             self._config.setdefault(entity, {})[other] = current

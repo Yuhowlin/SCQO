@@ -99,6 +99,10 @@ class ChangeRecord:
     experiment: str | None = None
     #: run_id of the datastore run that caused this change.
     run_id: str | None = None
+    #: campaign_id of the campaign-level accept that caused this change
+    #: (Session.accept_campaign applies an AGGREGATE, so no single run_id
+    #: can be credited — the campaign record is the finer truth there).
+    campaign_id: str | None = None
     #: OS login of whoever made the change (None only when undeterminable).
     operator: str | None = None
     #: Set when this change is the echo of writing another field (one vendor
@@ -346,6 +350,7 @@ class Store:
 
     def record(self, entity: str, field: str, value, *,
                experiment: str | None = None, run_id: str | None = None,
+               campaign_id: str | None = None,
                coupled_to: str | None = None) -> None:
         """Record one value: validate, append history, update values —
         never any vendor (push is the recording device's job)."""
@@ -357,7 +362,7 @@ class Store:
             # reach the live store
             new=list(value) if isinstance(value, list) else value,
             kind=self._roster.entities[entity].kind,
-            experiment=experiment, run_id=run_id,
+            experiment=experiment, run_id=run_id, campaign_id=campaign_id,
             operator=_current_operator() or None,
             coupled_to=coupled_to, setup=self._setup or None))
         self._values.setdefault(entity, {})[field] = value
