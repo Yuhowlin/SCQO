@@ -798,8 +798,172 @@ def test_campaign_without_a_datastore_still_returns_statistics(tmp_path):
     sess = Session(SimulatedBackend(vendor), roster, design=design,
                    scqo_dir=tmp_path / "scqo")  # no data_root
     out = sess.run_campaign(CampaignPlan(
-        label="nowhere", repeat=2, defaults={"targets": ["q0"]},
+        label="nowhere", repeat=3, defaults={"targets": ["q0"]},
         steps=[{"experiment": "qubit_relaxation"}]))
-    assert out["campaign_id"] is None and out["repeat_done"] == 2
-    assert out["statistics"]["qubit_relaxation"]["q0"]["t1_s"]["n"] == 2
+    assert out["campaign_id"] is None and out["repeat_done"] == 3
+    assert out["statistics"]["qubit_relaxation"]["q0"]["t1_s"]["n"] == 3
+    # the returned manifest is the API: the aggregate suggestions are still
+    # generated (run()'s undecidable-suggestions precedent) — just unpersisted
+    assert {s["field"] for s in out["suggestions"]} >= {"t1_s"}
     assert sess.find_campaigns() == []
+
+
+# ------------------------------------------------------ aggregate writeback
+
+def test_finalized_campaign_carries_grouped_suggestions(session):
+    """The statistics replay through each experiment's own update() at finish:
+    one t1_s series proposes BOTH the fact and the derived thermalization knob,
+    every row is stamped with its experiment, and nothing touches the stores."""
+    out = session.run_campaign(CampaignPlan(
+        label="stab", repeat=3, defaults={"targets": ["q0"]}, skip_artifacts=True,
+        steps=[{"experiment": "qubit_relaxation"},
+               {"experiment": "qubit_echo"}]))
+    assert out["status"] == "complete"
+
+    rows = out["suggestions"]
+    assert rows and all(r["status"] == "pending" for r in rows)
+    by_key = {(r["experiment"], r["entity"], r["field"]): r for r in rows}
+    t1 = by_key[("qubit_relaxation", "q0", "t1_s")]
+    assert t1["role"] == "fact" and t1["before"] is None
+    assert t1["after"] == pytest.approx(
+        out["statistics"]["qubit_relaxation"]["q0"]["t1_s"]["mean"])
+    therm = by_key[("qubit_relaxation", "q0_xy", "thermalization_time_s")]
+    assert therm["role"] == "knob"
+    assert ("qubit_echo", "q0", "t2_echo_s") in by_key
+
+    # generation appends per experiment, so stored order is already grouped
+    names = [r["experiment"] for r in rows]
+    assert names == sorted(names, key=names.index)
+
+    # the manifest on disk carries the same rows, and the index counts them
+    manifest = json.loads(
+        (Path(out["data_path"]) / "campaign.json").read_text(encoding="utf-8"))
+    assert manifest["suggestions"] == rows
+    assert session.find_campaigns()[0]["suggestions_pending"] == len(rows)
+    assert [c["campaign_id"] for c in
+            session.find_campaigns(pending=True)] == [out["campaign_id"]]
+
+    # proposals only: the stores and the children are untouched
+    assert session.physical_state() == {}
+    assert all(not c["suggestions"]
+               for c in session.campaign_runs(out["campaign_id"]))
+
+
+def test_generation_honours_writeback_stat_and_min_n(session):
+    # below the floor: a 2-repeat campaign proposes nothing (min_n default 3)
+    out = session.run_campaign(CampaignPlan(
+        label="short", repeat=2, defaults={"targets": ["q0"]}, skip_artifacts=True,
+        steps=[{"experiment": "qubit_relaxation"}]))
+    assert "suggestions" not in out
+
+    # the stat choice picks which number is proposed
+    plan = CampaignPlan(label="planted", repeat=5,
+                        defaults={"targets": ["q0"]},
+                        writeback={"stat": "median", "min_n": 5},
+                        steps=[{"experiment": "qubit_relaxation"}])
+    stats = {"qubit_relaxation": {"q0": {
+        "t1_s": {"n": 5, "mean": 10.0e-6, "median": 7.0e-6}}}}
+    rows, problems = session._campaign_suggestions(plan, stats)
+    assert not problems
+    assert {r.field: r.after for r in rows}["t1_s"] == pytest.approx(7.0e-6)
+    plan_mean = plan.model_copy(update={"writeback": plan.writeback.model_copy(
+        update={"stat": "mean"})})
+    rows, _ = session._campaign_suggestions(plan_mean, stats)
+    assert {r.field: r.after for r in rows}["t1_s"] == pytest.approx(10.0e-6)
+    assert all(r.experiment == "qubit_relaxation" for r in rows)
+
+
+def test_generation_filters_nonfinite_and_nonscalar(session):
+    """The finiteness gate runs BEFORE Suggestion construction: NaN (the
+    in-memory road), None (the JSON-null road) and nonscalar series never
+    become rows - and an experiment with nothing left is skipped silently."""
+    plan = CampaignPlan(label="planted", repeat=5, defaults={"targets": ["q0"]},
+                        writeback={"min_n": 3},
+                        steps=[{"experiment": "qubit_relaxation"}])
+    rows, problems = session._campaign_suggestions(plan, {
+        "qubit_relaxation": {"q0": {"t1_s": {"n": 5, "mean": float("nan")}}}})
+    assert rows == [] and problems == []
+
+    rows, problems = session._campaign_suggestions(plan, {
+        "qubit_relaxation": {"q0": {
+            "t1_s": {"n": 5, "mean": 2.5e-5},
+            "t1_stderr_s": {"n": 5, "mean": None},          # JSON null
+            "per_point": {"n": 0, "n_nonscalar": 5, "mean": None},
+            "thin": {"n": 2, "mean": 1.0},                  # under min_n
+        }}})
+    assert problems == []
+    assert {r.field for r in rows} == {"t1_s", "thermalization_time_s"}
+    assert all(math.isfinite(r.after) for r in rows)
+
+
+def test_a_failing_update_is_noted_and_never_fails_the_campaign(session, monkeypatch):
+    from scqo.experiments import QubitRelaxation
+
+    def boom(self):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(QubitRelaxation, "update", boom)
+    out = session.run_campaign(CampaignPlan(
+        label="halfbad", repeat=3, defaults={"targets": ["q0"]}, skip_artifacts=True,
+        steps=[{"experiment": "qubit_relaxation"},
+               {"experiment": "qubit_echo"}]))
+    assert out["status"] == "complete"
+    assert out["suggestion_problems"] == ["qubit_relaxation: RuntimeError: boom"]
+    assert {r["experiment"] for r in out["suggestions"]} == {"qubit_echo"}
+
+
+def test_apply_mode_campaign_generates_no_suggestions(session):
+    """A re-tuning campaign moved the device under its own measurement - the
+    series is a feedback trace, so no aggregate is proposed."""
+    out = session.run_campaign(CampaignPlan(
+        label="retune", repeat=3, defaults={"targets": ["q0"]}, skip_artifacts=True,
+        steps=[{"experiment": "qubit_relaxation"}]), update="apply")
+    assert out["status"] == "complete"
+    assert "suggestions" not in out
+    assert session.physical_state()["q0"]["t1_s"] > 0  # children applied live
+
+
+def test_suggest_campaign_regenerates_retroactively(session):
+    out = session.run_campaign(CampaignPlan(
+        label="retro", repeat=3, defaults={"targets": ["q0"]}, skip_artifacts=True,
+        steps=[{"experiment": "qubit_relaxation"}]))
+    cid = out["campaign_id"]
+    store = session.datastore
+
+    # an existing set (decisions included) refuses a silent overwrite
+    with pytest.raises(RuntimeError, match="force"):
+        session.suggest_campaign(cid)
+
+    # simulate a pre-feature campaign: empty the stored set, then regenerate
+    store.edit_campaign_suggestions(cid, lambda _rows: [])
+    assert store.find_campaigns(pending=True) == []
+    summary = session.suggest_campaign(cid)
+    assert summary["suggestions"] > 0 and summary["pending_total"] > 0
+    assert [c["campaign_id"] for c in store.find_campaigns(pending=True)] == [cid]
+    fields = {s["field"] for s in
+              store.load_campaign(cid)["manifest"]["suggestions"]}
+    assert {"t1_s", "thermalization_time_s"} <= fields
+
+    # force regenerates over a live set
+    assert session.suggest_campaign(cid, force=True)["suggestions"] > 0
+
+    # a still-running campaign is refused: its process owns campaign.json
+    path = Path(store.load_campaign(cid)["path"]) / "campaign.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest["status"], manifest["ended_at"] = "running", None
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="still running"):
+        session.suggest_campaign(cid, force=True)
+
+
+def test_suggestion_experiment_field_roundtrips():
+    from scqo.suggestions import Suggestion, load_suggestions
+
+    s = Suggestion(entity="q0", field="t1_s", role="fact", before=None,
+                   after=4.1e-5, experiment="qubit_relaxation")
+    assert s.model_dump(mode="json")["experiment"] == "qubit_relaxation"
+    # a legacy stored row (pre-feature) has no key -> None, never an error
+    (legacy,) = load_suggestions([{"entity": "q0", "field": "t1_s",
+                                   "role": "fact", "before": None,
+                                   "after": 4.1e-5}])
+    assert legacy.experiment is None

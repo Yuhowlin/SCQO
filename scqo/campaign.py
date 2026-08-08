@@ -71,6 +71,27 @@ class CampaignStep(BaseModel):
     note: str = Field("", description="Free-text note stored with this step's runs.")
 
 
+class CampaignWriteback(BaseModel):
+    """How the aggregate becomes proposed device updates at finish.
+
+    A campaign runs with updates off, so the statistics table is the only
+    writeback candidate. At finalize each step experiment's own ``update()``
+    is replayed on the chosen statistic and the captured writes become
+    PENDING campaign-level suggestions on the manifest, decided later with
+    ``scqo accept --campaign <id>`` (``Session.accept_campaign``).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    stat: Literal["mean", "median"] = Field(
+        "mean", description="Which statistic of each quantity is proposed "
+                            "(median is the outlier-robust choice).")
+    min_n: int = Field(
+        3, gt=0,
+        description="Minimum successful repeats a quantity needs before its "
+                    "aggregate is proposed.")
+
+
 class CampaignPlan(BaseModel):
     """What to run, how many times, how fast, and when to give up."""
 
@@ -104,6 +125,11 @@ class CampaignPlan(BaseModel):
     #: typically just {"targets": [...]}.
     defaults: dict[str, Any] = Field(default_factory=dict,
                                      description="Parameters shared by every step.")
+    #: The aggregate-writeback policy (``[writeback]`` in the plan file);
+    #: absent means the defaults (stat="mean", min_n=3).
+    writeback: CampaignWriteback = Field(
+        default_factory=CampaignWriteback,
+        description="How the statistics become proposed device updates.")
     tags: list[str] = Field(default_factory=list,
                             description="Searchable tags for every child run.")
     note: str = Field("", description="Free-text note stored with the campaign.")

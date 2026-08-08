@@ -360,10 +360,16 @@ class Session:
         capturing the same ``before``; accepting repeat 0 moves the store, so
         repeats 1..N-1 would every one report ``stale`` — N sets of undecidable
         proposals. ``"suggest"`` is therefore REFUSED for more than one repeat.
-        ``"apply"`` is allowed with a warning: legitimate for a repeated
-        RE-TUNING campaign, but it moves the device under its own measurement
-        (so the statistic measures the feedback loop, not the qubit) and each
-        child's ``Store.save()`` rewrites the whole history sidecar.
+        The writeback happens ONCE instead, at finish: the statistics are
+        replayed through each experiment's own ``update()`` and stored as
+        campaign-level PENDING suggestions on the manifest (policy:
+        ``plan.writeback``; decide with :meth:`accept_campaign` /
+        ``scqo accept --campaign``). ``"apply"`` is allowed with a warning:
+        legitimate for a repeated RE-TUNING campaign, but it moves the device
+        under its own measurement (so the statistic measures the feedback
+        loop, not the qubit), each child's ``Store.save()`` rewrites the whole
+        history sidecar — and no aggregate suggestions are generated (the
+        series is a feedback trace, not repeated measurements of one value).
 
         PRE-FLIGHT: before repeat 0 every step's Parameters are constructed and
         the roster target gate is run — both pre-hardware, no side effects. A
@@ -416,8 +422,10 @@ class Session:
                 "update='suggest' is refused for a multi-repeat campaign: every "
                 "repeat would capture the same `before`, so accepting one makes "
                 "all the others stale and undecidable. Use update='none' (the "
-                "default) and write the aggregate with set_values(), or "
-                "update='apply' if you really mean a repeated re-tuning.")
+                "default) — the aggregate is proposed ONCE at finish as "
+                "campaign-level suggestions, decided with `scqo accept "
+                "--campaign <id>` — or update='apply' if you really mean a "
+                "repeated re-tuning.")
 
         started_at = _now()
         started_mono = time.monotonic()
@@ -642,6 +650,23 @@ class Session:
             manifest["stop_reason"] = stop_reason
             manifest["ended_at"] = _now()
             manifest["repeats"] = [_repeat_skeleton(r) for r in rows]
+            # Aggregate writeback: generated on EVERY exit path that measured
+            # anything (a stopped overnight campaign still has valid statistics
+            # — the statistics.png doctrine), riding the manifest's final
+            # write. Own guard: a generation crash must never replace the real
+            # stop_reason, exactly like the persist guard below.
+            if mode == "none" and manifest["statistics"]:
+                try:
+                    generated, gen_problems = self._campaign_suggestions(
+                        plan, manifest["statistics"])
+                    if generated:
+                        manifest["suggestions"] = [
+                            s.model_dump(mode="json") for s in generated]
+                    if gen_problems:
+                        manifest["suggestion_problems"] = gen_problems
+                except Exception as err:
+                    manifest["suggestion_problems"] = [
+                        f"generation failed: {type(err).__name__}: {err}"]
             if campaign_dir is not None:
                 try:
                     self._finalize_campaign(campaign_id, campaign_dir, manifest)
@@ -698,6 +723,82 @@ class Session:
                 problems.append(f"{where}: {gate_error.error}")
         return problems
 
+    def _campaign_suggestions(
+        self, plan, statistics: dict,
+    ) -> tuple[list[Suggestion], list[str]]:
+        """The aggregate-writeback generator: replay each step experiment's
+        own ``update()`` on a synthetic Result built from the campaign
+        statistics, under a SuggestionCapture — so the fit-key -> field
+        routing (including derived knobs, e.g. ``thermalization_time_s``
+        from ``t1_s``) keeps its ONE authority, the experiment.
+
+        A plan that runs the same experiment in several steps produced ONE
+        merged series (``aggregate()`` slots repeats per experiment), so it
+        gets one update() pass, driven by the FIRST such step's parameters.
+
+        Per (experiment, target) the synthetic fit keeps a quantity only when
+        its statistic resolved: ``n >= plan.writeback.min_n``, scalar, and
+        FINITE — the finiteness gate runs before Suggestion construction
+        because ``after`` is non-optional and the datastore's ``_scrub``
+        would null a NaN into an unreloadable row. It also accepts the
+        JSON-null form the retroactive path reads back. stderr twins pass
+        through on purpose: an update() only reads the keys it knows.
+
+        Returns ``(suggestions, problems)``; a failing experiment (e.g. its
+        update() KeyErrors on a fit key that did not survive ``min_n``) lands
+        in problems and never blocks the others.
+        """
+        import math
+
+        from . import experiments as registry
+        from .result import Outcome
+        from .suggestions import SuggestionCapture
+
+        wb = plan.writeback
+        suggestions: list[Suggestion] = []
+        problems: list[str] = []
+        first_step: dict[str, Any] = {}
+        for step in plan.steps:
+            first_step.setdefault(step.experiment, step)
+        for name in dict.fromkeys(plan.experiments):
+            fit: dict[str, dict[str, float]] = {}
+            for target, quantities in (statistics.get(name) or {}).items():
+                kept: dict[str, float] = {}
+                for quantity, st in (quantities or {}).items():
+                    value = (st or {}).get(wb.stat)
+                    if ((st or {}).get("n") or 0) < wb.min_n:
+                        continue
+                    if (not isinstance(value, (int, float))
+                            or isinstance(value, bool)):
+                        continue  # nonscalar series / unresolved (JSON null)
+                    if not math.isfinite(value):
+                        continue  # NaN/Inf must never become a Suggestion
+                    kept[quantity] = float(value)
+                if kept:
+                    fit[target] = kept
+            if not fit:
+                continue  # nothing resolved for this experiment — not an error
+            try:
+                cls = registry.get(name)
+                merged = {**self.parameter_defaults.get(name, {}),
+                          **plan.step_params(first_step[name])}
+                exp = cls(self.backend, cls.Parameters(**merged))
+                exp.result = cls.Result(
+                    outcomes={t: Outcome.SUCCESSFUL for t in fit}, fit=fit)
+                capture = SuggestionCapture(self.device, self.physical,
+                                            self.roster)
+                exp.device = capture
+                try:
+                    exp.update()
+                finally:
+                    exp.device = self.device
+                for s in capture.suggestions:
+                    s.experiment = name
+                suggestions.extend(capture.suggestions)
+            except Exception as err:
+                problems.append(f"{name}: {type(err).__name__}: {err}")
+        return suggestions, problems
+
     def find_campaigns(self, **filters: Any) -> list[dict]:
         """Query saved campaigns (newest first); ``[]`` without a data_root."""
         if self.datastore is None:
@@ -711,6 +812,51 @@ class Session:
     def campaign_runs(self, campaign_id: str) -> list[dict]:
         """A campaign's children in execution order (repeat_idx, step_idx)."""
         return self._require_datastore().campaign_runs(campaign_id)
+
+    def suggest_campaign(self, campaign_id: str, *, force: bool = False) -> dict:
+        """(Re)generate a FINISHED campaign's aggregate-writeback suggestions
+        from its stored statistics — for campaigns that predate the writeback
+        feature, or after rejecting a batch. The plan (including its
+        ``[writeback]`` policy) is rebuilt from the manifest, so the result is
+        exactly what finalize would have produced.
+
+        Refuses a still-running campaign: ``persist_campaign`` is a lockless
+        whole-file write from the running process, so anything written here
+        mid-run would be silently erased on its next repeat. Refuses to
+        overwrite an existing suggestion set — decisions are part of it —
+        unless ``force``."""
+        from .campaign import CampaignPlan
+
+        store = self._require_datastore()
+        manifest = store.load_campaign(campaign_id)["manifest"]
+        device = manifest.get("device", "")
+        if device and device != store.device_name:
+            raise RuntimeError(
+                f"campaign {campaign_id} belongs to device {device!r} but "
+                f"this session is bound to {store.device_name!r}")
+        if manifest.get("status") == "running" or not manifest.get("ended_at"):
+            raise RuntimeError(
+                f"campaign {campaign_id} is still running — its process "
+                f"rewrites campaign.json after every repeat and would erase "
+                f"anything written now; suggestions are generated when it "
+                f"finishes")
+        if manifest.get("suggestions") and not force:
+            raise RuntimeError(
+                f"campaign {campaign_id} already has "
+                f"{len(manifest['suggestions'])} suggestions (decisions "
+                f"included) — pass force=True (--force) to regenerate")
+        plan = CampaignPlan(**manifest["plan"])
+        generated, problems = self._campaign_suggestions(
+            plan, manifest.get("statistics") or {})
+        new_dicts = [s.model_dump(mode="json") for s in generated]
+        stored = store.edit_campaign_suggestions(
+            campaign_id, lambda _rows: new_dicts, problems=problems)
+        return {
+            "campaign_id": campaign_id,
+            "suggestions": len(new_dicts),
+            "problems": problems,
+            "pending_total": pending_count(stored.get("suggestions", [])),
+        }
 
     def _validate_targets(self, cls, exp):
         """Roster gate before any hardware: targets exist, their KIND is in

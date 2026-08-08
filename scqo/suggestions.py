@@ -59,6 +59,12 @@ class Suggestion(BaseModel):
     origin: Literal["estimator", "operator"] = "estimator"
     proposed_by: str | None = None
     proposed_at: str | None = None
+    #: CAMPAIGN-level rows stamp the experiment whose update() proposed the
+    #: value (the campaign accept groups by it); run-level rows leave it None
+    #: — the run record already knows its experiment. On the model, not a
+    #: loose key: decision_editor round-trips model_dump, which drops
+    #: anything undeclared.
+    experiment: str | None = None
 
 
 def load_suggestions(rows: list[dict]) -> list[Suggestion]:
