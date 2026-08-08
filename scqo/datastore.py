@@ -1119,12 +1119,18 @@ def known_devices(data_root: str | Path) -> set[str]:
     A freshly added sample (``scqo device add``) appears here before its first
     run reaches the index — union with :meth:`DataStore.distinct_devices` for
     the complete lab menu. An absent data_root yields the empty set.
+    Dot- and underscore-prefixed directories (``__pycache__``,
+    ``.ipynb_checkpoints`` — caches and scratch, never samples) are skipped;
+    an explicit ``devices.toml`` entry is deliberate and always listed.
     """
     root = Path(data_root)
     names: set[str] = set(load_device_registry(root))
     if root.is_dir():
-        names |= {p.parent.name for p in root.glob(f"*/{COOLDOWNS_FILE}")}
-        names |= {p.name for p in root.iterdir() if p.is_dir()}
+        scratch = (".", "_")
+        names |= {p.parent.name for p in root.glob(f"*/{COOLDOWNS_FILE}")
+                  if not p.parent.name.startswith(scratch)}
+        names |= {p.name for p in root.iterdir()
+                  if p.is_dir() and not p.name.startswith(scratch)}
     return names
 
 

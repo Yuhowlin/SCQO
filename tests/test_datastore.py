@@ -665,7 +665,9 @@ def test_device_registry_loader(tmp_path):
 
 def test_known_devices_without_index(tmp_path):
     """known_devices sees samples with a folder, a cooldowns.toml or a devices.toml
-    entry — BEFORE any run reaches the index (scqo device add, then browse)."""
+    entry — BEFORE any run reaches the index (scqo device add, then browse).
+    Cache/scratch directories (dot- or underscore-prefixed) are never samples —
+    even holding a cooldowns.toml — but a devices.toml entry is deliberate."""
     from scqo.datastore import known_devices
 
     assert known_devices(tmp_path / "nowhere") == set()  # absent root: empty, no crash
@@ -674,8 +676,15 @@ def test_known_devices_without_index(tmp_path):
     (tmp_path / "chipB" / "cooldowns.toml").write_text(
         "[cd1]\nstart = 2026-08-01\n", encoding="utf-8")
     (tmp_path / "devices.toml").write_text(
-        '[paperC]\ndescription = "registry only"\n', encoding="utf-8")
-    assert known_devices(tmp_path) == {"chipA", "chipB", "paperC"}
+        '[paperC]\ndescription = "registry only"\n'
+        '["_pinned"]\ndescription = "underscore name, explicitly registered"\n',
+        encoding="utf-8")
+    (tmp_path / "__pycache__").mkdir()  # stray import cache in the data root
+    (tmp_path / ".ipynb_checkpoints").mkdir()
+    (tmp_path / "_scratch").mkdir()
+    (tmp_path / "_scratch" / "cooldowns.toml").write_text(
+        "[cd1]\nstart = 2026-08-01\n", encoding="utf-8")
+    assert known_devices(tmp_path) == {"chipA", "chipB", "paperC", "_pinned"}
 
 
 def _write_cooldowns(data_root: Path, device: str, text: str) -> Path:
