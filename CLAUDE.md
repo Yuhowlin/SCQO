@@ -103,9 +103,12 @@ scqo/
                   #   backend-unique inventory) rendered by `scqo state --fields`
   suggestions.py  # Suggestion + SuggestionCapture: update() writes become PENDING
                   #   proposals on the run record, routed by ROLE at accept/reject;
-                  #   origin="operator" = human-attached via Session.suggest
-  provenance.py   # live-source provenance: which run each CURRENT value traces to
-                  #   (strict-match; a drifted value reports "external")
+                  #   origin="operator" = human-attached via Session.suggest.
+                  #   CAMPAIGN-level rows (on campaign.json) additionally carry
+                  #   `experiment` — the proposing step; the accept groups by it
+  provenance.py   # live-source provenance: which run — or campaign-level accept —
+                  #   each CURRENT value traces to (statuses run|campaign|manual|
+                  #   external|unrecorded; strict-match, run outranks campaign)
   lock.py         # the production cut: freeze() writes components.lock, verify()
                   #   enforces superset-by-signature (retire, never delete)
   checks.py       # doctor witnesses over the model, renderer-free (unreachable modes,
@@ -116,11 +119,13 @@ scqo/
                   #   REPORTABLE_QUANTITIES (facts+monitors+knobs+fit-only) for the
                   #   viewer's /trends menu, and MEASURED_QUANTITIES (no knobs - a
                   #   knob is a setting and cannot drift) for the campaign progress line
-  campaign.py     # CampaignPlan/CampaignStep + the PURE aggregator (summarize /
-                  #   aggregate / stderr_twin / robust_summary) over fit dicts; no
-                  #   I/O, no orchestration. scatter_ratio = std / mean_stderr is
-                  #   the drift-vs-fit-noise question. The simulated backend is
-                  #   deterministic, so an OFFLINE campaign reports std == 0.0.
+  campaign.py     # CampaignPlan/CampaignStep/CampaignWriteback + the PURE aggregator
+                  #   (summarize / aggregate / stderr_twin / robust_summary) over fit
+                  #   dicts; no I/O, no orchestration. scatter_ratio = std /
+                  #   mean_stderr is the drift-vs-fit-noise question. The simulated
+                  #   backend is deterministic, so an OFFLINE campaign reports
+                  #   std == 0.0. [writeback] (stat mean|median, min_n) is the
+                  #   aggregate-writeback policy consumed at finalize.
   contract.py     # DatasetContract per probing method: the explicit probe <-> estimator API
   backend.py      # Backend ABC: .device + .acquire(experiment) -> xarray.Dataset
   experiment.py   # Experiment ABC: physics half (define_sweep/simulate/estimate/update)
@@ -130,14 +135,20 @@ scqo/
   session.py      # Session: catalog() / run() / run_campaign() / accept() / reject() /
                   #   suggest() / set_values() / find_runs() / load_run() / tag_run() /
                   #   find_campaigns() / load_campaign() / campaign_runs() / check_campaign() /
+                  #   accept_campaign() / reject_campaign() / suggest_campaign() /
                   #   device_state() / physical_state() /
-                  #   qubit_state() / history(); qubit-closure addressing (q1.pi_amp -> q1_xy)
+                  #   qubit_state() / history(); qubit-closure addressing (q1.pi_amp -> q1_xy).
+                  #   run_campaign finalize replays the statistics through each step
+                  #   experiment's update() (SuggestionCapture) -> campaign-level pending
+                  #   suggestions; _preflight refuses a plan label shadowing an experiment
+                  #   name (exempting the self-named 1-step `scqo run --repeat` shape)
   datastore.py    # DataStore + RunRecord: every run saved to a folder, indexed in SQLite (rebuildable)
   labconfig.py    # ~/.scqo/config.toml -> LabConfig + make_session (students never edit repos)
   testing.py      # InMemoryDevice + SimulatedBackend + the demo device (REAL
                   #   components.toml/design.toml text parsed by the real loaders)
   browse.py       # `python -m scqo.browse` - datasette raw-SQL power tool over the index (8081)
-  viewer/         # `python -m scqo.viewer` - the daily read-only GUI (8080)
+  viewer/         # `python -m scqo.viewer` - the daily read-only GUI (8080):
+                  #   runs / run / campaigns / campaign / trends / samples pages
   __main__.py     # `python -m scqo <data_root>` - rebuild the index from the run folders
   cli/            # the `scqo` command (run/campaign/find/accept/suggest/set/tag/state/
                   #   user/device/doctor): ONE engine, any-directory;
@@ -310,10 +321,16 @@ parameters/result/record JSONs, device before/after snapshots, and the scqat art
 rebuilds it). Query with `Session.find_runs(experiment=, target=, tag=, since=, outcome=,...)`,
 reload with `load_run(run_id)` / `datastore.open_dataset(run_id)`. A **campaign**
 persists one extra folder, `<data_root>/<device>/campaigns/<campaign_id>/`
-(`campaign.json` = plan + status + statistics, rewritten per repeat; `repeats.jsonl` =
-append-only skeleton, run_ids and timing, never fit VALUES) — a sibling of the day
-folders because an overnight campaign crosses midnight, and invisible to every glob over
-the data root. Its children are ordinary runs stamped `campaign`/`repeat_idx`/`step_idx`
+(`campaign.json` = plan + status + statistics + the aggregate SUGGESTIONS and their
+decisions, rewritten per repeat; `repeats.jsonl` = append-only skeleton, run_ids and
+timing, never fit VALUES) — a sibling of the day folders because an overnight campaign
+crosses midnight, and invisible to every glob over the data root. Post-finalize
+decisions go ONLY through the locked `edit_campaign_suggestions` (persist_campaign is
+the running process's lockless whole-file write); the campaigns table carries a
+derived `suggestions_pending` column (schema v10) behind `find_campaigns(pending=)`,
+and applied values stamp `ChangeRecord.campaign_id` (provenance status "campaign";
+decide via `scqo accept --campaign <id>`, regenerate pre-feature campaigns via
+`scqo campaign --suggest <id>`). Its children are ordinary runs stamped `campaign`/`repeat_idx`/`step_idx`
 in an INDEXED column (never a `campaign:<id>` tag — that would be an unindexed
 `json_each` scan and a second grouping authority); walk them with
 `campaign_runs(campaign_id)`, which is unlimited and in execution order, NOT

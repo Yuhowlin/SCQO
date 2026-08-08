@@ -395,6 +395,10 @@ max_duration_s = 43200  # give up after 12 h whatever happens
 skip_artifacts = true   # 400 runs x per-qubit figures is a lot of disk
 tags = ["stability", "overnight"]
 
+[writeback]             # optional: how the aggregate becomes proposed updates
+stat = "mean"           # "mean" (default) or "median" (outlier-robust)
+min_n = 3               # successful repeats a quantity needs before proposing
+
 [defaults]
 targets = ["q1"]
 
@@ -478,11 +482,26 @@ scqo campaign --show <campaign_id> --plot --recompute-readout
 
 Things worth knowing before you leave one running overnight:
 
-- **The device is not touched.** A campaign runs with updates off, because 100 repeats
-  would each propose the same change and accepting one makes the other 99 stale. Read
-  the mean off the table and write it deliberately: `scqo set q1.t1_s=41.31e-6`.
-  (`--accept` does exist, for a deliberate repeated *re-tuning* — but then the device
-  moves under its own measurement and the spread describes the tuning loop, not the qubit.)
+- **The device is not touched while it runs.** A campaign runs with updates off,
+  because 100 repeats would each propose the same change and accepting one makes the
+  other 99 stale. The writeback happens ONCE instead, at finish: the statistics are
+  replayed through each experiment's own `update()` and stored on the campaign as
+  **pending suggested updates** (one `t1_s` series proposes both the fact and the
+  derived thermalization wait, exactly like a single run would). The plan's
+  `[writeback]` table picks the statistic. Review and decide them like a run's:
+
+  ```bash
+  scqo accept --campaign <campaign_id>
+  ```
+
+  Same interactive review, same era/staleness guards — and the applied values carry
+  the CAMPAIGN as their provenance: `scqo state --sources` and the viewer link them
+  to the campaign page (with its full distribution and every child run), not to any
+  single run. For campaigns run before this feature existed,
+  `scqo campaign --suggest <campaign_id>` regenerates the proposals from the stored
+  statistics. `scqo set` remains the manual escape hatch. (`--accept` still exists,
+  for a deliberate repeated *re-tuning* — but then the device moves under its own
+  measurement, the spread describes the tuning loop, and no aggregate is proposed.)
 - **Ctrl-C is safe, at any moment.** Every repeat already done is saved, and the
   repeat you interrupted keeps the steps that had already finished — they show up in
   the statistics and are counted as `repeats_partial`, separately from the whole
@@ -558,7 +577,8 @@ overnight campaign crosses midnight:
 
 ```
 <data_root>/SQ_demo/campaigns/20260727-221503-472-SQ_demo-t1_stability-01/
-    campaign.json        the plan, the status, and the statistics table
+    campaign.json        the plan, the status, the statistics table, and the
+                         aggregate suggested updates with their decisions
     repeats.jsonl        one line per completed repeat: which runs, when, outcome
     statistics.png       histogram + drift trace per quantity, drawn when it finishes
 ```
@@ -592,14 +612,20 @@ One command opens the lab's data as a website (one-time: viewer extras via
 python -m scqo.viewer            # -> http://127.0.0.1:8080
 ```
 
-Four pages (port convention: **8001 qualibrate · 8080 viewer · 8081 datasette** —
+Five pages (port convention: **8001 qualibrate · 8080 viewer · 8081 datasette** —
 all can run at once):
 
-- **Runs** — filter by experiment / qubit / tag / outcome / date, plus a
+- **Runs** — filter by experiment / qubit / tag / outcome / date / campaign, plus a
   **pending only** checkbox for runs with undecided suggested updates; click any run.
   Runs whose accepted values are still **LIVE on the device** carry a green
   `live:` line naming those fields — the at-a-glance answer to *"which runs is my
-  device built from?"*.
+  device built from?"*. A campaign child links to its campaign right in the row.
+- **Campaigns** — every campaign with its status, repeat progress and a pending
+  badge for undecided aggregate suggestions; the detail page shows the statistics
+  table, `statistics.png`, the suggestion groups with their decisions (deciding
+  stays on the CLI: `scqo accept --campaign <id>`) and the children in execution
+  order. A still-running campaign renders live — the manifest rewrites after
+  every repeat.
 - **Run page** — outcome badges, the fit table, **every figure inline** (the dip,
   the fringe, the 2D power map...), your parameters, the **suggested updates** table
   (pending / accepted / rejected, who decided, comments — deciding stays on the CLI:
