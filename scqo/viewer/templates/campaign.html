@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}{{ manifest.campaign_id }}{% endblock %}
+{% block content %}
+{% set badge = {"complete": "successful", "stopped": "partial", "failed": "failed", "running": "no_data"}.get(manifest.status, "no_data") %}
+<h2>{{ manifest.campaign_id }} <span class="badge {{ badge }}">{{ manifest.status }}</span></h2>
+<p class="muted">label <b>{{ manifest.label }}</b> · {{ manifest.device }}
+· cooldown {{ manifest.cooldown or "-" }} · setup {{ manifest.setup or "-" }}
+· {{ manifest.started_at[:16] }} → {{ (manifest.ended_at or "")[:16] or "…" }}
+{%- if manifest.stop_reason %} · {{ manifest.stop_reason }}{% endif %}
+{%- if manifest.operator %} · operator {{ manifest.operator }}{% endif %} ·
+repeats {{ manifest.repeat_done }}/{{ manifest.repeat_planned if manifest.repeat_planned is not none else "-" }}
+(failed: {{ manifest.repeats_failed }}) ·
+folder <code>{{ path }}</code></p>
+
+{% if stats_rows %}
+<h3>Statistics</h3>
+<table>
+  <tr><th>experiment</th><th>target</th><th>quantity</th><th>n</th><th>miss</th><th>mean</th><th>std</th><th>sem</th><th>min</th><th>max</th><th>std/err</th></tr>
+  {% for s in stats_rows %}
+  {% if s.nonscalar %}
+  <tr><td>{{ s.experiment }}</td><td>{{ s.target }}</td><td>{{ s.quantity }}</td>
+      <td colspan="8" class="muted">array-valued, nothing to average (record-only; see the run folders)</td></tr>
+  {% else %}
+  <tr>
+    <td>{{ s.experiment }}</td><td>{{ s.target }}</td><td>{{ s.quantity }}</td>
+    <td>{{ s.n }}</td><td>{{ s.n_missing }}</td>
+    <td>{{ "%.5g" | format(s.mean) if s.mean is not none else "-" }}</td>
+    <td>{{ "%.5g" | format(s.std) if s.std is not none else "-" }}</td>
+    <td>{{ "%.5g" | format(s.sem) if s.sem is not none else "-" }}</td>
+    <td>{{ "%.5g" | format(s.min) if s.min is not none else "-" }}</td>
+    <td>{{ "%.5g" | format(s.max) if s.max is not none else "-" }}</td>
+    <td>{{ "%.2f" | format(s.scatter_ratio) if s.scatter_ratio is not none else "-" }}</td>
+  </tr>
+  {% endif %}
+  {% endfor %}
+</table>
+<p class="muted">std/err = across-repeat scatter / mean per-fit standard error: much greater than 1
+means the qubit really moved between repeats; around 1 means the spread is just fit noise.
+'-' means the fit publishes no standard error for that quantity, not that the scatter is zero.</p>
+{% else %}
+<p class="muted">no statistics yet — no repeat produced a successful fit.</p>
+{% endif %}
+
+{% if has_png %}
+<img class="figure" src="/campaign/{{ manifest.campaign_id }}/statistics.png" alt="statistics.png">
+{% endif %}
+
+{% if running %}
+<p class="muted">still running — the numbers above are live (the manifest rewrites after every
+repeat); the aggregate suggestions appear when it finishes.</p>
+{% elif suggestions_by_experiment %}
+<h3>Suggested updates ({{ pending }} pending)</h3>
+{% for experiment, rows in suggestions_by_experiment.items() %}
+<p class="muted">{{ experiment }}</p>
+<table>
+  <tr><th>entity</th><th>field</th><th>role</th><th>before</th><th>after</th><th>status</th><th>decided</th><th>comment</th></tr>
+  {% for s in rows %}
+  <tr {% if s.status == "pending" %}class="changed"{% endif %}>
+    <td>{{ s.entity }}</td><td>{{ s.field }}</td><td>{{ s.role }}</td>
+    <td>{{ "%.8g" | format(s.before) if s.before is number else (s.before if s.before is not none else "(unmeasured)") }}</td>
+    <td>{{ "%.8g" | format(s.after) if s.after is number else s.after }}</td>
+    <td>{% if s.status == "pending" %}<b>pending</b>{% else %}{{ s.status }}{% endif %}</td>
+    <td>{% if s.decided_by %}{{ s.decided_by }} · {{ (s.decided_at or "")[:19] }}{% else %}-{% endif %}</td>
+    <td>{{ s.comment }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% endfor %}
+<p class="muted">Deciding stays on the CLI: <code>scqo accept --campaign {{ manifest.campaign_id }}</code>
+(applying calibration knobs needs the live instrument config — the viewer never touches instruments).</p>
+{% endif %}
+{% if problems %}
+<p class="muted">writeback problems: {% for p in problems %}{{ p }}{% if not loop.last %} · {% endif %}{% endfor %}</p>
+{% endif %}
+
+<h3>Children ({{ children | length }}, execution order)</h3>
+<table>
+  <tr><th>repeat</th><th>step</th><th>experiment</th><th>outcome</th><th>run</th><th>started</th></tr>
+  {% for c in children %}
+  <tr>
+    <td>{{ c.repeat_idx }}</td><td>{{ c.step_idx }}</td>
+    <td>{{ c.experiment }}</td>
+    <td><span class="badge {{ c.outcome }}">{{ c.outcome }}</span></td>
+    <td><a href="/run/{{ c.run_id }}">{{ c.run_id }}</a></td>
+    <td>{{ c.started_at[:16] }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="6">no children indexed (still running, or reindex needed)</td></tr>
+  {% endfor %}
+</table>
+{% endblock %}

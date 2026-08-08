@@ -75,6 +75,28 @@ def lab(tmp_path_factory):
     # a q0_res-only physical value -> a "(manual)" source in this context's ledger
     sess.physical.record("q0_res", "g_hz", 80e6)
     sess.physical.save()
+
+    # A finished campaign with aggregate suggestions: the q0 FACT is accepted
+    # (device page gets a campaign-credited value; q0 deliberately, so q1's
+    # run-credit assertions stay untouched), the q0_xy knob stays PENDING
+    # (badge + filter stay exercisable). statistics.png is written by the CLI
+    # layer, not run_campaign — a placeholder keeps matplotlib out of here.
+    from scqo import CampaignPlan
+    camp = sess.run_campaign(CampaignPlan(
+        label="t1_watch", repeat=3, skip_artifacts=True,
+        defaults={"targets": ["q0"]},
+        steps=[{"experiment": "qubit_relaxation"}]))
+    sess.accept_campaign(camp["campaign_id"], entities=["q0"])
+    (Path(camp["data_path"]) / "statistics.png").write_bytes(
+        b"\x89PNG\r\n\x1a\n placeholder")
+    # ...and a hand-made RUNNING campaign: no png, no suggestions yet
+    running_id, running_dir = sess.datastore.new_campaign_dir("live_probe")
+    sess.datastore.persist_campaign(
+        campaign_id=running_id, campaign_dir=running_dir,
+        manifest={"started_at": "2026-08-09T09:00:00", "status": "running",
+                  "backend": "simulated", "cooldown": "cdV",
+                  "setup": "sim_main", "experiments": ["qubit_relaxation"],
+                  "targets": ["q0"], "plan": {}, "statistics": {}})
     # the SECOND setup of the same device: its own scqo/ folder, its own history
     sess_alt = _session(root, "devV", cid="cdV", setup="sim_alt")
     r_alt = sess_alt.run("resonator_spectroscopy", {"targets": ["q1"]}, update="apply", tags=["cool1"])
@@ -116,7 +138,8 @@ def lab(tmp_path_factory):
     client = TestClient(create_app(root))
     return {"client": client, "root": root, "res": r_res, "res2": r_res2, "ram": r_ram,
             "t1": r_t1, "pend": r_pend, "alt": r_alt, "ghost": r_ghost,
-            "chipz": r_z, "bare": r_bare}
+            "chipz": r_z, "bare": r_bare,
+            "campaign": camp, "running_id": running_id}
 
 
 def test_runs_page_lists_and_filters(lab):
@@ -492,3 +515,90 @@ def test_bare_trends_redirects_to_sample_overview(lab):
     resp = lab["client"].get("/trends", follow_redirects=False)
     assert resp.status_code == 307
     assert resp.headers["location"] == "/device"
+
+
+# ---------------------------------------------------------------- campaigns
+
+def test_campaigns_page_lists_filters_and_badges(lab):
+    c = lab["client"]
+    cid = lab["campaign"]["campaign_id"]
+    page = c.get("/campaigns").text
+    assert cid in page and lab["running_id"] in page
+    assert 'href="/campaigns"' in c.get("/").text  # the nav link
+
+    running_only = c.get("/campaigns", params={"status": "running"}).text
+    assert lab["running_id"] in running_only and cid not in running_only
+
+    pending_only = c.get("/campaigns", params={"pending": "1"}).text
+    assert cid in pending_only            # the q0_xy knob is still pending
+    assert lab["running_id"] not in pending_only
+
+    assert cid not in c.get("/campaigns", params={"device": "chipZ"}).text
+
+
+def test_campaign_page_statistics_children_and_suggestions(lab):
+    c = lab["client"]
+    cid = lab["campaign"]["campaign_id"]
+    page = c.get(f"/campaign/{cid}").text
+    assert "t1_s" in page and "qubit_relaxation" in page  # statistics rows
+    assert f"/campaign/{cid}/statistics.png" in page      # the figure img
+
+    # children in execution order, linked
+    child_ids = [s["run_id"] for r in lab["campaign"]["repeats"] for s in r["steps"]]
+    assert len(child_ids) == 3
+    for rid in child_ids:
+        assert f"/run/{rid}" in page
+    assert page.index(child_ids[0]) < page.index(child_ids[1]) < page.index(child_ids[2])
+
+    # the suggestion block: the accepted fact and the pending knob, grouped
+    assert "Suggested updates (1 pending)" in page
+    assert "accepted" in page and "thermalization_time_s" in page
+    assert f"scqo accept --campaign {cid}" in page
+
+
+def test_campaign_statistics_png_serves_and_degrades(lab):
+    c = lab["client"]
+    cid = lab["campaign"]["campaign_id"]
+    resp = c.get(f"/campaign/{cid}/statistics.png")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("image/png")
+
+    # a running campaign renders (no img, a live note, no suggestions block)
+    page = c.get(f"/campaign/{lab['running_id']}")
+    assert page.status_code == 200
+    assert "still running" in page.text
+    assert "statistics.png" not in page.text
+    assert c.get(f"/campaign/{lab['running_id']}/statistics.png").status_code == 404
+
+    assert c.get("/campaign/no-such-campaign").status_code == 404
+    assert c.get("/campaign/no-such-campaign/statistics.png").status_code == 404
+
+
+def test_run_page_links_back_to_its_campaign(lab):
+    c = lab["client"]
+    cid = lab["campaign"]["campaign_id"]
+    child = lab["campaign"]["repeats"][1]["steps"][0]["run_id"]
+    page = c.get(f"/run/{child}").text
+    assert f'href="/campaign/{cid}"' in page and "(r1 s0)" in page
+    # a standalone run carries no backlink
+    assert "/campaign/" not in c.get(f"/run/{lab['ram']['run_id']}").text
+
+
+def test_runs_page_campaign_column_and_filter(lab):
+    c = lab["client"]
+    cid = lab["campaign"]["campaign_id"]
+    child_ids = {s["run_id"] for r in lab["campaign"]["repeats"] for s in r["steps"]}
+    page = c.get("/", params={"campaign": cid}).text
+    assert all(rid in page for rid in child_ids)
+    assert lab["ram"]["run_id"] not in page
+    # the column cell links the child to its campaign
+    assert f'href="/campaign/{cid}"' in page and "r0 s0" in page
+
+
+def test_device_page_credits_a_campaign_accept(lab):
+    c = lab["client"]
+    cid = lab["campaign"]["campaign_id"]
+    page = c.get("/device", params={"device": "devV"}).text
+    # the accepted q0.t1_s fact links its value to the campaign, not a run
+    assert f'href="/campaign/{cid}"' in page
+    assert "(campaign)" in page

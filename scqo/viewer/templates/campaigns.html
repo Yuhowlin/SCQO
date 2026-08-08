@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}SCQO campaigns{% endblock %}
+{% block content %}
+<h2>Campaigns</h2>
+<form class="filters" method="get" action="/campaigns">
+  <select name="device">
+    <option value="">any device</option>
+    {% for d in devices %}
+    <option value="{{ d }}" {% if filters.device == d %}selected{% endif %}>{{ d }}</option>
+    {% endfor %}
+  </select>
+  <select name="status">
+    <option value="">any status</option>
+    {% for s in ["running", "complete", "stopped", "failed"] %}
+    <option value="{{ s }}" {% if filters.status == s %}selected{% endif %}>{{ s }}</option>
+    {% endfor %}
+  </select>
+  <label><input name="pending" type="checkbox" value="1" {% if filters.pending %}checked{% endif %}> pending suggestions only</label>
+  <input name="limit" type="number" value="{{ filters.limit }}" size="4" style="width:60px">
+  <button>Filter</button>
+</form>
+<table>
+  <tr><th>campaign</th><th>label</th><th>started</th><th>device</th><th>status</th><th>repeats</th><th>experiments</th><th>suggestions</th></tr>
+  {% for c in rows %}
+  {% set badge = {"complete": "successful", "stopped": "partial", "failed": "failed", "running": "no_data"}.get(c.status, "no_data") %}
+  <tr>
+    <td><a href="/campaign/{{ c.campaign_id }}">{{ c.campaign_id }}</a></td>
+    <td>{{ c.label }}</td>
+    <td>{{ c.started_at[:16] }}</td>
+    <td>{{ c.device }}</td>
+    <td><span class="badge {{ badge }}">{{ c.status }}</span></td>
+    <td>{{ c.repeat_done }}/{{ c.repeat_planned if c.repeat_planned is not none else "-" }}{% if c.repeats_failed %} (failed: {{ c.repeats_failed }}){% endif %}</td>
+    <td>{{ c.experiments | join(", ") }}</td>
+    <td>{% if c.suggestions_pending %}<b>{{ c.suggestions_pending }} pending</b>{% else %}-{% endif %}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="8">no campaigns match</td></tr>
+  {% endfor %}
+</table>
+<p class="muted">data_root: {{ data_root }} — each campaign's children are ordinary runs stamped
+with its id; the campaign folder holds the plan, the statistics and the aggregate suggestions.</p>
+{% endblock %}

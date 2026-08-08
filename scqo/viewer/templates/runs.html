@@ -28,12 +28,13 @@
   <input name="setup" placeholder="setup (qblox_main)" value="{{ filters.setup }}" size="12">
   <input name="since" placeholder="since 2026-07-01" value="{{ filters.since }}" size="12">
   <input name="until" placeholder="until" value="{{ filters.until }}" size="12">
+  <input name="campaign" placeholder="campaign id" value="{{ filters.campaign }}" size="14">
   <label><input name="pending" type="checkbox" value="1" {% if filters.pending %}checked{% endif %}> pending only</label>
   <input name="limit" type="number" value="{{ filters.limit }}" size="4" style="width:60px">
   <button>Filter</button>
 </form>
 <table>
-  <tr><th>run</th><th>started</th><th>device</th><th>cooldown</th><th>setup</th><th>experiment</th><th>targets</th><th>outcome</th><th>updates</th><th>operator</th><th>tags</th><th>note</th></tr>
+  <tr><th>run</th><th>started</th><th>device</th><th>cooldown</th><th>setup</th><th>experiment</th><th>targets</th><th>outcome</th><th>campaign</th><th>updates</th><th>operator</th><th>tags</th><th>note</th></tr>
   {% for r in rows %}
   <tr>
     <td><a href="/run/{{ r.run_id }}">{{ r.run_id }}</a></td>
@@ -44,6 +45,7 @@
     <td>{{ r.experiment }}</td>
     <td>{{ r.targets | join(", ") }}</td>
     <td><span class="badge {{ r.outcome }}">{{ r.outcome }}</span></td>
+    <td>{% if r.campaign %}<a href="/campaign/{{ r.campaign }}" title="{{ r.campaign }}">r{{ r.repeat_idx }} s{{ r.step_idx }}</a>{% else %}-{% endif %}</td>
     <td>{% set live = live_by_run.get(r.run_id) %}
         {%- if r.suggestions_pending %}<b>{{ r.suggestions_pending }} pending</b>
         {%- elif r.suggestions %}{{ r.suggestions | selectattr("status", "equalto", "accepted") | list | length }}/{{ r.suggestions | length }} applied
@@ -54,7 +56,7 @@
     <td>{{ r.note }}</td>
   </tr>
   {% else %}
-  <tr><td colspan="12">no runs match</td></tr>
+  <tr><td colspan="13">no runs match</td></tr>
   {% endfor %}
 </table>
 <p class="muted">data_root: {{ data_root }} — the run folders are the truth; this index is rebuildable (<code>python -m scqo &lt;data_root&gt;</code>).</p>

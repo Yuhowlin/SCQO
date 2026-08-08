@@ -29,6 +29,9 @@ from ..datastore import (
     load_device_registry,
     setup_scqo_dir,
 )
+# STATISTICS_PNG is just the filename constant — _campaign_plot imports
+# matplotlib lazily, so this costs nothing and keeps one naming authority.
+from ..cli._campaign_plot import STATISTICS_PNG
 from ..provenance import live_run_map, live_sources, summarize_live
 # Catalog-derived field orders live in report.py (renderer-free, no fastapi), so
 # the CLI's campaign progress can pick its headline quantity from the SAME set
@@ -37,6 +40,7 @@ from ..report import (
     INSTRUMENT_FIELD_ORDER,
     PHYSICAL_FIELD_ORDER,
     REPORTABLE_QUANTITIES,
+    campaign_statistics_rows,
 )
 from ..stores import PHYSICAL_FILE
 
@@ -154,6 +158,7 @@ def create_app(data_root: str | Path) -> FastAPI:
         operator: str = "",
         cooldown: str = "",
         setup: str = "",
+        campaign: str = "",
         pending: str = "",
         limit: int = 50,
     ):
@@ -168,6 +173,7 @@ def create_app(data_root: str | Path) -> FastAPI:
             operator=operator or None,
             cooldown=cooldown or None,
             setup=setup or None,
+            campaign=campaign or None,
             pending=True if pending else None,
             limit=limit,
         )
@@ -194,7 +200,8 @@ def create_app(data_root: str | Path) -> FastAPI:
                             "outcome": outcome, "since": since, "until": until,
                             "device": device, "operator": operator,
                             "cooldown": cooldown, "setup": setup,
-                            "pending": pending, "limit": limit},
+                            "campaign": campaign, "pending": pending,
+                            "limit": limit},
                 "data_root": str(store.data_root),
             },
         )
@@ -406,6 +413,73 @@ def create_app(data_root: str | Path) -> FastAPI:
              "setups": setups,
              "cooldown_error": cooldown_error},
         )
+
+    def _load_campaign(campaign_id: str) -> dict:
+        """load_campaign with every failure mode a 404 — unknown id (KeyError),
+        or a torn/unreadable campaign.json (the degrade-never-500 doctrine)."""
+        try:
+            return store.load_campaign(campaign_id)
+        except KeyError:
+            raise HTTPException(404, f"unknown campaign_id {campaign_id!r}")
+        except (OSError, json.JSONDecodeError):
+            raise HTTPException(
+                404, f"campaign {campaign_id!r} has no readable campaign.json")
+
+    @app.get("/campaigns", response_class=HTMLResponse)
+    def campaigns_page(request: Request, device: str = "", status: str = "",
+                       pending: str = "", limit: int = 50):
+        rows = store.find_campaigns(device=device or None,
+                                    status=status or None,
+                                    pending=True if pending else None,
+                                    limit=limit)
+        return templates.TemplateResponse(
+            request,
+            "campaigns.html",
+            {"rows": rows, "devices": _known_names(),
+             "filters": {"device": device, "status": status,
+                         "pending": pending, "limit": limit},
+             "data_root": str(store.data_root)},
+        )
+
+    @app.get("/campaign/{campaign_id}", response_class=HTMLResponse)
+    def campaign_page(request: Request, campaign_id: str):
+        loaded = _load_campaign(campaign_id)
+        manifest = loaded["manifest"]
+        # execution order, unlimited — find_runs(campaign=...) is newest-first
+        # and capped at 50, the documented wrong tool here
+        children = store.campaign_runs(campaign_id)
+        suggestions = manifest.get("suggestions") or []
+        by_experiment: dict[str, list[dict]] = {}
+        for s in suggestions:
+            by_experiment.setdefault(s.get("experiment") or "-", []).append(s)
+        return templates.TemplateResponse(
+            request,
+            "campaign.html",
+            {"manifest": manifest,
+             "stats_rows": campaign_statistics_rows(
+                 manifest.get("statistics") or {}),
+             "children": children,
+             "suggestions_by_experiment": by_experiment,
+             "pending": sum(1 for s in suggestions
+                            if s.get("status") == "pending"),
+             "problems": manifest.get("suggestion_problems") or [],
+             "running": manifest.get("status") == "running",
+             "has_png": (Path(loaded["path"]) / STATISTICS_PNG).is_file(),
+             "path": loaded["path"]},
+        )
+
+    @app.get("/campaign/{campaign_id}/statistics.png")
+    def campaign_figure(campaign_id: str):
+        # campaign_id is only an index lookup key, never joined into a path —
+        # the folder comes back from the row — and the filename is a constant;
+        # the containment guard stays anyway (the run_file doctrine).
+        base = Path(_load_campaign(campaign_id)["path"]).resolve()
+        target = (base / STATISTICS_PNG).resolve()
+        if base != target and base not in target.parents:
+            raise HTTPException(404, "not in this campaign's folder")
+        if not target.is_file():
+            raise HTTPException(404, "no statistics.png yet")
+        return FileResponse(target)
 
     return app
 

@@ -1139,3 +1139,25 @@ def test_accept_campaign_refuses_a_foreign_device_campaign(session, tmp_path):
                     setup_name="sim", cooldown_id="cd1")
     with pytest.raises(RuntimeError, match="chipZ"):
         other.accept_campaign(out["campaign_id"])
+
+
+def test_campaign_statistics_rows_folds_twins_and_splits_arrays():
+    """The renderer-free viewer rows encode the CLI table's two rules: a
+    stderr twin never gets its own row, and an all-array quantity is flagged
+    nonscalar instead of rendering as a failed-looking row of dashes."""
+    from scqo.report import campaign_statistics_rows
+
+    rows = campaign_statistics_rows({"qubit_relaxation": {"q0": {
+        "t1_s": {"n": 4, "n_missing": 0, "mean": 4.1e-5, "std": 3e-6,
+                 "sem": 1.5e-6, "min": 3.8e-5, "max": 4.4e-5,
+                 "scatter_ratio": 3.9, "stderr_key": "t1_stderr_s"},
+        "t1_stderr_s": {"n": 4, "n_missing": 0, "mean": 8e-7, "std": 0.0,
+                        "sem": 0.0, "min": 8e-7, "max": 8e-7,
+                        "scatter_ratio": None, "stderr_key": None},
+        "per_point": {"n": 0, "n_missing": 0, "n_nonscalar": 4, "mean": None},
+    }}})
+    by_q = {r["quantity"]: r for r in rows}
+    assert set(by_q) == {"t1_s", "per_point"}  # the twin is folded away
+    assert by_q["t1_s"]["scatter_ratio"] == 3.9
+    assert by_q["t1_s"]["stderr_key"] == "t1_stderr_s"
+    assert by_q["per_point"]["nonscalar"] is True

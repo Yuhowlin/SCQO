@@ -224,6 +224,44 @@ def catalog_rows() -> list[dict[str, Any]]:
     return rows
 
 
+def campaign_statistics_rows(statistics: dict) -> list[dict[str, Any]]:
+    """A campaign's per-(experiment, target, quantity) statistics as flat rows.
+
+    Renderer-free twin of the CLI table
+    (``scqo.cli._campaign.format_statistics``), encoding the same two rules:
+    (a) a quantity that is only some other quantity's stderr twin gets no row
+    of its own — it is that row's ``mean_stderr``/``scatter_ratio``; (b) an
+    all-array quantity (the record-only diagnostics) becomes a ``nonscalar``
+    row rather than a row of dashes that would read as a failed measurement.
+    """
+    from .campaign import stderr_twin
+
+    rows: list[dict[str, Any]] = []
+    for experiment in sorted(statistics):
+        for target in sorted(statistics[experiment]):
+            quantities = statistics[experiment][target]
+            twins = {stderr_twin(q) for q in quantities}
+            for quantity in sorted(quantities):
+                if quantity in twins:
+                    continue
+                stat = quantities[quantity]
+                if not stat["n"] and stat.get("n_nonscalar"):
+                    rows.append({"experiment": experiment, "target": target,
+                                 "quantity": quantity, "nonscalar": True})
+                    continue
+                rows.append({
+                    "experiment": experiment, "target": target,
+                    "quantity": quantity, "nonscalar": False,
+                    "n": stat["n"], "n_missing": stat["n_missing"],
+                    "mean": stat.get("mean"), "std": stat.get("std"),
+                    "sem": stat.get("sem"), "min": stat.get("min"),
+                    "max": stat.get("max"),
+                    "scatter_ratio": stat.get("scatter_ratio"),
+                    "stderr_key": stat.get("stderr_key"),
+                })
+    return rows
+
+
 def live_sources(values: dict, history: list[dict]) -> dict:
     """:func:`scqo.provenance.live_sources` over model history rows.
 
