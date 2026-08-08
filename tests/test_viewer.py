@@ -447,9 +447,9 @@ def test_registry_less_device_shows_snapshot_only(lab):
 def test_trends_never_mix_samples(lab):
     c = lab["client"]
     # q0 readout_freq_hz exists on BOTH samples ("q1 exists on every chip" problem):
-    # there is NO silent default sample — bare /trends is the picker, and a chart
-    # is always explicitly device-scoped.
-    bare = c.get("/trends").text
+    # there is NO silent default sample — device-less /trends bounces to the
+    # sample overview, and a chart is always explicitly device-scoped.
+    bare = c.get("/trends").text  # redirect followed → the /device overview
     assert "<svg" not in bare and "<circle" not in bare
     assert "/trends?device=devV" in bare and "/trends?device=chipZ" in bare
     dev = c.get("/trends", params={"target": "q0", "quantity": "readout_freq_hz", "device": "devV"}).text
@@ -485,11 +485,10 @@ def test_device_overview_tolerates_broken_cooldowns(lab):
     assert "cdV (2 setups)" in resp.text  # the healthy rows are unaffected
 
 
-def test_bare_trends_is_sample_picker(lab):
-    """Bare /trends renders the sample list and no chart — the page contract
-    behind the never-mix rule (a trend needs an explicit sample first)."""
-    page = lab["client"].get("/trends").text
-    assert "<svg" not in page
-    assert "scoped to ONE sample" in page
-    for name in ("devV", "chipZ", "freshY"):
-        assert f"/trends?device={name}" in page
+def test_bare_trends_redirects_to_sample_overview(lab):
+    """Device-less /trends is not a page of its own: a trend needs an explicit
+    sample first, and the ONE sample picker is the /device overview (each row
+    links its per-sample trends)."""
+    resp = lab["client"].get("/trends", follow_redirects=False)
+    assert resp.status_code == 307
+    assert resp.headers["location"] == "/device"

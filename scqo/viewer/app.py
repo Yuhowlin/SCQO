@@ -115,7 +115,7 @@ def create_app(data_root: str | Path) -> FastAPI:
         return sorted(set(store.distinct_devices()) | known_devices(store.data_root))
 
     def _sample_overview() -> list[dict]:
-        """One row per known sample for the bare /device and /trends pickers.
+        """One row per known sample for the bare /device overview.
         Tolerant like device_page: a broken cooldowns.toml becomes an inline
         per-row error, never a 500. The per-sample find_runs is O(limit) via the
         composite index, and a lab holds single-digit samples — no caching."""
@@ -285,15 +285,10 @@ def create_app(data_root: str | Path) -> FastAPI:
     def trends_page(request: Request, target: str = "q1", quantity: str = "t1_s", device: str = ""):
         # Qubit names repeat across samples ("q1" exists on every chip), so a
         # trend is ALWAYS explicitly device-scoped — never a launcher-account
-        # default. Bare /trends is the sample picker; the chart renders once a
-        # sample is chosen.
+        # default. The chart is reached from a sample's own pages (device page /
+        # overview row); device-less /trends bounces to the ONE sample picker.
         if not device:
-            return templates.TemplateResponse(
-                request,
-                "devices.html",
-                {"samples": _sample_overview(), "picker": "trends",
-                 "data_root": str(store.data_root)},
-            )
+            return RedirectResponse(url="/device")
         rows = store.fit_trend(target, quantity, device=device) if target and quantity else []
         svg = _trend_svg(rows)
         return templates.TemplateResponse(
@@ -365,8 +360,7 @@ def create_app(data_root: str | Path) -> FastAPI:
             return templates.TemplateResponse(
                 request,
                 "devices.html",
-                {"samples": _sample_overview(), "picker": "device",
-                 "data_root": str(store.data_root)},
+                {"samples": _sample_overview(), "data_root": str(store.data_root)},
             )
         dev = device
         latest = store.find_runs(device=dev, limit=1)

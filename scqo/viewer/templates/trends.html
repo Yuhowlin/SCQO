@@ -2,7 +2,7 @@
 {% block title %}Trends{% endblock %}
 {% block content %}
 <h2>Trend: {{ quantity }} on {{ target }} <span class="muted">({{ device }})</span></h2>
-<p class="muted"><a href="/trends">All samples</a></p>
+<p class="muted"><a href="/device">All samples</a></p>
 <form class="filters" method="get" action="/trends">
   <select name="device">
     {% for d in devices %}

@@ -2,9 +2,6 @@
 {% block title %}Samples{% endblock %}
 {% block content %}
 <h2>Samples</h2>
-{% if picker == "trends" %}
-<p class="muted">Qubit names repeat across chips, so a trend is always scoped to ONE sample — pick it:</p>
-{% endif %}
 {% if samples %}
 <table>
   <tr><th>sample</th><th>description</th><th>active cooldown</th><th>latest run</th><th>trends</th></tr>
