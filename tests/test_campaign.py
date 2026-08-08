@@ -983,3 +983,144 @@ def test_preflight_refuses_a_label_shadowing_an_experiment_name(session, tmp_pat
     assert not problem.startswith("step ")  # plan-level, unprefixed
     assert not list((tmp_path / "data" / "chipT").glob("*"))
     assert session.check_campaign(plan) == out["problems"]  # the same gate
+
+
+# ------------------------------------------------------- accept_campaign
+
+def _stab_campaign(session, label="stab", steps=("qubit_relaxation",)):
+    out = session.run_campaign(CampaignPlan(
+        label=label, repeat=3, defaults={"targets": ["q0"]}, skip_artifacts=True,
+        steps=[{"experiment": name} for name in steps]))
+    assert out["status"] == "complete" and out["suggestions"]
+    return out
+
+
+def test_accept_campaign_applies_grouped_and_stamps_campaign_provenance(session):
+    from scqo.report import live_sources
+
+    out = _stab_campaign(session, steps=("qubit_relaxation", "qubit_echo"))
+    cid = out["campaign_id"]
+    summary = session.accept_campaign(cid)
+
+    assert summary["errors"] == [] and summary["stale"] == []
+    assert summary["pending_left"] == 0
+    applied = {(a["experiment"], a["entity"], a["field"]) for a in summary["applied"]}
+    assert ("qubit_relaxation", "q0", "t1_s") in applied
+    assert ("qubit_echo", "q0", "t2_echo_s") in applied
+
+    # the stores now carry the aggregate
+    stats = out["statistics"]
+    assert session.physical_state()["q0"]["t1_s"] == pytest.approx(
+        stats["qubit_relaxation"]["q0"]["t1_s"]["mean"])
+    assert session.device_state()["q0_xy"]["thermalization_time_s"] > 0
+
+    # every history row is stamped (campaign_id, experiment), never a run_id
+    rows = [r for r in session.history(store="physical")
+            if r["campaign_id"] == cid]
+    assert rows and all(r["run_id"] is None for r in rows)
+    assert {r["experiment"] for r in rows} == {"qubit_relaxation", "qubit_echo"}
+
+    # provenance credits the campaign, strict-match style
+    info = live_sources(session.physical_state(),
+                        session.history(store="physical"))["q0"]["t1_s"]
+    assert info["status"] == "campaign" and info["campaign_id"] == cid
+
+    # decisions reached campaign.json and the index followed
+    stored = session.datastore.load_campaign(cid)["manifest"]["suggestions"]
+    assert {s["status"] for s in stored} == {"accepted"}
+    assert session.find_campaigns(pending=True) == []
+    assert [c["campaign_id"] for c in
+            session.find_campaigns(pending=False)] == [cid]
+
+
+def test_accept_campaign_era_guard_and_force(session):
+    out = _stab_campaign(session)
+    cid = out["campaign_id"]
+    path = Path(session.datastore.load_campaign(cid)["path"]) / "campaign.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest["cooldown"] = "cd9"  # the sample was since warmed up and recooled
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="may not transfer"):
+        session.accept_campaign(cid)
+    assert session.physical_state() == {}
+
+    summary = session.accept_campaign(cid, force=True)
+    assert summary["applied"] and summary["pending_left"] == 0
+
+
+def test_accept_campaign_staleness_guard(session):
+    out = _stab_campaign(session)
+    cid = out["campaign_id"]
+    # the store moved between finalize (before=None captured) and the accept
+    session.set_values({"q0.t1_s": 1.0e-9})
+
+    summary = session.accept_campaign(cid)
+    (stale,) = summary["stale"]
+    assert (stale["entity"], stale["field"]) == ("q0", "t1_s")
+    assert stale["current"] == pytest.approx(1.0e-9)
+    assert summary["pending_left"] == 1  # t1_s stays pending, the knob applied
+    assert session.physical_state()["q0"]["t1_s"] == pytest.approx(1.0e-9)
+
+    summary = session.accept_campaign(cid, force=True)
+    assert summary["pending_left"] == 0
+    assert session.physical_state()["q0"]["t1_s"] == pytest.approx(
+        out["statistics"]["qubit_relaxation"]["q0"]["t1_s"]["mean"])
+
+
+def test_accept_campaign_dry_run_reports_only(session):
+    out = _stab_campaign(session)
+    cid = out["campaign_id"]
+    plan = session.accept_campaign(cid, dry_run=True)
+    assert plan["campaign_id"] == cid
+    assert plan["era"]["campaign"] == ["cd1", "sim"] and plan["era"]["match"]
+    assert plan["items"] and all("experiment" in i for i in plan["items"])
+    assert all(i["status"] == "pending" for i in plan["items"])
+    assert session.physical_state() == {}  # nothing moved
+    stored = session.datastore.load_campaign(cid)["manifest"]["suggestions"]
+    assert {s["status"] for s in stored} == {"pending"}
+
+
+def test_accept_campaign_selection_filters(session):
+    out = _stab_campaign(session)
+    cid = out["campaign_id"]
+    summary = session.accept_campaign(cid, fields=["t1_s"])
+    assert [(a["entity"], a["field"]) for a in summary["applied"]] == [("q0", "t1_s")]
+    assert summary["pending_left"] >= 1  # the thermalization knob still waits
+    summary = session.accept_campaign(cid, entities=["q0_xy"])
+    assert {a["entity"] for a in summary["applied"]} == {"q0_xy"}
+    assert summary["pending_left"] == 0
+
+
+def test_reject_campaign_is_metadata_only(session):
+    out = _stab_campaign(session)
+    cid = out["campaign_id"]
+    summary = session.reject_campaign(cid, comment="chip was sick")
+    assert summary["pending_left"] == 0 and summary["rejected"]
+    assert session.physical_state() == {}  # nothing was applied
+    stored = session.datastore.load_campaign(cid)["manifest"]["suggestions"]
+    assert {s["status"] for s in stored} == {"rejected"}
+    assert all(s["comment"] == "chip was sick" for s in stored)
+    assert session.find_campaigns(pending=True) == []
+
+
+def test_accept_campaign_with_no_suggestions_is_an_empty_summary(session):
+    out = session.run_campaign(CampaignPlan(
+        label="short", repeat=2, defaults={"targets": ["q0"]}, skip_artifacts=True,
+        steps=[{"experiment": "qubit_relaxation"}]))  # below min_n: no proposals
+    summary = session.accept_campaign(out["campaign_id"])
+    assert summary == {"campaign_id": out["campaign_id"], "applied": [],
+                       "stale": [], "errors": [], "pending_left": 0}
+
+
+def test_accept_campaign_refuses_a_foreign_device_campaign(session, tmp_path):
+    out = _stab_campaign(session)
+    roster = demo_components()
+    design = demo_design(roster)
+    vendor = InMemoryDevice(roster, demo_vendor_state(roster, design))
+    other = Session(SimulatedBackend(vendor), roster, design=design,
+                    scqo_dir=tmp_path / "scqo2", data_root=tmp_path / "data",
+                    device_name="chipZ", backend_label="simulated",
+                    setup_name="sim", cooldown_id="cd1")
+    with pytest.raises(RuntimeError, match="chipZ"):
+        other.accept_campaign(out["campaign_id"])

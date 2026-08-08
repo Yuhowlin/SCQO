@@ -166,6 +166,39 @@ def reject_suggestions(
     }
 
 
+def reject_campaign_suggestions(
+    store,
+    campaign_id: str,
+    *,
+    entities: list[str] | None = None,
+    fields: list[str] | None = None,
+    indices: list[int] | None = None,
+    comment: str = "",
+) -> dict:
+    """Decline pending CAMPAIGN-level suggestions — metadata only, the
+    campaign twin of :func:`reject_suggestions` (rows live on campaign.json,
+    written through the locked ``edit_campaign_suggestions``)."""
+    manifest = store.load_campaign(campaign_id)["manifest"]
+    suggestions = load_suggestions(manifest.get("suggestions", []))
+    selected = select_suggestions(suggestions, entities=entities,
+                                  fields=fields, indices=indices)
+    for i in selected:
+        s = suggestions[i]
+        s.status = "rejected"
+        s.decided_at = _now()
+        s.decided_by = _current_operator() or None
+        s.comment = comment
+    stored = store.edit_campaign_suggestions(
+        campaign_id, decision_editor({i: suggestions[i].model_dump(mode="json")
+                                      for i in selected}))
+    return {
+        "campaign_id": campaign_id,
+        "rejected": [{"entity": suggestions[i].entity,
+                      "field": suggestions[i].field} for i in selected],
+        "pending_left": pending_count(stored.get("suggestions", [])),
+    }
+
+
 # ------------------------------------------------------------------ capture
 
 def _capture_property(field: str, spec: FieldSpec) -> property:

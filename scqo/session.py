@@ -38,6 +38,7 @@ from .suggestions import (
     decision_editor,
     load_suggestions,
     pending_count,
+    reject_campaign_suggestions,
     reject_suggestions,
     select_suggestions,
 )
@@ -1157,6 +1158,152 @@ class Session:
         """Decline pending suggestions (metadata only)."""
         return reject_suggestions(
             self._require_datastore(), run_id, entities=entities,
+            fields=fields, indices=indices, comment=comment)
+
+    def accept_campaign(
+        self,
+        campaign_id: str,
+        *,
+        entities: list[str] | None = None,
+        fields: list[str] | None = None,
+        indices: list[int] | None = None,
+        comment: str = "",
+        force: bool = False,
+        reapply: bool = False,
+        dry_run: bool = False,
+    ) -> dict:
+        """Apply a campaign's pending aggregate suggestions — the campaign
+        twin of :meth:`accept`. Era guard (the campaign's cooldown/setup must
+        match the current one) and staleness guard (each item's ``before``
+        was captured at finalize and must equal the store's CURRENT value)
+        protect the deferred apply unless ``force``; ``reapply`` re-decides
+        already-decided items with staleness OFF. Values apply GROUPED by
+        proposing experiment — one :meth:`_apply` pass per group, stamped
+        ``(experiment, campaign_id)`` with NO run_id, so provenance reads
+        status "campaign" — and the state saves ONCE after all groups."""
+        store = self._require_datastore()
+        manifest = store.load_campaign(campaign_id)["manifest"]
+        device = manifest.get("device", "")
+        if device and device != store.device_name:
+            raise RuntimeError(
+                f"campaign {campaign_id} belongs to device {device!r} but "
+                f"this session is bound to {store.device_name!r}")
+        suggestions = load_suggestions(manifest.get("suggestions", []))
+        selected = select_suggestions(
+            suggestions, entities=entities, fields=fields, indices=indices,
+            include_decided=reapply or dry_run)
+
+        campaign_era = (manifest.get("cooldown") or "",
+                        manifest.get("setup") or "")
+        if dry_run or not force:
+            current_era = store.run_stamps()
+            era = {"campaign": list(campaign_era),
+                   "current": list(current_era),
+                   "match": campaign_era == current_era}
+        else:
+            era = {"campaign": list(campaign_era), "current": None,
+                   "match": True}
+
+        device_snapshot = self.device.snapshot()
+        items: list[dict[str, Any]] = []
+        for i in selected:
+            s = suggestions[i]
+            current = (self.physical.get(s.entity, s.field)
+                       if s.role == "fact"
+                       else device_snapshot.get(s.entity, {}).get(s.field))
+            items.append({
+                "index": i, "entity": s.entity, "field": s.field,
+                "role": s.role, "experiment": s.experiment,
+                "status": s.status, "before": s.before,
+                "current": current, "after": s.after,
+                "stale": current != s.before, "decided_at": s.decided_at,
+                "decided_by": s.decided_by, "comment": s.comment,
+            })
+        if dry_run:
+            return {"campaign_id": campaign_id, "era": era, "items": items}
+
+        summary: dict[str, Any] = {"campaign_id": campaign_id, "applied": [],
+                                   "stale": [], "errors": []}
+        if not selected:
+            summary["pending_left"] = pending_count(suggestions)
+            return summary
+
+        if not force and not era["match"]:
+            raise RuntimeError(
+                f"campaign {campaign_id} was measured under cooldown/setup "
+                f"{campaign_era} but the device is now on "
+                f"{tuple(era['current'])} — its values may not transfer; use "
+                f"force=True (--force) to apply anyway")
+
+        to_apply: list[Suggestion] = []
+        current_of: dict[int, Any] = {}
+        for item in items:
+            s = suggestions[item["index"]]
+            current_of[id(s)] = item["current"]
+            # A reapply deliberately overwrites a newer value, so staleness
+            # cannot be an error there.
+            if not force and not reapply and item["stale"]:
+                summary["stale"].append(
+                    {"entity": s.entity, "field": s.field,
+                     "before": s.before, "current": item["current"],
+                     "after": s.after})
+                continue
+            to_apply.append(s)
+
+        # One _apply pass per proposing experiment (first-seen order): the
+        # ChangeRecord.experiment stamp stays truthful per row, and per-entity
+        # atomicity holds within each group.
+        by_experiment: dict[str | None, list[Suggestion]] = {}
+        for s in to_apply:
+            by_experiment.setdefault(s.experiment, []).append(s)
+        applied: list[Suggestion] = []
+        for exp_name, group in by_experiment.items():
+            done, errors = self._apply(
+                group, experiment=exp_name, run_id=None,
+                campaign_id=campaign_id, comment=comment, reapply=reapply)
+            applied.extend(done)
+            summary["errors"].extend(errors)
+        summary["applied"] = [
+            {"entity": s.entity, "field": s.field, "role": s.role,
+             "experiment": s.experiment, "before": s.before,
+             "current": current_of.get(id(s)), "after": s.after}
+            for s in applied]
+        # From here on nothing may raise: the vendor already carries the
+        # applied values, so the decision MUST reach campaign.json.
+        if applied:
+            try:
+                if self._persist:
+                    self.device.save()
+                self.physical.save()
+            except Exception as err:
+                summary["errors"].append(
+                    f"values were applied to the device but saving state "
+                    f"failed (state files may lag the instrument): "
+                    f"{type(err).__name__}: {err}")
+        try:
+            stored = store.edit_campaign_suggestions(
+                campaign_id,
+                decision_editor({i: suggestions[i].model_dump(mode="json")
+                                 for i in selected}))
+            summary["pending_left"] = pending_count(
+                stored.get("suggestions", []))
+        except Exception as err:
+            summary["errors"].append(
+                f"values were applied to the device but persisting the "
+                f"decision failed — campaign.json still lists them as "
+                f"pending (a blind retry could double-apply): "
+                f"{type(err).__name__}: {err}")
+            summary["pending_left"] = pending_count(suggestions)
+        return summary
+
+    def reject_campaign(self, campaign_id: str, *,
+                        entities: list[str] | None = None,
+                        fields: list[str] | None = None,
+                        indices: list[int] | None = None,
+                        comment: str = "") -> dict:
+        """Decline a campaign's pending suggestions (metadata only)."""
+        return reject_campaign_suggestions(
+            self._require_datastore(), campaign_id, entities=entities,
             fields=fields, indices=indices, comment=comment)
 
     def suggest(self, run_id: str, assignments: dict[str, Any],
