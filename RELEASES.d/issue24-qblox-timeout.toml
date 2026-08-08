@@ -1,0 +1,6 @@
+name = "issue24-qblox-timeout"
+repos = { lchqbdriver = "9fcb52d" }
+kind = "fix"
+coupling = ""
+validated = "offline (LCHQBDriver 260-test suite in both .venv and .venv-qblox); a deliberately long hardware run still open"
+notes = "Issue #24 first half: the fixed 300 s acquisition timeout (already outgrown once at 120 s) killed long FPGA-averaged sweeps. acquire() now scales the deadline per experiment (exact parity shot period when published, else reps x sweep points x thermalization + margin, x2 safety), floored at 300 s, rounded up to whole minutes for the vendor's //60 trap, and mirrored onto InstrumentCoordinator.timeout (whose 60 s vendor default was a second hidden gate). No user action; genuinely wedged sequencers on very long experiments now take proportionally longer to report the TimeoutError."

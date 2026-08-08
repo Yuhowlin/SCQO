@@ -1,0 +1,6 @@
+name = "issue24-x90-wiring"
+repos = { scqo = "66fcce3", lchqmdriver = "b115a57" }
+kind = "fix"
+coupling = "lchqmdriver needs scqo >= 66fcce3: the QM drag probes normalize target_gate to match scqo's new _gate_target helper; older scqo drag carriers still carry the dead lock_x90 fallback that the new quam_fields would survive but whose hasattr guard leaks KeyError offline."
+validated = "offline (SCQO 105-test model sweep + LCHQMDriver 313-test suite incl. new live-state program builds for x180 AND x90); QM hardware run still open"
+notes = "Issue #24 second half: drag calibration was 100% dead on QM in v0.25.0 (stale lock_x90 kwarg -> TypeError), and the x90 path died a second way on live states (-x90_DragCosine's referenced alpha; the reference guard now uses QUAM get_raw_value and also protects the amplitude side from silently severing -x90's link). target_gate is now Literal['x180','x90'] on the drag carriers -- 'X90' is refused instead of silently writing the x180 knob. BEHAVIOR CHANGE: a previously-accepted target_gate='X90' run now errors at parameter validation."
