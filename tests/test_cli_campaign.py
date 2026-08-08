@@ -295,3 +295,13 @@ def test_campaign_appears_in_the_command_list(tmp_path):
     proc = _cli(tmp_path, "--help")
     assert proc.returncode == 0
     assert "campaign" in proc.stdout
+
+
+def test_dry_run_refuses_a_shadowing_label(tmp_path):
+    """A label equal to a registered experiment name would mint campaign ids
+    that read as that experiment's run ids — refused at preflight, exit 2."""
+    bad = PLAN.replace('label = "t1_stability"', 'label = "qubit_relaxation"')
+    proc = _cli(tmp_path, "campaign", _plan(tmp_path, bad), "--dry-run")
+    assert proc.returncode == 2
+    assert "REFUSED" in proc.stderr
+    assert "shadows a registered experiment name" in proc.stderr

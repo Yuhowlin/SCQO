@@ -967,3 +967,19 @@ def test_suggestion_experiment_field_roundtrips():
                                    "role": "fact", "before": None,
                                    "after": 4.1e-5}])
     assert legacy.experiment is None
+
+
+def test_preflight_refuses_a_label_shadowing_an_experiment_name(session, tmp_path):
+    """run_id and campaign_id share the {stamp}-{device}-{name}-{seq} format,
+    so a shadowing label would mint campaign ids indistinguishable from that
+    experiment's run ids — refused whole, before any disk or hardware."""
+    plan = CampaignPlan(label="qubit_relaxation", repeat=2,
+                        defaults={"targets": ["q0"]},
+                        steps=[{"experiment": "qubit_relaxation"}])
+    out = session.run_campaign(plan)
+    assert out["status"] == "failed" and out["campaign_id"] is None
+    (problem,) = out["problems"]
+    assert "shadows a registered experiment name" in problem
+    assert not problem.startswith("step ")  # plan-level, unprefixed
+    assert not list((tmp_path / "data" / "chipT").glob("*"))
+    assert session.check_campaign(plan) == out["problems"]  # the same gate

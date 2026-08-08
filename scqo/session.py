@@ -697,12 +697,27 @@ class Session:
     def _preflight(self, plan) -> list[str]:
         """Build every step's Parameters and run the roster gate — no hardware.
 
-        Returns problem strings naming the step, ``[]`` when the plan is clear."""
+        Returns problem strings naming the step (plan-level problems first,
+        unprefixed), ``[]`` when the plan is clear."""
         from pydantic import ValidationError
 
         from . import experiments as registry
 
         problems: list[str] = []
+        # A label that shadows a registered experiment name mints campaign ids
+        # indistinguishable from that experiment's run ids ({stamp}-{device}-
+        # {name}-{seq} on both sides) — ambiguous for accept, provenance and
+        # the viewer routes. Same tolerant lookup as the CLI's
+        # _refuse_experiment_name: a driver that fails to import must never
+        # break preflight.
+        try:
+            registry.get(plan.label)
+        except Exception:
+            pass  # not a registered name (or the registry is broken): fine
+        else:
+            problems.append(
+                f"label {plan.label!r} shadows a registered experiment name — "
+                f"pick a different label")
         for step_idx, step in enumerate(plan.steps):
             where = f"step {step_idx} ({step.experiment})"
             try:
