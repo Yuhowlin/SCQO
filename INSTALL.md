@@ -22,8 +22,8 @@ actually running a measurement.**
 | venv | prompt | contents | activate when you… |
 |---|---|---|---|
 | `D:\github\.venv-view` | `(view)` | scqo `[viewer]` + scqat + datasette + pytest — **no instrument libraries** | look at data (the common case): run-viewer, SQL browser, `scqo find`, `scqo tag`. Works identically on an analysis-only laptop/Mac. |
-| `D:\github\.venv-qblox` | `(qblox)` | the view stack + LCHQBDriver + `qblox-scheduler==1.0.0b4` (hardware-proven) | measure on the Qblox cluster: `scqo run`, `scqo state` |
-| `D:\github\.venv-qm` | `(.venv-qm)` | pinned QM stack, py3.11 (`LCHQMDriver\requirements-qm.lock.txt`) + scqo/scqat/LCHQMDriver editables | measure on the OPX1000 or use qualibrate — `qm.bat` activates it for you |
+| `D:\github\.venv-qblox` | `(qblox)` | the view stack + scqo-qblox + `qblox-scheduler==1.0.0b4` (hardware-proven) | measure on the Qblox cluster: `scqo run`, `scqo state` |
+| `D:\github\.venv-qm` | `(.venv-qm)` | pinned QM stack, py3.11 (`scqo-qm\requirements-qm.lock.txt`) + scqo/scqat/scqo-qm editables | measure on the OPX1000 or use qualibrate — `qm.bat` activates it for you |
 
 All three import scqo/scqat from the same editable checkouts, so they never drift on
 the neutral layer. `uv` creates standard venvs and downloads Python itself if the
@@ -36,8 +36,8 @@ as siblings) — on the lab PC that folder is `D:\github`; on your own Mac clone
 mkdir -p ~/github && cd ~/github
 git clone https://github.com/shiau109/SCQO.git
 git clone https://github.com/shiau109/scqat.git
-git clone https://github.com/shiau109/LCHQBDriver.git    # only if this machine drives the Qblox cluster
-git clone https://github.com/shiau109/LCHQMDriver.git    # only if this machine drives the OPX1000
+git clone https://github.com/shiau109/scqo-qblox.git    # only if this machine drives the Qblox cluster
+git clone https://github.com/shiau109/scqo-qm.git    # only if this machine drives the OPX1000
 git clone https://github.com/shiau109/scqo-contrib.git   # optional sandbox - see the note below before installing it
 ```
 
@@ -89,13 +89,13 @@ uv pip install --python .venv-view\Scripts\python.exe -e ".\SCQO[viewer]" -e .\s
 
 # qblox — measurement env for the Qblox cluster
 uv venv .venv-qblox --python 3.12 --prompt qblox
-uv pip install --python .venv-qblox\Scripts\python.exe -e ".\SCQO[viewer]" -e .\scqat -e .\LCHQBDriver datasette pytest httpx
+uv pip install --python .venv-qblox\Scripts\python.exe -e ".\SCQO[viewer]" -e .\scqat -e .\scqo-qblox datasette pytest httpx
 uv pip install --python .venv-qblox\Scripts\python.exe "qblox-scheduler==1.0.0b4"   # exact hardware-proven build (see note)
 
 # qm — measurement env for the OPX1000 (pinned, py3.11)
 uv venv .venv-qm --python 3.11
-uv pip install --python .venv-qm\Scripts\python.exe -r .\LCHQMDriver\requirements-qm.lock.txt
-uv pip install --python .venv-qm\Scripts\python.exe -e .\scqat -e .\SCQO -e .\LCHQMDriver --no-deps
+uv pip install --python .venv-qm\Scripts\python.exe -r .\scqo-qm\requirements-qm.lock.txt
+uv pip install --python .venv-qm\Scripts\python.exe -e .\scqat -e .\SCQO -e .\scqo-qm --no-deps
 
 .venv-view\Scripts\Activate.ps1     # daily default — prompt shows (view)
 ```
@@ -105,7 +105,7 @@ whole Tier-1 surface (`scqo run/find/accept/suggest/set/tag/state/user/device/do
 works from any directory. `[viewer]` pulls the run-viewer's web extras —
 fastapi/uvicorn/jinja2/python-multipart —
 for `python -m scqo.viewer`; `datasette` powers the SQL browser `python -m scqo.browse`.
-**qblox-scheduler pin:** LCHQBDriver's pyproject floors it at `>=1.0.0b4` because PyPI's
+**qblox-scheduler pin:** scqo-qblox's pyproject floors it at `>=1.0.0b4` because PyPI's
 only non-prerelease is an empty 0.0.0 placeholder that fails to build; the explicit
 `==1.0.0b4` line then holds the env at the exact build proven on the cluster — bump it
 deliberately after re-validation, never by accidental rebuild.)
@@ -194,7 +194,7 @@ State persistence: `"simulated"` setups always persist (push is forced — an
 in-memory demo device has no vendor truth to pull). Real backends default to
 `state_sync = "pull"`: the vendor config is the truth at startup and scqo pushes
 only values it freshly measures. On QM control PCs `"pull"` is mandatory — see
-LCHQMDriver's CLAUDE.md.
+scqo-qm's CLAUDE.md.
 
 Other notes:
 - A temporary alternative config can be selected per shell
@@ -683,7 +683,7 @@ for writing, and nothing lands in your real data_root.
 folder holding `dut_config*.json` + `hw_config*.json`:
 
 ```powershell
-cd D:\github\LCHQBDriver
+cd D:\github\scqo-qblox
 python scripts\check_real_config.py D:\qpu_data\SQ_demo\QBLOX_config
 ```
 
@@ -691,7 +691,7 @@ python scripts\check_real_config.py D:\qpu_data\SQ_demo\QBLOX_config
 any folder holding `state.json` + `wiring.json`:
 
 ```powershell
-cd D:\github\LCHQMDriver
+cd D:\github\scqo-qm
 python scripts\check_real_config.py D:\qpu_data\SQ_demo\QM_OPX1000_config
 ```
 
@@ -894,7 +894,7 @@ read-only command.
 | `scqo: command not found` / not recognized | no venv activated, or scqo upgraded across v0.4.0 without re-running the section-1 install line (the command registers at install time). `Get-Command scqo` shows which venv's command you're getting |
 | viewer: `missing package: uvicorn` (or fastapi/jinja2), or a `python-multipart` RuntimeError | **wrong venv activated** — run the viewer from `(view)` or `(qblox)`. The `(.venv-qm)` lock env deliberately omits `python-multipart`, so the viewer's tag-edit route cannot start there |
 | `device ... is on backend 'qblox' ... driver is not registered in this environment` | right command, wrong venv (the view env has no instrument drivers by design), or a stale editable install — the message distinguishes both and names the venv / the install line to re-run |
-| `ModuleNotFoundError: lchqb` / `qblox_scheduler` from a run script | you're in the view env (by design it has no instrument libs) — activate `.venv-qblox` to measure |
+| `ModuleNotFoundError: scqo_qblox` / `qblox_scheduler` from a run script | you're in the view env (by design it has no instrument libs) — activate `.venv-qblox` to measure |
 | `lab config not found` | your `--config`/`$SCQO_CONFIG` path is wrong (intentional loud failure — better than silently unsaved) |
 | `# lab config: built-in defaults ...` in the catalog header | no `~\.scqo\config.toml` yet: runs work but are **not saved** — do section 2. A personal `user.toml` does NOT rescue this: the overlay needs a base config |
 | `... not allowed in a user overlay` | your `~\.scqo\user.toml` sets a machine-wiring key — only `device` / `setup` / `default_tags` / `parameters_file` are personal (section 2) |
