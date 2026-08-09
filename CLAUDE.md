@@ -472,7 +472,7 @@ portable; chain-fraction = non-portable, twin or catalogued scale);
 unique locks experiments to that instrument.
 
 ### Reference backends
-- `D:\github\LCHQMDriver` — Quantum Machines (qm-qua / quam / qualibrate); QM reference impl (`calibrations/LCH_*.py`, `customized/node/*/parameters.py`, `quam_config/my_quam.py`).
+- `D:\github\LCHQMDriver` — Quantum Machines (qm-qua / quam / qualibrate); its scqo surface is `customized/scqo/` (backend factory + experiment shells — new QM experiments are scqo-only fused files there, 2026-08-09); the qualibrate paths (`calibrations/LCH_*.py`, `customized/node/*/parameters.py`) are the frozen legacy set; `quam_config/my_quam.py` stays the QUAM entrypoint.
 - `D:\github\LCHQBDriver` — Qblox (qblox-scheduler); the Qblox backend, independent of the QM stack.
 - `D:\github\QBLOX_training` — read-only Qblox reference docs (`docs/applications/superconducting/single_qubit_experiment_helpers/experiment.py`, `cal*.py`, `custom_elements.py`).
 
