@@ -335,6 +335,61 @@ class Session:
         payload["suggestions"] = suggestion_dicts
         return payload
 
+    def preview(self, experiment: str, params: dict[str, Any], *,
+                out_dir: Path | str) -> dict:
+        """Build ``experiment`` exactly as :meth:`run` would — defaults merge,
+        Parameters validation, target gating, ``define_sweep()`` — then hand
+        the un-executed build to the backend's duck-typed
+        ``preview(exp, out_dir)`` hook, which renders the vendor-native
+        sequence (Qblox ``Schedule`` / QUA program) to files. No hardware
+        runs, nothing is saved to the datastore, and estimate/update never
+        happen. Returns a JSON-able dict, never raises."""
+        import warnings
+
+        from pydantic import ValidationError
+
+        from . import experiments as registry
+        from .backend import PreviewWarning
+
+        cls = registry.get(experiment)
+        defaults = self.parameter_defaults.get(experiment, {})
+        merged = {**defaults, **params}
+        try:
+            validated = cls.Parameters(**merged)
+        except ValidationError as err:
+            return self._invalid_params(cls, merged, defaults, params,
+                                        err).model_dump(mode="json")
+        exp = cls(self.backend, validated)
+        exp.device = self.device  # route through the recording surface
+        exp.design = self.design
+
+        gate_error = self._validate_targets(cls, exp)
+        if gate_error is not None:
+            return gate_error.model_dump(mode="json")
+
+        base = {"experiment": experiment, "backend": self.backend_label}
+        hook = getattr(self.backend, "preview", None)
+        if hook is None:
+            return {**base,
+                    "error": f"backend {self.backend_label!r} does not "
+                             f"implement preview() — nothing to render; "
+                             f"update the driver"}
+        try:
+            # run() delegates this to Experiment.run; probe() reads it.
+            exp.sweep_axes = exp.define_sweep()
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always", PreviewWarning)
+                files = hook(exp, Path(out_dir))
+        except ValueError as err:  # a named refusal — pass through verbatim
+            return {**base, "error": str(err)}
+        except Exception as err:
+            return {**base,
+                    "error": f"preview failed: {type(err).__name__}: {err}"}
+        return {**base, "preview_dir": str(out_dir),
+                "files": [str(f) for f in files],
+                "warnings": [str(w.message) for w in caught
+                             if issubclass(w.category, PreviewWarning)]}
+
     # ----------------------------------------------------------- campaigns
 
     def run_campaign(

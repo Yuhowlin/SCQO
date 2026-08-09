@@ -24,6 +24,75 @@ def _parse_value(text: str):
         return text
 
 
+def _check_preview_flags(args, name: str | None) -> None:
+    """Refuse contradictory flag mixes BEFORE any session is built.
+
+    --preview never runs, saves or updates, so every flag about running,
+    saving or updating is a contradiction to name, not to ignore."""
+    if not args.preview:
+        raise SystemExit("--out/--no-open only apply with --preview")
+    if not name:
+        raise SystemExit(
+            "--preview needs an experiment name: scqo run <name> --preview")
+    conflicts = [flag for flag, on in [
+        ("--repeat", args.repeat is not None),
+        ("--period", args.period is not None),
+        ("--max-duration", args.max_duration is not None),
+        ("--skip-artifacts", args.skip_artifacts),
+        ("--label", bool(args.label)),
+        ("--accept", args.accept),
+        ("--no-update", args.no_update),
+        ("--tag", bool(args.tags)),
+        ("--note", bool(args.note)),
+    ] if on]
+    if conflicts:
+        raise SystemExit(
+            f"--preview builds and renders only — it never runs, saves or "
+            f"updates, so {', '.join(conflicts)} cannot apply here; drop "
+            f"{'it' if len(conflicts) == 1 else 'them'} or drop --preview")
+
+
+def _run_preview(sess, cfg, name, params, args, file_defaults) -> int:
+    """The --preview branch: render to files, print JSON, auto-open."""
+    from datetime import datetime
+    from pathlib import Path
+
+    applied = sorted(k for k in file_defaults if k not in params)
+    if applied:  # stderr: stdout stays parseable JSON (| jq etc.)
+        print(f"# parameter defaults from {cfg.parameters_source} [{name}]: "
+              f"{', '.join(applied)}", file=sys.stderr)
+    if args.out:
+        out_dir = Path(args.out).expanduser().resolve()
+    else:
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        out_dir = Path.cwd() / "scqo_preview" / f"{name}_{stamp}"
+        n = 2
+        while out_dir.exists():  # same-second rerun
+            out_dir = out_dir.with_name(f"{name}_{stamp}-{n}")
+            n += 1
+    print(f"# preview: building {name} — no hardware, nothing saved "
+          f"(active reset compiles slowly at high num_averages)",
+          file=sys.stderr)
+    result = sess.preview(name, params, out_dir=out_dir)
+    print(json.dumps(result, indent=2))
+    for warning in result.get("warnings", []):
+        print(f"# preview warning: {warning}", file=sys.stderr)
+    files = result.get("files", [])
+    for f in files:
+        print(f"# file: {f}", file=sys.stderr)
+    if files and not args.no_open:
+        if hasattr(os, "startfile"):  # Windows: default app per file type
+            for f in files:
+                try:
+                    os.startfile(f)
+                except OSError as err:
+                    print(f"# could not open {f}: {err}", file=sys.stderr)
+        else:
+            print("# open the files above manually (auto-open is "
+                  "Windows-only)", file=sys.stderr)
+    return 1 if result.get("error") else 0
+
+
 def _schema_epilog(experiment: str, config_path: str | None) -> str:
     """Human-readable parameter list from the experiment's pydantic schema, with the
     lab's standing defaults (~/.scqo/parameters.toml) shown as the effective values."""
@@ -91,6 +160,17 @@ def run_experiment_cli(
                               help="apply all suggested updates immediately (unattended runs / AI loop)")
     update_group.add_argument("--no-update", action="store_true",
                               help="analyze only; do not even capture suggested updates")
+    preview_group = parser.add_argument_group(
+        "preview", "render the built sequence to files instead of running it")
+    preview_group.add_argument("--preview", action="store_true",
+                               help="build + compile only: render the vendor-native sequence "
+                                    "(pulse diagram / QUA script) to files — no hardware, "
+                                    "nothing saved, no updates")
+    preview_group.add_argument("--out", metavar="DIR",
+                               help="preview output directory "
+                                    "(default: ./scqo_preview/<experiment>_<timestamp>/)")
+    preview_group.add_argument("--no-open", action="store_true",
+                               help="do not auto-open the rendered files")
     # Repeating ONE experiment is still running one experiment, so it lives here
     # rather than in a wrapper. An ordered BUNDLE of experiments is a different
     # input and lives in `scqo campaign <plan.toml>`.
@@ -114,6 +194,9 @@ def run_experiment_cli(
     parser.add_argument("--config", help="lab config path (default: $SCQO_CONFIG or ~/.scqo/config.toml)")
     args = parser.parse_args(argv)
     name = experiment or args.experiment
+
+    if args.preview or args.out or args.no_open:
+        _check_preview_flags(args, name)  # fail fast: no session needed
 
     sess, cfg = build_session(args.config)
 
@@ -156,6 +239,11 @@ def run_experiment_cli(
     # names targets — a file-supplied target list must survive to the Session merge.
     if "targets" not in params and "targets" not in file_defaults:
         params["targets"] = default_targets(sess, name)
+
+    # The preview branch before the campaign branch: both return early, and
+    # --preview with any repeat flag was already refused above.
+    if args.preview:
+        return _run_preview(sess, cfg, name, params, args, file_defaults)
 
     mode = "apply" if args.accept else ("none" if args.no_update else "suggest")
 

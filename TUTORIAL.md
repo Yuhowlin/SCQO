@@ -214,6 +214,24 @@ scqo run resonator_spectroscopy --no-update ...                   # analyze only
 scqo run qubit_ramsey --params my.json                            # parameters from a file
 ```
 
+**See the sequence before you run it** — `--preview` builds and compiles the
+experiment exactly as a run would, then stops after `probe()` and renders the
+vendor's own view of it to `./scqo_preview/<experiment>_<timestamp>/`
+(override with `--out DIR`), auto-opening each file — suppress with
+`--no-open`. On Qblox that is the interactive pulse diagram
+(`pulse_diagram.html`, zoomable in the browser) plus the absolute
+`timing_table.html`; on QM
+it is the generated QUA script (`qua_script.py`). Nothing touches hardware,
+nothing is saved, no updates are suggested — and the simulated backend refuses
+by name (it never builds a vendor sequence). One cost note: with
+`reset_method="active"` on Qblox, compilation itself unrolls the averaging
+loop, so a large `num_averages` previews slowly — preview with a small one.
+
+```bash
+scqo run qubit_ramsey --targets q1 --preview                       # look, don't touch
+scqo run qubit_ramsey --preview --out D:\tmp\ramsey_check          # pinned folder, overwrites
+```
+
 One more distinction worth knowing: **instrument settings vs sample physics** —
 the suggestion table's `role` column says which side each value belongs to. Both
 land in YOUR context's `<device>/<cooldown>/<setup>/scqo/` folder, so two users on

@@ -18,8 +18,28 @@ if TYPE_CHECKING:
     from .experiment import Experiment
 
 
+class PreviewWarning(UserWarning):
+    """Non-fatal degradation during a backend's ``preview`` (e.g. one
+    best-effort artifact failed to render). ``Session.preview`` collects
+    these into the result's ``warnings`` list; anything fatal raises
+    instead and fails the preview."""
+
+
 class Backend(ABC):
-    """An instrument adapter."""
+    """An instrument adapter.
+
+    Optional duck-typed hook — ``preview(experiment, out_dir) -> list[Path]``:
+    render the experiment's vendor-native sequence to files in ``out_dir``
+    without executing it (no instrument I/O, no state writes, nothing saved).
+    Deliberately NOT declared on this ABC: backends need not subclass it
+    (``Session`` resolves the hook via ``getattr``, exactly like
+    ``power_context``), and preview has no benign empty default — a backend
+    that cannot render must REFUSE BY NAME with a ``ValueError``. Contract:
+    the caller has already set ``experiment.sweep_axes``; the backend builds
+    the sequence exactly as ``acquire`` would, creates ``out_dir`` only after
+    its refusal checks, and returns the written paths in display order.
+    Best-effort artifacts signal failure with :class:`PreviewWarning`.
+    """
 
     @property
     @abstractmethod

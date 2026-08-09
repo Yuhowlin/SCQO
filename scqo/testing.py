@@ -230,3 +230,11 @@ class SimulatedBackend:
             else:
                 data_vars[var] = (default_dims, val)
         return xr.Dataset(data_vars, coords=coords)
+
+    def preview(self, experiment, out_dir):
+        """Refuse by name: there is no vendor sequence to render here."""
+        raise ValueError(
+            "the simulated backend cannot preview: simulate() synthesizes "
+            "data from the model and never builds a vendor sequence, so "
+            "there is nothing to render — preview on a hardware backend "
+            "(qblox / qm), or just run it: simulated runs are free")

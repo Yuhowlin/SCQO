@@ -346,3 +346,15 @@ def test_run_without_repeat_still_prints_the_plain_json(tmp_path):
     result = _result(proc)
     assert result["outcomes"]["q0"] == "successful"
     assert "run_id" in result and "campaign" not in proc.stdout
+
+
+def test_preview_refuses_on_simulated_backend(tmp_path):
+    """--preview is additive and never touches the datastore: on the simulated
+    temp lab it must refuse by name, exit 1, keep stdout pure JSON (no `saved:`
+    trailer), and create no scqo_preview/ folder."""
+    proc = _run_cli(tmp_path, "run", "resonator_spectroscopy",
+                    "--preview", "--no-open")
+    assert proc.returncode == 1
+    result = json.loads(proc.stdout)  # parses directly: no trailer on preview
+    assert "simulated backend cannot preview" in result["error"]
+    assert not (tmp_path / "scqo_preview").exists()
