@@ -1,6 +1,0 @@
-name = "known-devices-skip-scratch"
-repos = { scqo = "2d768ec" }
-kind = "fix"
-coupling = ""
-validated = "offline"
-notes = "known_devices no longer lists dot-/underscore-prefixed data_root directories (__pycache__ showed as a sample in the viewer/device menus); explicit devices.toml entries still always list."

@@ -11,10 +11,10 @@ One combo number covers the scqo-versioned repos; scqat versions independently o
 its own line under the SAME rule, tied to the combo by the coupling floors.
 **Bump = max severity over the consumed fragments** (each fragment's `kind`):
 
-- While x = 0 (now): any `breaking` or `additive` fragment → **y+1**; every
-  fragment `fix` → **z+1**. The full SemVer rule (breaking → x+1, additive → y+1,
-  fix → z+1) takes effect at **v1.0.0**, declared deliberately when the public
-  surface stabilizes — never reached by accident.
+- As of **v1.0.0** (declared deliberately 2026-08-09 with the v1 driver
+  restructure — this line is the declaration) the full SemVer rule applies:
+  `breaking` → **x+1**, `additive` → **y+1**, `fix` → **z+1**. The 0.x rule
+  (breaking/additive → y+1, all-fix → z+1) is history.
 - **Breaking** is judged against OUR consumers, not just the Python API: an
   existing user artifact (script, campaign plan, parameters.toml,
   config.toml/user.toml, stored state) must change to keep working. That includes

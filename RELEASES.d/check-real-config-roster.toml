@@ -1,6 +1,0 @@
-name = "check-real-config-roster"
-repos = { scqo-qm = "d04e6ce" }
-kind = "fix"
-coupling = ""
-validated = "offline (script PASS end-to-end vs the real 5Q4C backend_config and the repo quam_state, simulated data)"
-notes = "scripts/check_real_config.py works again on the roster-threaded backend surface (it predated QMDeviceModel's roster argument and crashed at step [2/5]); the roster_toml_for generator now ships as scqo_qm.backend.roster_gen (shared by the script and the test fixtures) and a subprocess test pins the script's PASS line."
