@@ -43,8 +43,8 @@ its own line under the SAME rule, tied to the combo by the coupling floors.
 2. **Version metadata matches the tag**: bump `version` in SCQO's `pyproject.toml` to
    the release number (the `scqo --version` a user sees). scqat manages its own
    version line with the same rule (its release checklist).
-3. **Tag the four scqo-versioned repos with the SAME name** — SCQO, LCHQBDriver,
-   LCHQMDriver, scqo-contrib — at their release commits (unchanged repos get a
+3. **Tag the four scqo-versioned repos with the SAME name** — SCQO, scqo-qblox,
+   scqo-qm, scqo-contrib — at their release commits (unchanged repos get a
    no-change re-tag; annotate it as such):
 
    ```powershell
