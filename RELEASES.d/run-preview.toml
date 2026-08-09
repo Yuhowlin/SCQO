@@ -1,0 +1,6 @@
+name = "run-preview"
+repos = { scqo = "1151e60", lchqbdriver = "e32593a", lchqmdriver = "ad080e8" }
+kind = "additive"
+coupling = ""   # graceful both ways, no lockstep floor: new scqo + old driver -> named refusal ("backend does not implement preview()"); new driver + old scqo -> preview() is dead code (nothing calls it). No silent-failure combination.
+validated = "offline + real-config CLI smokes (chipA qblox render/refusal in .venv-qblox; chipA qm_OPX1000 script dump in .venv-qm); no hardware touched by design"
+notes = "scqo run <name> --preview [--out DIR] [--no-open] builds and stops after probe(), rendering the sequence to ./scqo_preview/<name>_<ts>/ and auto-opening it (Qblox: interactive pulse_diagram.html + timing_table.html, refused by name above 256 rendered shots = points x averages because the vendor visualizer unrolls every loop; QM: qua_script.py offline, six self-acquiring shells refuse by name via probe_self_acquires; simulated refuses by name). Nothing runs, nothing saved, no updates."
