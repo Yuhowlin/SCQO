@@ -223,9 +223,11 @@ vendor's own view of it to `./scqo_preview/<experiment>_<timestamp>/`
 `timing_table.html`; on QM
 it is the generated QUA script (`qua_script.py`). Nothing touches hardware,
 nothing is saved, no updates are suggested — and the simulated backend refuses
-by name (it never builds a vendor sequence). One cost note: with
-`reset_method="active"` on Qblox, compilation itself unrolls the averaging
-loop, so a large `num_averages` previews slowly — preview with a small one.
+by name (it never builds a vendor sequence). One cost note: the Qblox pulse
+diagram draws every sweep point of EVERY repetition (points x averages), so a
+lab-sized schedule is refused with the exact `--set` that shrinks it — e.g.
+`--set num_averages=2 --set num_points=5`. The per-shot sequence is identical
+at small counts, and the real run is unaffected.
 
 ```bash
 scqo run qubit_ramsey --targets q1 --preview                       # look, don't touch

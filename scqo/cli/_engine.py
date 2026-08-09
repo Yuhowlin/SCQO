@@ -70,8 +70,7 @@ def _run_preview(sess, cfg, name, params, args, file_defaults) -> int:
         while out_dir.exists():  # same-second rerun
             out_dir = out_dir.with_name(f"{name}_{stamp}-{n}")
             n += 1
-    print(f"# preview: building {name} — no hardware, nothing saved "
-          f"(active reset compiles slowly at high num_averages)",
+    print(f"# preview: building {name} — no hardware, nothing saved",
           file=sys.stderr)
     result = sess.preview(name, params, out_dir=out_dir)
     print(json.dumps(result, indent=2))
