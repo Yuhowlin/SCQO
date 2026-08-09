@@ -313,7 +313,7 @@
                         "amplitude": 0.25,
                         "edge_width": 10,
                         "axis_angle": null,
-                        "__class__": "customized.components.pulses.FlatTopCosinePulse"
+                        "__class__": "scqo_qm.components.pulses.FlatTopCosinePulse"
                     },
                     "partial_swap_flattop_cosine": {
                         "length": 64,
@@ -322,7 +322,7 @@
                         "amplitude": 0.154,
                         "edge_width": 10,
                         "axis_angle": null,
-                        "__class__": "customized.components.pulses.FlatTopCosinePulse"
+                        "__class__": "scqo_qm.components.pulses.FlatTopCosinePulse"
                     }
                 },
                 "id": null,
@@ -357,7 +357,7 @@
                     "duration": "#./inferred_duration",
                     "drive_frequency": 354700000,
                     "flux_pulse": "parametric_reset",
-                    "__class__": "customized.components.macros.parametric_reset_macro.ParametricReset"
+                    "__class__": "scqo_qm.components.macros.parametric_reset_macro.ParametricReset"
                 }
             },
             "xy": {
@@ -675,7 +675,7 @@
                         "amplitude": 0.25,
                         "edge_width": 20,
                         "axis_angle": null,
-                        "__class__": "customized.components.pulses.FlatTopCosinePulse"
+                        "__class__": "scqo_qm.components.pulses.FlatTopCosinePulse"
                     }
                 },
                 "id": null,
@@ -1003,7 +1003,7 @@
                         "amplitude": 0.25,
                         "edge_width": 10,
                         "axis_angle": null,
-                        "__class__": "customized.components.pulses.FlatTopCosinePulse"
+                        "__class__": "scqo_qm.components.pulses.FlatTopCosinePulse"
                     },
                     "partial_swap_flattop_cosine": {
                         "length": 64,
@@ -1012,7 +1012,7 @@
                         "amplitude": 0.15,
                         "edge_width": 10,
                         "axis_angle": null,
-                        "__class__": "customized.components.pulses.FlatTopCosinePulse"
+                        "__class__": "scqo_qm.components.pulses.FlatTopCosinePulse"
                     }
                 },
                 "id": null,
@@ -1382,7 +1382,7 @@
                         "amplitude": 0.25,
                         "edge_width": 20,
                         "axis_angle": null,
-                        "__class__": "customized.components.pulses.FlatTopCosinePulse"
+                        "__class__": "scqo_qm.components.pulses.FlatTopCosinePulse"
                     }
                 },
                 "id": null,
@@ -1744,7 +1744,7 @@
                         "amplitude": 0.25,
                         "edge_width": 20,
                         "axis_angle": null,
-                        "__class__": "customized.components.pulses.FlatTopCosinePulse"
+                        "__class__": "scqo_qm.components.pulses.FlatTopCosinePulse"
                     }
                 },
                 "id": null,
@@ -1816,7 +1816,7 @@
                     "flux_pulse": "partial_swap_flattop_cosine",
                     "phase_shift_control": 0.0,
                     "phase_shift_target": 0.0,
-                    "__class__": "customized.components.macros.iswap_macro.ISwapImplementation"
+                    "__class__": "scqo_qm.components.macros.iswap_macro.ISwapImplementation"
                 }
             },
             "qubit_control": "#/wiring/qubit_pairs/q1-2/c/control_qubit",
@@ -1863,7 +1863,7 @@
                         "amplitude": 0.25,
                         "edge_width": 10,
                         "axis_angle": null,
-                        "__class__": "customized.components.pulses.FlatTopCosinePulse"
+                        "__class__": "scqo_qm.components.pulses.FlatTopCosinePulse"
                     },
                     "partial_swap_flattop_cosine": {
                         "length": 64,
@@ -1872,7 +1872,7 @@
                         "amplitude": -0.05,
                         "edge_width": 10,
                         "axis_angle": null,
-                        "__class__": "customized.components.pulses.FlatTopCosinePulse"
+                        "__class__": "scqo_qm.components.pulses.FlatTopCosinePulse"
                     }
                 },
                 "id": "q1_q2",
@@ -3561,7 +3561,7 @@
                     "flux_pulse": "partial_swap_flattop_cosine",
                     "phase_shift_control": 0.0,
                     "phase_shift_target": 0.0,
-                    "__class__": "customized.components.macros.iswap_macro.ISwapImplementation"
+                    "__class__": "scqo_qm.components.macros.iswap_macro.ISwapImplementation"
                 }
             },
             "qubit_control": "#/wiring/qubit_pairs/q2-3/c/control_qubit",
@@ -3600,7 +3600,7 @@
                         "amplitude": 0.25,
                         "edge_width": 20,
                         "axis_angle": null,
-                        "__class__": "customized.components.pulses.FlatTopCosinePulse"
+                        "__class__": "scqo_qm.components.pulses.FlatTopCosinePulse"
                     },
                     "partial_swap_flattop_cosine": {
                         "length": 64,
@@ -3609,7 +3609,7 @@
                         "amplitude": 0.02,
                         "edge_width": 10,
                         "axis_angle": null,
-                        "__class__": "customized.components.pulses.FlatTopCosinePulse"
+                        "__class__": "scqo_qm.components.pulses.FlatTopCosinePulse"
                     }
                 },
                 "id": "q2_q3",
@@ -4203,7 +4203,7 @@
                         "amplitude": 0.25,
                         "edge_width": 20,
                         "axis_angle": null,
-                        "__class__": "customized.components.pulses.FlatTopCosinePulse"
+                        "__class__": "scqo_qm.components.pulses.FlatTopCosinePulse"
                     }
                 },
                 "id": "q3_q4",
@@ -5313,7 +5313,7 @@
                         "amplitude": 0.25,
                         "edge_width": 20,
                         "axis_angle": null,
-                        "__class__": "customized.components.pulses.FlatTopCosinePulse"
+                        "__class__": "scqo_qm.components.pulses.FlatTopCosinePulse"
                     }
                 },
                 "id": "q4_q5",

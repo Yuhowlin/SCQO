@@ -4,7 +4,7 @@ Real instruments are served by DRIVER packages that register a factory under the
 ``scqo.backends`` entry-point group (name = the backend family)::
 
     [project.entry-points."scqo.backends"]
-    qblox = "lchqb.scqo_backend:build_backend"
+    qblox = "scqo_qblox.scqo_backend:build_backend"
 
 A factory is ``build_backend(cfg: LabConfig, setup: dict, roster: Roster) ->
 Backend`` — ``setup`` is the device's SELECTED named setup record from its cooldown
@@ -28,8 +28,8 @@ from scqo.backend import Backend
 
 #: backend family -> (what provides it, which venv on the lab machines)
 SERVED_BY = {
-    "qblox": ("LCHQBDriver", ".venv-qblox"),
-    "qm": ("LCHQMDriver", ".venv-qm"),
+    "qblox": ("scqo-qblox", ".venv-qblox"),
+    "qm": ("scqo-qm", ".venv-qm"),
     "simulated": ("scqo built-in", "any venv"),
 }
 

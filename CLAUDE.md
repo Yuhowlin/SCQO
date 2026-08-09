@@ -17,7 +17,7 @@ The word **"protocol" is retired**; use these names across all repos.
 - **Parameters / Result / Backend / Session** — input schema / extracted output / instrument adapter (QM, Qblox, Simulated) / the orchestrator entry point (`catalog()` / `run()` / `device_state()`).
 - **campaign** — an ordered list of experiment STEPS walked N times (`CampaignPlan` / `Session.run_campaign()` / `campaign_id`). OUTER repetition: every (repeat, step) is a full `run()` with its own folder, dataset, fit and TIMESTAMP, stamped `campaign`/`repeat_idx`/`step_idx`; the campaign owns only the plan, the cadence, the stop conditions and the per-(experiment, target, quantity) statistics. Repeating ONE experiment is the degenerate 1-step case. Do NOT call it a *repetition* (scqat's `repetition_data` splitter, the drivers' HW-averaging loop and `pulse_repetitions` already own that word) nor a *series* (the /trends time series).
 
-The scqo stack uses this vocabulary throughout — **scqat** (`estimators/`, `tools/`, `BaseEstimator`), **SCQO** (`Experiment`, `scqo.experiments`, `probe()`, `estimate()`), and the drivers **LCHQBDriver** + **LCHQMDriver** (`probe()`-only experiments). scqat's estimator keeps its own orchestrator method `analyze()` (a different layer). LCHQMDriver's qualibrate calibration nodes keep qualibrate's own `node` framework and never import scqo (its scqo surface lives in `customized/scqo/`). (QBLOX_training documents Qblox's *own* `Experiment` ABC — a different class from this `Experiment`.)
+The scqo stack uses this vocabulary throughout — **scqat** (`estimators/`, `tools/`, `BaseEstimator`), **SCQO** (`Experiment`, `scqo.experiments`, `probe()`, `estimate()`), and the drivers **scqo-qblox** + **scqo-qm** (`probe()`-only experiments). scqat's estimator keeps its own orchestrator method `analyze()` (a different layer). scqo-qm's vendored official qualibrate nodes keep qualibrate's own `node` framework and never import scqo (its scqo surface is the `scqo_qm` package). (QBLOX_training documents Qblox's *own* `Experiment` ABC — a different class from this `Experiment`.)
 
 ## The two source repos (reference implementations)
 
@@ -194,7 +194,7 @@ scqo/
                     #   estimate() reads its `old_<knob>` through the same amp_anchor.
                     #   The neutral bound is lt=2.0 (the widest ANY backend expresses);
                     #   the real limit is factor x stored <= 1 and each driver refuses it
-                    #   BY NAME (LCHQM probes/_amp_limits, LCHQB experiments/_amp));
+                    #   BY NAME (scqo-qm + scqo-qblox, each experiments/_amp_limits));
                     #   catalog
                     #   `tags` are DERIVED from mixin subclassing — never declared strings,
                     #   zero tags legitimate (new experiments may be unclassifiable)
@@ -472,8 +472,8 @@ portable; chain-fraction = non-portable, twin or catalogued scale);
 unique locks experiments to that instrument.
 
 ### Reference backends
-- `D:\github\LCHQMDriver` — Quantum Machines (qm-qua / quam / qualibrate); its scqo surface is `customized/scqo/` (backend factory + experiment shells — new QM experiments are scqo-only fused files there, 2026-08-09); the qualibrate paths (`calibrations/LCH_*.py`, `customized/node/*/parameters.py`) are the frozen legacy set; `quam_config/my_quam.py` stays the QUAM entrypoint.
-- `D:\github\LCHQBDriver` — Qblox (qblox-scheduler); the Qblox backend, independent of the QM stack.
+- `D:\github\scqo-qm` (formerly LCHQMDriver) — Quantum Machines (qm-qua / quam / qualibrate); the scqo surface is the `scqo_qm` package (backend/ + experiments/, one fused file per experiment); the qualibrate GUI serves the vendored OFFICIAL nodes only (the LCH shells are retired; `customized/` is a frozen archive); `quam_config/my_quam.py` stays the QUAM entrypoint.
+- `D:\github\scqo-qblox` (formerly LCHQBDriver) — Qblox (qblox-scheduler); the `scqo_qblox` package, independent of the QM stack.
 - `D:\github\QBLOX_training` — read-only Qblox reference docs (`docs/applications/superconducting/single_qubit_experiment_helpers/experiment.py`, `cal*.py`, `custom_elements.py`).
 
 ## Status

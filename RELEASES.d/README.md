@@ -11,7 +11,7 @@ construction.
 ```toml
 name = "fit-tau-seeds"            # = the filename stem
 repos = { scqo = "12a82a9", scqat = "42aafd8" }   # LAST commit per repo
-# keys: scqo / scqat / lchqmdriver / lchqbdriver / scqo-contrib
+# keys: scqo / scqat / scqo-qm / scqo-qblox / scqo-contrib (fragments written before the v1 rename use lchqmdriver/lchqbdriver - same repos; the consuming agent maps them)
 kind = "additive"                 # "breaking" (an existing user artifact must
                                   #   change to keep working) | "additive" (new
                                   #   experiments/features; nothing existing
