@@ -65,8 +65,8 @@ def test_menu_one_row_per_setup_and_marker_follows_user_selection(tmp_path):
     assert qm_row[:12].strip() == ""  # continuation row: device + cycle columns blank
     # backend + the DERIVED config folder (<cid>/<setup>/backend_config)
     assert "qblox" in qblox_row and "backend_config" in qblox_row
-    assert "LCHQBDriver" in qblox_row and ".venv-qblox" in qblox_row  # where it runs
-    assert "LCHQMDriver" in qm_row and "backend_config" in qm_row
+    assert "scqo-qblox" in qblox_row and ".venv-qblox" in qblox_row  # where it runs
+    assert "scqo-qm" in qm_row and "backend_config" in qm_row
     assert "simdev" in out and "simulated" in out
     assert "scqo user --device" in out  # the how-to-select footer
     assert out.count("<- selected") == 1

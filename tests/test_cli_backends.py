@@ -151,7 +151,7 @@ def test_missing_driver_names_repo_and_venv(tmp_path):
     with pytest.raises(SystemExit) as err:
         _backends.build_session(_lab(tmp_path))
     assert "'qblox_main'" in str(err.value)  # which setup demanded the driver
-    assert "LCHQBDriver" in str(err.value)
+    assert "scqo-qblox" in str(err.value)
     assert ".venv-qblox" in str(err.value)
     assert "uv pip install -e" in str(err.value)
 
