@@ -850,6 +850,35 @@ scqo run resonator_spectroscopy --targets q1
 
 …then views the figures at `http://<server>:8080`.
 
+### Merging data from another server
+
+When several control PCs each write their own local `data_root` (the SQLite rule
+above), aggregation is a **folder copy + reindex** — never a database-level merge:
+`index.sqlite` is a disposable cache holding nothing the folders don't, so the
+rebuilt index IS the merged database.
+
+```powershell
+robocopy \\otherPC\qpu_data D:\qpu_data /E /XF index.sqlite*
+D:\github\.venv-view\Scripts\python.exe -m scqo D:\qpu_data     # rebuild the index
+```
+
+- `/E`, **not `/MIR`** — an aggregate root collects several sources, and `/MIR`
+  would delete every other source's folders. `/XF index.sqlite*` skips the source's
+  index (the `-wal`/`-shm` siblings match too): a live server's WAL files must never
+  be copied, and the rebuild recreates the index locally anyway.
+- The layout merges by construction: day folders and `campaigns\` land under the
+  same `<device>\` tree, and run ids embed the device name + a millisecond stamp,
+  so cross-server collisions do not occur. A partially copied run (no
+  `record.json`) is skipped by the reindex and healed by re-running the copy —
+  copy + reindex is idempotent.
+- **Device and qubit names are the merge keys** (§2's moving-a-sample rule): the
+  same sample must carry the identical device name on every server, or its history
+  and trends split. `devices.toml` is hand-edited — reconcile it by hand.
+- Recurring aggregation only: run folders are not fully immutable — `scqo tag`,
+  `scqo accept` and `scqo suggest` rewrite `record.json` — so agree where runs are
+  tagged/decided. Under plain robocopy the SOURCE wins; a central edit to an
+  already-synced run is clobbered by the next pass.
+
 ## 6. Install troubleshooting
 
 **First move, always: `scqo doctor`** — venv, drivers, config chain, registries, one
