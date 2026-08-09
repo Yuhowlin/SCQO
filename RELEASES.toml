@@ -7,6 +7,15 @@
 # multi-agent rules in RELEASES.d/README.md). Appended by whoever lands a feature;
 # consumed into the next [vX-Y-Z] block and DELETED at release (RELEASING.md step 0).
 
+[v1-0-1]
+date = 2026-08-09
+scqo = "v1.0.1"                  # no code change; combo version-track
+scqo-qm = "v1.0.1"               # xyz-delay coarse pre-wait floored at QUA's 4-cycle minimum
+scqo-qblox = "v1.0.1"            # no code change; combo version-track
+scqo-contrib = "v0.12.0"         # still NOT in the combo
+scqat = "v0.15.0"                # unchanged pin
+notes = "FIX (scqo-qm) — qubit_xyz_delay: half_scan_ns < 16 baked the coarse pre-wait as wait(<4), legal to the qm client and to generate_qua_script but refused ONLY by the GATEWAY compiler at run time; now floored at QUA's 4-cycle minimum (timing-safe: the pre-wait positions the segment start, the XY-Z relative axis rides inside the baked segments) with an offline script-level wait-floor pin. No upgrade actions; SCQO and scqo-qblox tags are version-track only. KNOWN ISSUE RE-TARGET: the QM reset_method='active' qubit_ramsey hardware failure recorded at v1.0.0 moves to v1.0.2."
+
 [v1-0-0]
 date = 2026-08-09
 scqo = "v1.0.0"                  # THE deliberate 1.0: v1 driver restructure + campaign writeback + run --preview
