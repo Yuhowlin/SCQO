@@ -1,7 +1,7 @@
 name = "v1-restructure-scqo-qm-qblox"
-# LAST code commit per repo on the feature branches; REFRESH at the cutover
-# rebase (the branch SHAs change when rebased onto landed main).
-repos = { scqo = "4c120d4", scqo-qm = "148e68e", scqo-qblox = "22d289a" }
+# LAST code commit per repo at the cutover rebase (2026-08-09); the fragment
+# commit itself follows as ledger bookkeeping.
+repos = { scqo = "8672fdd", scqo-qm = "2983add", scqo-qblox = "0359cfc" }
 kind = "breaking"
 coupling = "All three move in lockstep at the combo tag; scqat: no floor. The SILENT hazard is state-vs-driver, not repo-vs-repo: a QM state.json migrated to scqo_qm.* under a pre-rename driver install - or an unmigrated one under the new - LOADS via QUAM's base-class fallback (a warning, wrong physics, not an error). Driver install and state migration are ONE atomic step per machine."
 validated = "offline 2026-08-09: full suites green (scqo-qm 308, scqo-qblox 266, SCQO 696+1skip, scqat 568); golden harness 35/35 QUA programs byte-identical vs the pre-restructure baseline at EVERY stage, two state profiles; load + to_dict round-trip + generate_config gates on every migrated state. No hardware run: no probe semantics changed (one deliberate contract edit: the tracker/tomography 3-tuple's third element is now the acquire CALLABLE, offline-covered)."
