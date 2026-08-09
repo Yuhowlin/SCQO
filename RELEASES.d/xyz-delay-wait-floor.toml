@@ -1,0 +1,6 @@
+name = "xyz-delay-wait-floor"
+repos = { scqo-qm = "863e36d" }
+kind = "fix"
+coupling = ""
+validated = "offline (suite 310 green; script-level wait-floor pin at half_scan_ns=5; cross-session verification that the floor is byte-identical at half_scan_ns >= 16)"
+notes = "qubit_xyz_delay: half_scan_ns < 16 baked the coarse pre-wait as wait(<4) - legal to the qm client and generate_qua_script, refused ONLY by the gateway compiler at run time. Floored at QUA's 4-cycle minimum (timing-safe: the pre-wait positions the segment start; the XY-Z relative axis rides inside the baked segments)."
