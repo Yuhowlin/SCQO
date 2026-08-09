@@ -336,14 +336,19 @@ class Session:
         return payload
 
     def preview(self, experiment: str, params: dict[str, Any], *,
-                out_dir: Path | str) -> dict:
+                out_dir: Path | str,
+                options: dict[str, Any] | None = None) -> dict:
         """Build ``experiment`` exactly as :meth:`run` would — defaults merge,
         Parameters validation, target gating, ``define_sweep()`` — then hand
         the un-executed build to the backend's duck-typed
-        ``preview(exp, out_dir)`` hook, which renders the vendor-native
-        sequence (Qblox ``Schedule`` / QUA program) to files. No hardware
-        runs, nothing is saved to the datastore, and estimate/update never
-        happen. Returns a JSON-able dict, never raises."""
+        ``preview(exp, out_dir, **options)`` hook, which renders the
+        vendor-native sequence (Qblox ``Schedule`` / QUA program) to files.
+        ``options`` are backend-specific keywords (e.g. the QM backend's
+        ``simulate_ns`` / ``no_simulate``); a backend refuses ones it cannot
+        honour by name. No hardware EXECUTION ever happens (the QM backend
+        may consult its gateway's simulator, never the qubits), nothing is
+        saved to the datastore, and estimate/update never happen. Returns a
+        JSON-able dict, never raises."""
         import warnings
 
         from pydantic import ValidationError
@@ -379,7 +384,7 @@ class Session:
             exp.sweep_axes = exp.define_sweep()
             with warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter("always", PreviewWarning)
-                files = hook(exp, Path(out_dir))
+                files = hook(exp, Path(out_dir), **(options or {}))
         except ValueError as err:  # a named refusal — pass through verbatim
             return {**base, "error": str(err)}
         except Exception as err:

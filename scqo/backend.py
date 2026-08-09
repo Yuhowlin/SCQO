@@ -28,17 +28,23 @@ class PreviewWarning(UserWarning):
 class Backend(ABC):
     """An instrument adapter.
 
-    Optional duck-typed hook — ``preview(experiment, out_dir) -> list[Path]``:
+    Optional duck-typed hook —
+    ``preview(experiment, out_dir, **options) -> list[Path]``:
     render the experiment's vendor-native sequence to files in ``out_dir``
-    without executing it (no instrument I/O, no state writes, nothing saved).
-    Deliberately NOT declared on this ABC: backends need not subclass it
-    (``Session`` resolves the hook via ``getattr``, exactly like
+    without executing it on the qubits (no state writes, nothing saved; a
+    backend MAY consult vendor tooling such as a gateway simulator, degrading
+    to its offline artifacts with a :class:`PreviewWarning` when that tooling
+    is unreachable). Deliberately NOT declared on this ABC: backends need not
+    subclass it (``Session`` resolves the hook via ``getattr``, exactly like
     ``power_context``), and preview has no benign empty default — a backend
     that cannot render must REFUSE BY NAME with a ``ValueError``. Contract:
     the caller has already set ``experiment.sweep_axes``; the backend builds
     the sequence exactly as ``acquire`` would, creates ``out_dir`` only after
     its refusal checks, and returns the written paths in display order.
-    Best-effort artifacts signal failure with :class:`PreviewWarning`.
+    ``options`` are backend-specific keywords (the QM backend's
+    ``simulate_ns``/``no_simulate``); accept ``**options`` and refuse an
+    option you cannot honour by name — never silently. Best-effort artifacts
+    signal failure with :class:`PreviewWarning`.
     """
 
     @property

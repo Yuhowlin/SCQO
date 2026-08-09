@@ -231,8 +231,10 @@ class SimulatedBackend:
                 data_vars[var] = (default_dims, val)
         return xr.Dataset(data_vars, coords=coords)
 
-    def preview(self, experiment, out_dir):
-        """Refuse by name: there is no vendor sequence to render here."""
+    def preview(self, experiment, out_dir, **options):
+        """Refuse by name: there is no vendor sequence to render here.
+        ``**options`` are accepted so the refusal (not a TypeError) is what
+        the user sees even with backend-specific flags on the command."""
         raise ValueError(
             "the simulated backend cannot preview: simulate() synthesizes "
             "data from the model and never builds a vendor sequence, so "

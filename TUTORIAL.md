@@ -220,8 +220,14 @@ vendor's own view of it to `./scqo_preview/<experiment>_<timestamp>/`
 (override with `--out DIR`), auto-opening each file — suppress with
 `--no-open`. On Qblox that is the interactive pulse diagram
 (`pulse_diagram.html`, zoomable in the browser) plus the absolute
-`timing_table.html`; on QM
-it is the generated QUA script (`qua_script.py`). Nothing touches hardware,
+`timing_table.html`; on QM it is the generated QUA script (`qua_script.py`)
+plus — when the OPX1000 gateway answers — `simulated_waveforms.html`, the
+gateway simulator's actual analog outputs (tried automatically, skipped with
+a warning when the cluster is unreachable; `--simulate-ns N` widens the
+simulated window from its 20 µs default, `--no-simulate` guarantees a fully
+offline preview; a thermal-reset shot starts with a millisecond wait, so its
+default window can be legitimately empty — the warning says so). No qubit
+ever plays: simulation runs on the gateway server. Nothing touches hardware,
 nothing is saved, no updates are suggested — and the simulated backend refuses
 by name (it never builds a vendor sequence). One cost note: the Qblox pulse
 diagram draws every sweep point of EVERY repetition (points x averages), so a

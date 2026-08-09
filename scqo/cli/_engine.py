@@ -30,7 +30,12 @@ def _check_preview_flags(args, name: str | None) -> None:
     --preview never runs, saves or updates, so every flag about running,
     saving or updating is a contradiction to name, not to ignore."""
     if not args.preview:
-        raise SystemExit("--out/--no-open only apply with --preview")
+        raise SystemExit(
+            "--out/--no-open/--simulate-ns/--no-simulate only apply with "
+            "--preview")
+    if args.simulate_ns is not None and args.no_simulate:
+        raise SystemExit("--simulate-ns and --no-simulate contradict each "
+                         "other; pick one")
     if not name:
         raise SystemExit(
             "--preview needs an experiment name: scqo run <name> --preview")
@@ -72,7 +77,12 @@ def _run_preview(sess, cfg, name, params, args, file_defaults) -> int:
             n += 1
     print(f"# preview: building {name} — no hardware, nothing saved",
           file=sys.stderr)
-    result = sess.preview(name, params, out_dir=out_dir)
+    options: dict = {}
+    if args.simulate_ns is not None:
+        options["simulate_ns"] = args.simulate_ns
+    if args.no_simulate:
+        options["no_simulate"] = True
+    result = sess.preview(name, params, out_dir=out_dir, options=options)
     print(json.dumps(result, indent=2))
     for warning in result.get("warnings", []):
         print(f"# preview warning: {warning}", file=sys.stderr)
@@ -170,6 +180,14 @@ def run_experiment_cli(
                                     "(default: ./scqo_preview/<experiment>_<timestamp>/)")
     preview_group.add_argument("--no-open", action="store_true",
                                help="do not auto-open the rendered files")
+    preview_group.add_argument("--simulate-ns", type=int, metavar="NS",
+                               help="QM only: simulated-waveform window in ns "
+                                    "(default 20000; the gateway simulator is "
+                                    "tried automatically and skipped with a "
+                                    "warning when unreachable)")
+    preview_group.add_argument("--no-simulate", action="store_true",
+                               help="QM: skip the gateway simulator — script "
+                                    "dump only, guaranteed fully offline")
     # Repeating ONE experiment is still running one experiment, so it lives here
     # rather than in a wrapper. An ordered BUNDLE of experiments is a different
     # input and lives in `scqo campaign <plan.toml>`.
@@ -194,7 +212,8 @@ def run_experiment_cli(
     args = parser.parse_args(argv)
     name = experiment or args.experiment
 
-    if args.preview or args.out or args.no_open:
+    if (args.preview or args.out or args.no_open
+            or args.simulate_ns is not None or args.no_simulate):
         _check_preview_flags(args, name)  # fail fast: no session needed
 
     sess, cfg = build_session(args.config)

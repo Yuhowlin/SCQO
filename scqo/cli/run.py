@@ -10,9 +10,13 @@
 Works from any directory in the right venv. Parameters: code defaults <
 ~/.scqo/parameters.toml < --params/--set; see every knob with ``--help`` after the
 experiment name. ``--preview`` writes the vendor's own view of the sequence
-(Qblox: interactive pulse diagram + timing table; QM: the generated QUA script)
-to ./scqo_preview/<experiment>_<timestamp>/ and auto-opens it — redirect with
-``--out DIR``, suppress opening with ``--no-open``.
+(Qblox: interactive pulse diagram + timing table; QM: the generated QUA script
+plus, when the gateway answers, simulated output waveforms) to
+./scqo_preview/<experiment>_<timestamp>/ and auto-opens it — redirect with
+``--out DIR``, suppress opening with ``--no-open``. On QM the simulator is
+tried automatically and skipped with a warning when the gateway is down;
+``--simulate-ns N`` widens the simulated window, ``--no-simulate`` guarantees
+a fully offline preview.
 """
 
 from __future__ import annotations

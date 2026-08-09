@@ -55,6 +55,21 @@ class RefusingBackend(SimulatedBackend):
         raise ValueError("custom named refusal")
 
 
+class OptionsBackend(SimulatedBackend):
+    """Records the backend-specific options the Session forwarded."""
+
+    def __init__(self, device) -> None:
+        super().__init__(device)
+        self.seen_options = None
+
+    def preview(self, experiment, out_dir, **options):
+        self.seen_options = options
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / "sequence.txt"
+        path.write_text("x", encoding="utf-8")
+        return [path]
+
+
 class NoHookBackend(SimulatedBackend):
     preview = None  # getattr(..., "preview", None) -> the missing-hook branch
 
@@ -142,6 +157,22 @@ def test_preview_hook_refusal_passes_through_verbatim(make_session, tmp_path):
     assert result["error"] == "custom named refusal"
 
 
+def test_preview_forwards_backend_options(make_session, tmp_path):
+    sess = make_session(OptionsBackend)
+    result = sess.preview("resonator_spectroscopy", {"targets": ["q0"]},
+                          out_dir=tmp_path / "prev",
+                          options={"simulate_ns": 5000, "no_simulate": False})
+    assert "error" not in result
+    assert sess.backend.seen_options == {"simulate_ns": 5000,
+                                         "no_simulate": False}
+    # and the simulated backend's refusal survives options (no TypeError)
+    sim = make_session(SimulatedBackend)
+    refused = sim.preview("resonator_spectroscopy", {"targets": ["q0"]},
+                          out_dir=tmp_path / "prev2",
+                          options={"no_simulate": True})
+    assert "nothing to render" in refused["error"]
+
+
 def test_preview_collects_preview_warnings(make_session, tmp_path):
     sess = make_session(WarningBackend)
     result = sess.preview("resonator_spectroscopy", {"targets": ["q0"]},
@@ -171,7 +202,10 @@ def stub_config(tmp_path, monkeypatch):
     (["qubit_ramsey", "--preview", "--accept"], "--accept"),
     (["qubit_ramsey", "--preview", "--repeat", "3"], "--repeat"),
     (["qubit_ramsey", "--preview", "--tag", "x", "--note", "y"], "--tag"),
-    (["qubit_ramsey", "--out", "somewhere"], "--out/--no-open only apply"),
+    (["qubit_ramsey", "--out", "somewhere"], "only apply with --preview"),
+    (["qubit_ramsey", "--simulate-ns", "5000"], "only apply with --preview"),
+    (["qubit_ramsey", "--preview", "--simulate-ns", "5000", "--no-simulate"],
+     "contradict"),
     (["--preview"], "needs an experiment name"),
 ])
 def test_cli_preview_flag_conflicts(stub_config, argv, fragment):
