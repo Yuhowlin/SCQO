@@ -1,0 +1,6 @@
+name = "campaign-figure-duplicate-steps"
+repos = { scqo = "980cfc1" }
+kind = "fix"
+coupling = ""
+validated = "offline (tests/test_campaign.py 78 green incl. 2 new; tests/test_cli_campaign.py 23 green)"
+notes = "statistics.png: a plan listing the SAME experiment at several steps of one repeat had later occurrences overwrite earlier ones in the figure's series (collect() indexed by repeat_idx alone), so it drew only the last occurrence and its n/mean/std/slope annotations disagreed with the manifest statistics. Now one slot per occurrence (repeat_idx * n_occurrences + step-position rank), matching aggregate()'s walk, with aligned None gaps for runs missing from failed/partial repeats. Re-render affected figures with `scqo campaign --show <id> --plot`."
