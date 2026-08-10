@@ -97,22 +97,46 @@ def refit_readout(store, run: dict) -> dict[str, dict[str, float]]:
 
 
 def collect(store, campaign_id: str, *, refit: bool = False):
-    """``{(experiment, target, quantity): [value per repeat]}`` + the repeat clock.
+    """``{(experiment, target, quantity): [value per slot]}`` + the slot clock.
 
-    A repeat whose fit did not resolve contributes ``None``, never a dropped slot,
-    so every series stays aligned with the repeat index and ``n_missing`` is truthful.
+    Slots follow :func:`scqo.campaign.aggregate`'s walk exactly: a plan that lists
+    the SAME experiment at several step positions of one repeat gives it one slot
+    PER OCCURRENCE, in step order — never the last occurrence overwriting the
+    repeat's slot. The flat index is ``repeat_idx * n_occurrences + occurrence``,
+    where ``occurrence`` is the rank of the run's ``step_idx`` among every step
+    position that experiment occupies in the campaign — so a run missing from a
+    failed or partial repeat leaves an aligned ``None`` gap, never a shifted
+    series, and ``n_missing`` stays truthful against the repeat clock. A repeat
+    whose fit did not resolve likewise contributes ``None``, never a dropped slot.
     """
     runs = store.campaign_runs(campaign_id)
     if not runs:
         return {}, {}, []
 
-    slot: dict[str, int] = defaultdict(int)
+    # The occurrence geometry, recovered from the stamped (repeat_idx, step_idx):
+    # ranking against the positions seen ANYWHERE in the campaign means one
+    # repeat's missing run cannot shift its neighbours into the wrong slot.
+    positions: dict[str, set[int]] = defaultdict(set)
+    n_repeats = 0
+    for run in runs:
+        if run["repeat_idx"] is not None:
+            n_repeats = max(n_repeats, run["repeat_idx"] + 1)
+            if run["step_idx"] is not None:
+                positions[run["experiment"]].add(run["step_idx"])
+    rank = {exp: {step: occ for occ, step in enumerate(sorted(steps))}
+            for exp, steps in positions.items()}
+
+    slot: dict[str, int] = defaultdict(int)  # fallback for unstamped rows only
     series: dict[tuple[str, str, str], dict[int, float]] = defaultdict(dict)
     stamps: dict[str, dict[int, datetime]] = defaultdict(dict)
     for run in runs:
         experiment = run["experiment"]
-        index = run["repeat_idx"] if run["repeat_idx"] is not None else slot[experiment]
-        slot[experiment] = index + 1
+        ranks = rank.get(experiment) or {}
+        if run["repeat_idx"] is not None and run["step_idx"] in ranks:
+            index = run["repeat_idx"] * len(ranks) + ranks[run["step_idx"]]
+        else:
+            index = slot[experiment]
+        slot[experiment] = max(slot[experiment], index + 1)
         stamps[experiment][index] = datetime.fromisoformat(run["started_at"])
         fits = run["fit"] or {}
         if refit and experiment == "single_shot_readout":
@@ -126,9 +150,16 @@ def collect(store, campaign_id: str, *, refit: bool = False):
                 if isinstance(value, (int, float)) and not isinstance(value, bool):
                     series[(experiment, target, quantity)][index] = float(value)
 
-    width = max((max(s) for s in stamps.values() if s), default=-1) + 1
-    dense = {key: [vals.get(i) for i in range(width)] for key, vals in series.items()}
-    clock = {exp: [s.get(i) for i in range(width)] for exp, s in stamps.items()}
+    def width(experiment: str) -> int:
+        # Every experiment spans the campaign's full repeat count (a repeat whose
+        # run never persisted stays a None gap); per experiment, because
+        # occurrence counts differ. The max() covers the unstamped fallback path.
+        occurrences = len(rank.get(experiment) or ()) or 1
+        return max(n_repeats * occurrences, max(stamps[experiment], default=-1) + 1)
+
+    dense = {key: [vals.get(i) for i in range(width(key[0]))]
+             for key, vals in series.items()}
+    clock = {exp: [s.get(i) for i in range(width(exp))] for exp, s in stamps.items()}
     return dense, clock, runs
 
 

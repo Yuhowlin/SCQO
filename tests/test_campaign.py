@@ -1161,3 +1161,63 @@ def test_campaign_statistics_rows_folds_twins_and_splits_arrays():
     assert by_q["t1_s"]["scatter_ratio"] == 3.9
     assert by_q["t1_s"]["stderr_key"] == "t1_stderr_s"
     assert by_q["per_point"]["nonscalar"] is True
+
+
+# ------------------------------------------------- the statistics figure's collect
+
+def test_duplicate_step_plan_gives_the_figure_one_slot_per_occurrence(session):
+    """A plan that lists the SAME experiment three times per repeat (a legitimate
+    stability shape) must give the figure's series one slot per occurrence, in
+    step order — exactly aggregate()'s slotting — never the last occurrence
+    overwriting the repeat's slot and the annotations disagreeing with what
+    `scqo campaign --show` prints."""
+    from scqo.cli._campaign_plot import collect
+
+    out = session.run_campaign(CampaignPlan(
+        label="triple_t1", repeat=2, defaults={"targets": ["q0"]},
+        skip_artifacts=True,
+        steps=[{"experiment": "qubit_relaxation"}] * 3))
+
+    series, clock, runs = collect(session.datastore, out["campaign_id"])
+    key = ("qubit_relaxation", "q0", "t1_s")
+    assert len(runs) == 6
+    assert len(series[key]) == 6                    # occurrences x repeats
+    assert all(v is not None for v in series[key])  # nothing overwritten away
+    assert len(clock["qubit_relaxation"]) == 6
+    assert all(t is not None for t in clock["qubit_relaxation"])
+
+    # The figure's summarize() over collect()'s series is the same n/mean the
+    # manifest statistics printed — the module-docstring promise.
+    manifest_stat = out["statistics"]["qubit_relaxation"]["q0"]["t1_s"]
+    figure_stat = summarize(series[key])
+    assert figure_stat["n"] == manifest_stat["n"] == 6
+    assert figure_stat["mean"] == pytest.approx(manifest_stat["mean"])
+
+
+def test_collect_leaves_an_aligned_gap_for_a_missing_occurrence():
+    """A run that never persisted (a hard-failed step mid-campaign) must leave a
+    None at ITS flat slot — aggregate() slots that step as missing, so shifting
+    the later occurrences down would misalign the two."""
+    from scqo.cli._campaign_plot import collect
+
+    def _run(repeat_idx, step_idx, second, t1):
+        return {"experiment": "qubit_relaxation", "repeat_idx": repeat_idx,
+                "step_idx": step_idx, "started_at": f"2026-08-10T00:00:{second:02d}",
+                "fit": {"q0": {"t1_s": t1}}}
+
+    # qubit_relaxation at step positions 0 and 2 (occurrences 0 and 1); the run
+    # at (repeat 1, step 2) is missing.
+    runs = [_run(0, 0, 0, 1.0), _run(0, 2, 1, 2.0),
+            _run(1, 0, 2, 3.0),
+            _run(2, 0, 4, 5.0), _run(2, 2, 5, 6.0)]
+
+    class _Store:
+        def campaign_runs(self, campaign_id):
+            return runs
+
+    series, clock, _ = collect(_Store(), "cid")
+    values = series[("qubit_relaxation", "q0", "t1_s")]
+    assert values == [1.0, 2.0, 3.0, None, 5.0, 6.0]  # gap at 1*2 + 1, aligned
+    assert clock["qubit_relaxation"][3] is None
+    stat = summarize(values)
+    assert (stat["n"], stat["n_missing"]) == (5, 1)
