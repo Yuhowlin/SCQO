@@ -1,6 +1,0 @@
-name = "qm-session-hardening"
-repos = { scqo-qm = "fa1ba06" }
-kind = "fix"
-coupling = ""
-validated = "hardware 5Q4C q1 2026-08-10 (live mid-run stall halted by the new watchdog in 300 s, QOP left free); active reset itself exonerated + validated (chipA 2026-07/08 history + 5Q4C run 20260809-231319); full suite 322 passed. STILL OPEN (operator deferred the QPX1000_4 restart): post-restart active-reset re-check + the power_rabi/echo/tracker census — intended as a follow-up patch release once done"
-notes = "BEHAVIOR CHANGE (failure paths only): QM runs now go through scqo_qm's own session door (_lib.qm_job) instead of qualang_tools' qm_session - runs that previously hung forever (zombie job) or died as an empty 'Exception: ' now fail BOUNDED with the real gateway error text + the cluster clear/restart playbook, and always halt their job so a dead run can no longer leave a stale QM blocking the next one at the QOP-free timeout. Healthy runs unchanged. The v1.0.1-noted 'qubit_ramsey active-reset hardware failure' was a degraded-QPX1000_4 cluster state that stalls EVERY feedback program at num_averages/2 shots (thermal twins pass; identical-firmware chipA cluster passes the same shapes) - remedy is the cluster restart, not a code change; evidence in scqo_qm/experiments/_reset.py + _lib.py docstrings."
