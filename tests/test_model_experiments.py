@@ -24,7 +24,7 @@ from scqo.testing import (
 #: zero suggestions is their CORRECT outcome.
 RECORD_ONLY = {"qubit_sqrb", "qubit_tomography", "qubit_echo_flux_pulse",
                "qubit_relaxation_flux_pulse", "pair_swap_chevron", "pair_swap_flux_map",
-               "qc_n_swap_amp", "qubit_t1_ade", "qubit_t1_bayesian"}
+               "qc_n_swap_amp", "qc_n_stark_amp", "qubit_t1_ade", "qubit_t1_bayesian"}
 
 
 #: the readout reference an accepted single_shot_readout would have left behind.
@@ -311,6 +311,7 @@ def test_spectroscopy_cryoscope_window_and_drive_len_validation():
     ("pair_swap_chevron", ("flux_amp_v", "swap_time_ns")),
     ("pair_swap_flux_map", ("qubit_flux_v", "coupler_flux_v")),
     ("qc_n_swap_amp", ("flux_amp_v", "swap_count")),
+    ("qc_n_stark_amp", ("stark_amp", "swap_count")),
 ])
 def test_pair_swap_maps_summarize_the_transfer(session, name, axes):
     """The record-only payload: the peak of the UNDRIVEN member's population

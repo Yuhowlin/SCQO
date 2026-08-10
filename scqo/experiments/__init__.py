@@ -158,6 +158,7 @@ from ._capabilities import (  # noqa: E402
 from .pair_swap_chevron import PairSwapChevron  # noqa: E402
 from .pair_swap_flux_map import PairSwapFluxMap  # noqa: E402
 from .pair_zz_coupler import PairZZCoupler  # noqa: E402
+from .qc_n_stark_amp import QcNStarkAmp  # noqa: E402
 from .qc_n_swap_amp import QcNSwapAmp  # noqa: E402
 from .qubit_ramsey_cryoscope import QubitRamseyCryoscope  # noqa: E402
 from .qubit_deterministic_benchmarking import QubitDeterministicBenchmarking  # noqa: E402
@@ -203,7 +204,7 @@ __all__ = [
     "joint_state_labels", "joint_to_marginals", "member_order",
     "states_to_joint_population",
     "PairSwapChevron", "PairSwapFluxMap",
-    "PairZZCoupler", "QcNSwapAmp", "QubitRamseyCryoscope", "QubitDeterministicBenchmarking", "QubitDragAlternating", "QubitDragEquator", "QubitEcho",
+    "PairZZCoupler", "QcNStarkAmp", "QcNSwapAmp", "QubitRamseyCryoscope", "QubitDeterministicBenchmarking", "QubitDragAlternating", "QubitDragEquator", "QubitEcho",
     "QubitEchoFluxPulse", "QubitParitySwitchContinuous", "QubitParitySwitchDiscrete",
     "QubitPiPulseError", "QubitPowerRabi", "QubitRamsey",
     "QubitRelaxation", "QubitRelaxationFluxPulse", "QubitSQRB",

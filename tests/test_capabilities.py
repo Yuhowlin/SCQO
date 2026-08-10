@@ -97,6 +97,7 @@ EXPECTED_TAGS = {
     # probes hardcode discrimination, so no state_readout tag either.
     "pair_swap_chevron": ["qubit_reset"],
     "pair_swap_flux_map": ["qubit_reset"],
+    "qc_n_stark_amp": ["qubit_reset"],
     "qc_n_swap_amp": ["qubit_reset"],
     "single_shot_readout": ["qubit_reset"],
     "single_shot_readout_gef": ["qubit_reset"],
