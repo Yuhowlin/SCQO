@@ -1,0 +1,6 @@
+name = "history-sqlite-viewer-restructure"
+repos = { scqo = "4463cb8" }
+kind = "breaking"
+coupling = ""
+validated = "offline (full suite 760 green + simulated end-to-end viewer walk, two cooldowns x two setups)"
+notes = "Change history moved off JSONL into per-context scqo/history.sqlite TRUTH databases (fresh start, NO migration — old *.history.jsonl files are dead, delete at leisure; provenance reads 'unrecorded' until the first new change; per-CONTEXT so multi-server aggregation stays a pure folder copy), and the viewer restructured: per-setup pages under every cooldown cycle (current + previous run link per parameter), a device-page physical-facts matrix, and change-history-driven /trends (?entity=&field=; port 1 = latest 50 per setup, port 2 = cross-cooldown facts) — DataStore.fit_trend + report.REPORTABLE_QUANTITIES DELETED. UPGRADE REQUIRES: upgrade every state-writing machine together (an old-version session keeps writing sidecars the new code never reads, so last-wins is unreliable while versions are mixed); never delete history.sqlite (truth, not the index); robocopy aggregation lines add /XF *.sqlite-wal *.sqlite-shm (INSTALL 'Merging data from another server')."
