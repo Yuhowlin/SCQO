@@ -7,6 +7,15 @@
 # multi-agent rules in RELEASES.d/README.md). Appended by whoever lands a feature;
 # consumed into the next [vX-Y-Z] block and DELETED at release (RELEASING.md step 0).
 
+[v1-0-2]
+date = 2026-08-10
+scqo = "v1.0.2"                  # campaign statistics.png: one figure slot per occurrence for duplicate-step plans
+scqo-qm = "v1.0.2"               # no code change; combo version-track (v1.0.1-equivalent tree — qm-session-hardening still deferred)
+scqo-qblox = "v1.0.2"            # no code change; combo version-track
+scqo-contrib = "v0.12.0"         # still NOT in the combo
+scqat = "v0.15.0"                # unchanged pin
+notes = "FIX (scqo) — campaign statistics.png drew duplicate-step plans wrong. A plan listing the SAME experiment at several step positions of one repeat (e.g. a 3xT1 stability bundle) had later occurrences OVERWRITE earlier ones in the figure's series, because collect() indexed each child run by repeat_idx ALONE — so the figure plotted only the LAST occurrence per repeat and its n/mean/std/slope annotations DISAGREED with the manifest statistics that `scqo campaign --show` prints (aggregate() had always slotted every (repeat, step) occurrence in step order). collect() now gives one figure slot per occurrence (index = repeat_idx * n_occurrences + step-position rank, ranked against the step positions the experiment occupies campaign-wide), matching aggregate()'s walk, with aligned None gaps for runs missing from a failed or partial repeat. FIGURES ONLY — campaign.json statistics, the writeback aggregates and every run folder were always correct and are unchanged; affected campaigns re-render correctly with `scqo campaign --show <id> --plot`. No upgrade actions. scqo-qm and scqo-qblox are version-track re-tags (tree-identical to v1.0.1); scqo-qm stays at its v1.0.1-equivalent reverted state — the qm-session-hardening session-door change remains deferred pending the QPX1000_4 restart. KNOWN ISSUE FROM v1.0.0/v1.0.1 RESOLVED: the QM reset_method='active' qubit_ramsey hardware failure (deferred here from v1.0.1) was diagnosed 2026-08-10 and active reset was EXONERATED — the cause was the degraded-cluster feedback stall (every feedback program stalls at num_averages/2 shots), an operator cluster-restart matter, not an experiment or code defect; no QM code ships for it in this release."
+
 [v1-0-1]
 date = 2026-08-09
 scqo = "v1.0.1"                  # no code change; combo version-track
