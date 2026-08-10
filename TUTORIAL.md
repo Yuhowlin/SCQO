@@ -251,11 +251,11 @@ T1, T2*, T2echo on the qubit mode, the flux maps' `flux_offset`/`flux_per_phi0`
 on the z channel, `ej_sum_hz`/`f_r0_hz`/`g_hz` — lands in `physical.json` beside
 it (same accept flow). A third role, `monitor` (`fidelity_g`/`fidelity_e`, the
 blob positions), records measured performance OF the current knobs: stored in
-`scqo_state.json` but never pushed anywhere. Each
-values file keeps its full change history in an append-only sidecar
-(`scqo_state.history.jsonl` / `physical.history.jsonl`) — never edit any of them
-by hand: a hand-edit skips the instrument push and shows as `(externally
-changed)`; use `scqo suggest` instead. An estimate is only as clean as the chain it came through (a noisy drive
+`scqo_state.json` but never pushed anywhere. The context's full change history
+lives in `history.sqlite` beside the two values files (one database per
+(cooldown, setup), both stores) — never edit any of them by hand: a hand-edit
+skips the instrument push and shows as `(externally changed)`; use
+`scqo suggest` instead. An estimate is only as clean as the chain it came through (a noisy drive
 line shortens the measured T2; the flux transfer function depends on the wiring), so each context's
 physics stands on its own — compare across contexts via `scqo find` / the trends
 page, never average. The setup-independent "true" sample physics is a future
@@ -638,14 +638,15 @@ One command opens the lab's data as a website (one-time: viewer extras via
 python -m scqo.viewer            # -> http://127.0.0.1:8080
 ```
 
-Five pages (port convention: **8001 qualibrate · 8080 viewer · 8081 datasette** —
+Six pages (port convention: **8001 qualibrate · 8080 viewer · 8081 datasette** —
 all can run at once):
 
 - **Runs** — filter by experiment / qubit / tag / outcome / date / campaign, plus a
   **pending only** checkbox for runs with undecided suggested updates; click any run.
   Runs whose accepted values are still **LIVE on the device** carry a green
   `live:` line naming those fields — the at-a-glance answer to *"which runs is my
-  device built from?"*. A campaign child links to its campaign right in the row.
+  device built from?"*. A campaign child links to its campaign right in the row,
+  and the setup column links each run's own setup page.
 - **Campaigns** — every campaign with its status, repeat progress and a pending
   badge for undecided aggregate suggestions; the detail page shows the statistics
   table, `statistics.png`, the suggestion groups with their decisions (deciding
@@ -659,19 +660,28 @@ all can run at once):
   linking the run that superseded it), and the device before → after diff. You can
   **add/remove tags and edit the note right here** — the viewer's only write,
   equivalent to `scqo tag`.
-- **Trends** — opens with the sample list; pick a sample, then chart a fitted
-  quantity vs time per qubit (`t1_s`, `t2_star_s`, `ej_sum_hz`, `readout_freq_hz`,
-  `pi_amp`, ...): coherence drift at a glance, every point linking to its run. A
-  trend is always scoped to ONE sample — qubit names repeat across chips, so
-  there is no cross-sample union and no silent default.
 - **Samples** — opens with an overview of EVERY sample in the data_root
-  (description, active cooldown, latest run — including freshly added samples
-  with no runs yet); click one for its detail page: the current calibration and
-  the sample's **physical parameters** (`physical.json`), where every value links
-  to the run that set it (`(manual)` and `(externally changed)` marked honestly),
-  plus both change histories, each entry linking to the run that caused it. The
-  viewer is account-independent: it serves the whole lab regardless of who
-  launched it or what their `user.toml` selects.
+  (description, the active cycle's setups as links, latest run — including
+  freshly added samples with no runs yet); click one for its detail page: the
+  `devices.toml` card, **every cooldown cycle with every setup linked** (closed
+  cycles stay browsable), and the **physical-properties matrix** — one row per
+  measured fact, one column per (cooldown, setup), each cell the latest value
+  there; a row opens that fact's cross-cooldown trend. The viewer is
+  account-independent: it serves the whole lab regardless of who launched it or
+  what their `user.toml` selects.
+- **Setup page** (`/setup/<device>/<cooldown>/<setup>`) — one page per setup of
+  every cycle: the cycle facts + setup metadata, the current **calibration** and
+  **physical parameters** tables where each row shows the value, its unit, the
+  run the CURRENT value came from, and the run the PREVIOUS value came from
+  (`(manual)` and `(externally changed)` marked honestly). Every parameter NAME
+  links its change trend, scoped to this setup.
+- **Trends** — charts the **change history** (the accepted lineage — what the
+  device actually used), never per-run fits. Two ports: from a setup page, a
+  parameter name shows its **latest 50 changes in that setup**; from the device
+  page's matrix, a physical fact charts **across every cooldown and setup**
+  (points colored per context, dashed lines at cooldown boundaries, every point
+  linking its run). A trend is always scoped to ONE sample — qubit names repeat
+  across chips, so there is no cross-sample union and no silent default.
 
 Power users: `python -m scqo.browse` still serves raw datasette on **8081** for
 ad-hoc SQL, facets and CSV export (same canned queries as before).

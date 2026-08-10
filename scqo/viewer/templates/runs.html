@@ -41,7 +41,7 @@
     <td>{{ r.started_at[:16] }}</td>
     <td>{{ r.device }}</td>
     <td>{{ r.cooldown or "-" }}</td>
-    <td>{{ r.setup or "-" }}</td>
+    <td>{% if r.cooldown and r.setup %}<a href="/setup/{{ r.device }}/{{ r.cooldown }}/{{ r.setup }}">{{ r.setup }}</a>{% else %}{{ r.setup or "-" }}{% endif %}</td>
     <td>{{ r.experiment }}</td>
     <td>{{ r.targets | join(", ") }}</td>
     <td><span class="badge {{ r.outcome }}">{{ r.outcome }}</span></td>

@@ -36,17 +36,16 @@ INSTRUMENT_FIELD_ORDER = catalog_fields("knob", "monitor")
 #: error); `pop_*_prep_*` are the FITTED blob weights (population alone).
 FIT_ONLY_QUANTITIES = ("p_e_given_g", "p_g_given_e", "pop_e_prep_g", "pop_g_prep_e")
 
-#: Everything worth OFFERING as a trend: measured physics, then monitors, then
-#: calibration knobs. Derived from the kind catalogs by field ROLE, never a
-#: hand-kept list — an experiment writing catalogued fields is covered for free
-#: and a quantity cannot rot out of the set. Consumer: the viewer's /trends menu,
-#: where trending a knob over time is a legitimate question.
-REPORTABLE_QUANTITIES = (
-    *PHYSICAL_FIELD_ORDER,
-    *catalog_fields("monitor"),
-    *catalog_fields("knob"),
-    *FIT_ONLY_QUANTITIES,
-)
+#: Catalog unit per field name (declaration order, first kind wins — a field
+#: name never carries two different units across kinds). Derived, never
+#: hand-kept. Consumer: the viewer's per-parameter unit column; composite
+#: per-operation knobs are minted at runtime and simply miss (empty unit).
+FIELD_UNITS: dict[str, str] = {}
+for _kinds in (MODES, COMPOSITES, CHANNELS):
+    for _spec in _kinds.values():
+        for _f, _fs in _spec.fields.items():
+            FIELD_UNITS.setdefault(_f, _fs.unit)
+del _kinds, _spec, _f, _fs
 
 #: The subset that can actually MOVE on its own: facts and monitors the fit
 #: measured, never knobs. A knob appearing in a fit dict is the standing value the

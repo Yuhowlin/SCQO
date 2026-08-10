@@ -7,11 +7,11 @@ still equals the live value. A drifted value (the vendor reseeded at startup,
 qualibrate wrote QUAM directly, someone hand-edited a config) is reported as
 "external" — a run is NEVER credited for a value the device no longer runs.
 
-Pure functions over plain dicts, no I/O: the viewer feeds them a context's state
-files (``scqo_state.json`` / ``physical.json`` values plus their
-``.history.jsonl`` sidecars in the same ``<cooldown>/<setup>/scqo/`` folder — all
-per (cooldown, setup), so the whole store belongs to one context and no
-slicing/filtering is needed), the CLI feeds them a Session's live state
+Pure functions over plain dicts, no I/O: the viewer feeds them a context's
+values (``scqo_state.json`` / ``physical.json``) plus rows from the same
+``<cooldown>/<setup>/scqo/`` folder's ``history.sqlite`` (:mod:`scqo.changes`)
+— because the forward pass keeps only the LAST record per key, the latest row
+per key is a fully valid "history" — the CLI feeds them a Session's live state
 (``scqo state --sources`` via :func:`scqo.report.live_sources`), and both get
 the same answer for the same facts.
 """

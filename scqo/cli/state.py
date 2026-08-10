@@ -112,10 +112,9 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
             return _print_physical(sess, args.entity)
         return _print_state(sess, args.entity)
 
-    records = sess.history(store="physical" if args.physical else "state")
-    if args.entity:
-        records = [r for r in records if r['entity'] == args.entity]
-    for r in records[-args.history:]:
+    records = sess.history(store="physical" if args.physical else "state",
+                           entity=args.entity or None, limit=args.history)
+    for r in records:
         old = f"{r['old']:.6g}" if isinstance(r["old"], float) else r["old"]
         new = f"{r['new']:.6g}" if isinstance(r["new"], float) else r["new"]
         setup = f"  setup={r['setup']}" if r.get("setup") else ""

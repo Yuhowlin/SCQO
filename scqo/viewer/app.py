@@ -1,25 +1,33 @@
 """The SCQO run-viewer — the lab's daily data GUI (port 8080 by convention).
 
-Reads ONLY the datastore (run folders + index) and the per-(cooldown, setup)
-SCQO files — ``scqo_state.json`` + ``physical.json`` (each with its
-``.history.jsonl`` sidecar) in each context's
-``<device>/<cooldown>/<setup>/scqo/`` folder (always under data_root, resolved by
-``scqo.datastore.setup_scqo_dir``). No Session, no backend, no vendor imports — it
-runs anywhere the data drive is mounted. The single mutating route is tag/note
-editing, which writes to ``record.json`` + the index exactly like ``scqo tag``
-(never instruments, never measurement data).
+Reads ONLY the datastore (run folders + index), the per-(cooldown, setup)
+SCQO values files — ``scqo_state.json`` + ``physical.json`` in each context's
+``<device>/<cooldown>/<setup>/scqo/`` folder (always under data_root, resolved
+by ``scqo.datastore.setup_scqo_dir``) — and each context's ``history.sqlite``
+change-history database (:mod:`scqo.changes`), strictly read-only: the viewer
+never creates, migrates or writes a history database. No Session, no backend,
+no vendor imports — it runs anywhere the data drive is mounted. The single
+mutating route is tag/note editing, which writes to ``record.json`` + the
+index exactly like ``scqo tag`` (never instruments, never measurement data).
 """
 
 from __future__ import annotations
 
 import json
+import sqlite3
+from html import escape
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from .._state_io import read_history
+from ..changes import (
+    HISTORY_FILE,
+    ChangeDB,
+    collect_fact_matrix,
+    collect_fact_series,
+)
 from ..datastore import (
     STATE_FILE,
     DataStore,
@@ -33,13 +41,12 @@ from ..datastore import (
 # matplotlib lazily, so this costs nothing and keeps one naming authority.
 from ..cli._campaign_plot import STATISTICS_PNG
 from ..provenance import live_run_map, live_sources, summarize_live
-# Catalog-derived field orders live in report.py (renderer-free, no fastapi), so
-# the CLI's campaign progress can pick its headline quantity from the SAME set
-# the /trends menu offers — one definition, two consumers.
+# Catalog-derived field orders + units live in report.py (renderer-free, no
+# fastapi) — one definition shared with the CLI's own reports.
 from ..report import (
+    FIELD_UNITS,
     INSTRUMENT_FIELD_ORDER,
     PHYSICAL_FIELD_ORDER,
-    REPORTABLE_QUANTITIES,
     campaign_statistics_rows,
 )
 from ..stores import PHYSICAL_FILE
@@ -63,6 +70,9 @@ def create_app(data_root: str | Path) -> FastAPI:
         except (OSError, json.JSONDecodeError):
             return None
 
+    def _values_of(path: Path) -> dict:
+        return (_read_json(path) or {}).get("values", {})
+
     def _scqo_dir(dev: str, cooldown: str, setup: str) -> Path | None:
         """The (device, cooldown, setup) ``scqo/`` folder, or None when the stamps
         are not a valid context (a setup-less run, a blank cooldown). Never raises —
@@ -74,44 +84,68 @@ def create_app(data_root: str | Path) -> FastAPI:
         except ValueError:
             return None
 
-    def _active_scqo_dirs(dev: str) -> tuple[str, dict[str, Path]]:
-        """``(active cooldown id, {setup name: scqo dir})`` for the device's ACTIVE
-        cycle. ``("", {})`` when the registry is absent/broken or has no active cycle
-        — the viewer must render regardless, and this runs on the home page, so a
-        broken (ValueError) or unreadable (OSError) registry degrades, never 500s."""
+    def _latest_pairs(scqo_dir: Path | None, store_name: str) -> dict:
+        """One context's {(entity, field): [latest, previous|None]} from its
+        history database; {} where the context or database is absent/unreadable
+        (degrade-never-500 — ChangeDB reads never create the file)."""
+        if scqo_dir is None:
+            return {}
         try:
-            active = active_cooldown(load_cooldowns(store.data_root, dev))
+            return ChangeDB(scqo_dir / HISTORY_FILE).latest_two(store_name)
+        except (OSError, sqlite3.Error):
+            return {}
+
+    def _sources_from_pairs(values: dict, pairs: dict) -> dict:
+        """live_sources fed from the database's latest row per key — a
+        one-record-per-key list is a valid history for its forward pass."""
+        return live_sources(values, [p[0] for p in pairs.values() if p and p[0]])
+
+    def _context_sources(scqo_dir: Path | None) -> tuple[dict, dict]:
+        """(state sources, physical sources) of one context."""
+        if scqo_dir is None:
+            return {}, {}
+        inst = _sources_from_pairs(_values_of(scqo_dir / STATE_FILE),
+                                   _latest_pairs(scqo_dir, "state"))
+        phys = _sources_from_pairs(_values_of(scqo_dir / PHYSICAL_FILE),
+                                   _latest_pairs(scqo_dir, "physical"))
+        return inst, phys
+
+    def _device_contexts(dev: str) -> tuple[list[tuple[str, str, ChangeDB]],
+                                            set[tuple[str, str]]]:
+        """Every history context of one device, registry order first:
+        cooldowns.toml cycles × setups, then disk-discovered ghosts (a context
+        folder whose cycle/setup was removed from the registry), then the
+        device-level escape-hatch database (context ("", "")). Returns
+        (contexts, ghost keys). All tolerant — a broken registry or an
+        unreadable folder degrades to what can be seen."""
+        contexts: list[tuple[str, str, ChangeDB]] = []
+        seen: set[tuple[str, str]] = set()
+        try:
+            cycles = load_cooldowns(store.data_root, dev)
         except (ValueError, OSError):
-            return "", {}
-        if not active:
-            return "", {}
-        cid, cycle = active
-        return cid, {name: _scqo_dir(dev, cid, name) for name in cycle.get("setup", {})}
-
-    def _read_history(values_path: Path) -> list[dict]:
-        """A values file's change history (``.history.jsonl`` sidecar, or embedded
-        in pre-split files — :mod:`scqo._state_io`); [] where unreadable: the
-        viewer must render regardless."""
+            cycles = {}
+        for cid, cycle in cycles.items():
+            for name in cycle.get("setup", {}):
+                d = _scqo_dir(dev, cid, name)
+                if d is not None:
+                    contexts.append((cid, name, ChangeDB(d / HISTORY_FILE)))
+                    seen.add((cid, name))
+        ghosts: set[tuple[str, str]] = set()
+        ddir = store.data_root / dev
         try:
-            return read_history(values_path)
-        except (OSError, json.JSONDecodeError):
-            return []
-
-    def _instrument_sources(scqo_dir: Path | None) -> dict:
-        """Live-source map over a context's ``scqo_state.json`` ({} where absent).
-        The state file is the viewer's current-value authority — the strict-match
-        rule credits a run only while its recorded value still equals the live one."""
-        data = (_read_json(scqo_dir / STATE_FILE) if scqo_dir else None) or {}
-        history = _read_history(scqo_dir / STATE_FILE) if scqo_dir else []
-        return live_sources(data.get("values", {}), history)
-
-    def _physical_sources(scqo_dir: Path | None) -> dict:
-        """Live-source map over a context's ``physical.json`` ({} where absent). The
-        store is one (cooldown, setup) context, so values are flat and its whole
-        history belongs to it — no setup slicing needed."""
-        data = (_read_json(scqo_dir / PHYSICAL_FILE) if scqo_dir else None) or {}
-        history = _read_history(scqo_dir / PHYSICAL_FILE) if scqo_dir else []
-        return live_sources(data.get("values", {}), history)
+            found = sorted(ddir.glob(f"*/*/scqo/{HISTORY_FILE}"))
+        except OSError:
+            found = []
+        for p in found:
+            cid, name = p.relative_to(ddir).parts[:2]
+            if (cid, name) not in seen:
+                contexts.append((cid, name, ChangeDB(p)))
+                ghosts.add((cid, name))
+        dev_level = ddir / HISTORY_FILE
+        if dev_level.is_file():
+            contexts.append(("", "", ChangeDB(dev_level)))
+            ghosts.add(("", ""))
+        return contexts, ghosts
 
     def _known_names() -> list[str]:
         """Every sample this lab knows: indexed runs ∪ registry/cooldowns/folders —
@@ -126,20 +160,20 @@ def create_app(data_root: str | Path) -> FastAPI:
         registry = load_device_registry(store.data_root)
         rows = []
         for name in _known_names():
-            cooldown_error, cid, setup_count = "", "", 0
+            cooldown_error, cid, setups = "", "", []
             try:
                 cycles = load_cooldowns(store.data_root, name)
             except ValueError as err:
                 cycles, cooldown_error = {}, str(err)
             active = active_cooldown(cycles)
             if active:
-                cid, setup_count = active[0], len(active[1].get("setup", {}))
+                cid, setups = active[0], list(active[1].get("setup", {}))
             latest = store.find_runs(device=name, limit=1)
             entry = registry.get(name)
             rows.append({
                 "name": name,
                 "description": entry.get("description", "") if isinstance(entry, dict) else "",
-                "active_cycle": cid, "setup_count": setup_count,
+                "active_cycle": cid, "setups": setups,
                 "cooldown_error": cooldown_error,
                 "latest": latest[0] if latest else None,
             })
@@ -179,13 +213,11 @@ def create_app(data_root: str | Path) -> FastAPI:
         )
         # Which of these runs CONTRIBUTE to current values ("the runs the device is
         # built from") — resolved against each run's OWN (device, cooldown, setup)
-        # scqo/ folder, so a run credits against exactly the state + physics files it
+        # context, so a run credits against exactly the state + physics it
         # measured (even a past cooldown's). run_ids are globally unique by construction.
         live_by_run: dict[str, str] = {}
         for dev, cd, sname in {(r["device"], r["cooldown"], r["setup"]) for r in rows}:
-            scqo_dir = _scqo_dir(dev, cd, sname)
-            inst = _instrument_sources(scqo_dir)
-            phys = _physical_sources(scqo_dir)
+            inst, phys = _context_sources(_scqo_dir(dev, cd, sname))
             for rid, pairs in live_run_map(inst, phys).items():
                 live_by_run[rid] = summarize_live(pairs)
         return templates.TemplateResponse(
@@ -225,11 +257,10 @@ def create_app(data_root: str | Path) -> FastAPI:
                              "changed": b != a})
         # Is each ACCEPTED value still the one the device runs? (aligned with the
         # suggestions list; None for non-accepted rows / no source info). Resolved
-        # against the RUN's OWN (cooldown, setup) scqo/ folder — its state + physics.
+        # against the RUN's OWN (cooldown, setup) context — its state + physics.
         scqo_dir = _scqo_dir(record["device"], record.get("cooldown") or "",
                              record.get("setup") or "")
-        inst_sources = _instrument_sources(scqo_dir)
-        phys_sources = _physical_sources(scqo_dir)
+        inst_sources, phys_sources = _context_sources(scqo_dir)
         on_device = []
         for s in record.get("suggestions", []):
             sources = phys_sources if s.get("role") == "fact" else inst_sources
@@ -291,76 +322,190 @@ def create_app(data_root: str | Path) -> FastAPI:
             raise HTTPException(404, f"unknown run_id {run_id!r}")
         return RedirectResponse(url=f"/run/{run_id}", status_code=303)
 
+    def _param_rows(values: dict, pairs: dict, order: tuple | list) -> list[dict]:
+        """Long-format parameter rows of one store on the setup page: current
+        value + unit + crediting source + the PREVIOUS record (the one-before
+        run link), fields in catalog order then extras."""
+        sources = _sources_from_pairs(values, pairs)
+        observed = {f for fields in values.values() for f in fields}
+        fields = ([f for f in order if f in observed]
+                  + sorted(observed - set(order)))
+        rows = []
+        for entity in sorted(values):
+            for f in fields:
+                if f not in values[entity]:
+                    continue
+                pair = pairs.get((entity, f)) or [None, None]
+                rows.append({
+                    "entity": entity, "field": f, "value": values[entity][f],
+                    "unit": FIELD_UNITS.get(f, ""),
+                    "source": sources.get(entity, {}).get(f),
+                    "previous": pair[1],
+                })
+        return rows
+
+    @app.get("/setup/{device}/{cooldown}/{setup_name}", response_class=HTMLResponse)
+    def setup_page(request: Request, device: str, cooldown: str, setup_name: str):
+        # A (device, cooldown, setup) triple names one on-disk context — a path
+        # identity like /run/<id>. Any well-formed triple renders (an unknown
+        # one shows an empty page, the /device?device= precedent); only a
+        # non-filename-safe segment 404s.
+        scqo_dir = _scqo_dir(device, cooldown, setup_name)
+        if scqo_dir is None:
+            raise HTTPException(
+                404, "not a valid context (cooldown/setup are letters/digits/_/-)")
+        cooldown_error = ""
+        try:
+            cycles = load_cooldowns(store.data_root, device)
+        except (ValueError, OSError) as err:
+            cycles, cooldown_error = {}, str(err)
+        cycle = cycles.get(cooldown) or {}
+        setup_meta = cycle.get("setup", {}).get(setup_name)
+        active = active_cooldown(cycles)
+        own_latest = store.find_runs(device=device, cooldown=cooldown,
+                                     setup=setup_name, limit=1)
+        own_latest = own_latest[0] if own_latest else None
+        # Current calibration: the values file is the authority; a context with
+        # runs but no state file falls back to its own latest run's snapshot.
+        # Provenance/previous always resolve from the history database — it
+        # survives a values-only reset.
+        state_data = _read_json(scqo_dir / STATE_FILE)
+        authority, snapshot_run = "", None
+        if state_data:
+            state_values = state_data.get("values") or {}
+            authority = "state"
+        elif own_latest:
+            state_values = _read_json(_run_dir(own_latest) / "device_after.json") or {}
+            authority, snapshot_run = "snapshot", own_latest
+        else:
+            state_values = {}
+        state_rows = _param_rows(state_values,
+                                 _latest_pairs(scqo_dir, "state"),
+                                 INSTRUMENT_FIELD_ORDER)
+        phys_rows = _param_rows(_values_of(scqo_dir / PHYSICAL_FILE),
+                                _latest_pairs(scqo_dir, "physical"),
+                                PHYSICAL_FIELD_ORDER)
+        return templates.TemplateResponse(
+            request,
+            "setup.html",
+            {"device": device, "cooldown": cooldown, "setup_name": setup_name,
+             "cycle": cycle, "setup_meta": setup_meta,
+             "in_registry": setup_meta is not None,
+             "is_active": bool(active and active[0] == cooldown),
+             "cooldown_error": cooldown_error,
+             "authority": authority, "snapshot_run": snapshot_run,
+             "latest_run": own_latest,
+             "state_rows": state_rows, "physical_rows": phys_rows,
+             "state_path": str(scqo_dir / STATE_FILE)},
+        )
+
+    def _chart_rows(rows: list[dict], *, with_context: bool
+                    ) -> tuple[list[dict], list[int], list[dict]]:
+        """Change rows -> chart rows ({value, title, cls}) + separator indices
+        (cooldown boundaries, cross-context view only) + a context legend.
+        Non-numeric values keep their x slot but draw no point."""
+        def fmt(v):
+            return f"{v:.6g}" if isinstance(v, (int, float)) else str(v)
+
+        pts: list[dict] = []
+        separators: list[int] = []
+        classes: dict[tuple[str, str], str] = {}
+        prev_cd: str | None = None
+        for r in rows:
+            ctx = (r.get("cooldown", ""), r.get("setup", ""))
+            cls = ""
+            if with_context:
+                if ctx not in classes:
+                    classes[ctx] = f"ctx-{len(classes) % 6}"
+                cls = classes[ctx]
+                if prev_cd is not None and ctx[0] != prev_cd:
+                    separators.append(len(pts))
+                prev_cd = ctx[0]
+            try:
+                value = float(r["new"])
+            except (TypeError, ValueError):
+                value = None
+            source = r.get("run_id") or r.get("campaign_id") or "manual"
+            prefix = (f"{ctx[0] or '(device)'}/{ctx[1] or '-'} · "
+                      if with_context else "")
+            pts.append({
+                "value": value, "cls": cls,
+                "title": (f"{prefix}{r['timestamp'][:19]} · "
+                          f"{fmt(r['old'])} → {fmt(r['new'])} · {source}"),
+            })
+        legend = [{"cooldown": cd, "setup": s, "cls": c}
+                  for (cd, s), c in classes.items()]
+        return pts, separators, legend
+
     @app.get("/trends", response_class=HTMLResponse)
-    def trends_page(request: Request, target: str = "q1", quantity: str = "t1_s", device: str = ""):
-        # Qubit names repeat across samples ("q1" exists on every chip), so a
-        # trend is ALWAYS explicitly device-scoped — never a launcher-account
-        # default. The chart is reached from a sample's own pages (device page /
-        # overview row); device-less /trends bounces to the ONE sample picker.
+    def trends_page(request: Request, device: str = "", entity: str = "",
+                    field: str = "", cooldown: str = "", setup: str = ""):
+        # A trend is ALWAYS explicitly device-scoped — qubit names repeat
+        # across samples ("q1" exists on every chip); device-less /trends
+        # bounces to the ONE sample picker. Data source: the change-history
+        # databases (accepted lineage), never run fits.
         if not device:
             return RedirectResponse(url="/device")
-        rows = store.fit_trend(target, quantity, device=device) if target and quantity else []
-        svg = _trend_svg(rows)
+        contexts, ghosts = _device_contexts(device)
+        if not (entity and field):
+            # The menu offers only parameters that actually HAVE history.
+            fact_keys = sorted({(c["entity"], c["field"])
+                                for c in collect_fact_matrix(contexts)})
+            state_menu = []
+            for cid, name, db in contexts:
+                if not (cid and name):
+                    continue  # the device-level context has no port-1 page
+                try:
+                    keys = sorted(db.latest_two("state"))
+                except (OSError, sqlite3.Error):
+                    keys = []
+                if keys:
+                    # not "keys" — that name is shadowed by dict.keys in Jinja
+                    state_menu.append({"cooldown": cid, "setup": name,
+                                       "params": keys})
+            return templates.TemplateResponse(
+                request,
+                "trends.html",
+                {"device": device, "devices": store.distinct_devices(),
+                 "mode": "menu", "entity": "", "field": "",
+                 "cooldown": "", "setup": "",
+                 "fact_keys": fact_keys, "state_menu": state_menu,
+                 "rows": [], "svg": "", "legend": [], "truncated": False},
+            )
+        if cooldown and setup:
+            # Port 1: this setup's latest 50 changes of one parameter.
+            scqo_dir = _scqo_dir(device, cooldown, setup)
+            try:
+                series = (ChangeDB(scqo_dir / HISTORY_FILE)
+                          .param_series(entity, field, limit=50)
+                          if scqo_dir is not None else [])
+            except (OSError, sqlite3.Error):
+                series = []
+            truncated = len(series) == 50
+            rows = series[::-1]  # newest-first -> chronological
+            for r in rows:
+                r["cooldown"], r["setup"] = cooldown, setup
+            mode = "setup"
+        else:
+            # Port 2: one PHYSICAL fact across every context of the device.
+            rows = collect_fact_series(contexts, entity, field)
+            truncated = False
+            mode = "device"
+        pts, separators, legend = _chart_rows(rows,
+                                              with_context=(mode == "device"))
+        first = rows[0]["timestamp"][:16] if rows else ""
+        last = rows[-1]["timestamp"][:16] if rows else ""
+        svg = _trend_svg(pts, separators=separators, xlabels=(first, last))
         return templates.TemplateResponse(
             request,
             "trends.html",
-            {"target": target, "quantity": quantity, "rows": rows, "svg": svg,
-             "quantities": REPORTABLE_QUANTITIES, "device": device,
-             "devices": store.distinct_devices()},
+            {"device": device, "devices": store.distinct_devices(),
+             "mode": mode, "entity": entity, "field": field,
+             "cooldown": cooldown, "setup": setup,
+             "fact_keys": [], "state_menu": [],
+             "rows": list(reversed(rows)),  # table newest-first
+             "svg": svg, "legend": legend, "truncated": truncated},
         )
-
-    def _phys_panel(scqo_dir: Path | None) -> dict:
-        """A section's physical block from its ``scqo/physical.json`` (flat, one
-        context): stable field order + per-qubit rows + live-source provenance."""
-        data = (_read_json(scqo_dir / PHYSICAL_FILE) if scqo_dir else None) or {}
-        history = _read_history(scqo_dir / PHYSICAL_FILE) if scqo_dir else []
-        values = data.get("values", {})
-        observed = {f for fields in values.values() for f in fields}
-        fields = [f for f in PHYSICAL_FIELD_ORDER if f in observed] + sorted(observed - set(PHYSICAL_FIELD_ORDER))
-        sources = live_sources(values, history)
-        rows = [
-            {"entity": q, "field": f, "value": values[q][f],
-             "source": sources.get(q, {}).get(f)}
-            for q in sorted(values) for f in fields if f in values[q]
-        ]
-        return {"rows": rows, "history": list(reversed(history))[:200]}
-
-    def _state_section(dev: str, cooldown: str, name: str, backend: str) -> dict:
-        """One device-page block per ACTIVE-cycle setup: its ``scqo/`` folder's
-        calibration state (the authority since v0.6 — reflects deferred accepts) or
-        its latest run's device_after snapshot, plus that context's physical panel."""
-        scqo_dir = _scqo_dir(dev, cooldown, name)
-        # This context's OWN latest run — backs both the snapshot fallback and the
-        # caption link, so a section never credits a foreign setup's run as "latest".
-        own_latest = store.find_runs(device=dev, cooldown=cooldown, setup=name, limit=1)
-        own_latest = own_latest[0] if own_latest else None
-        data = _read_json(scqo_dir / STATE_FILE) if scqo_dir else None
-        state, authority, snapshot_run = {}, "", None
-        # History is read UNCONDITIONALLY: the sidecar survives a values-only
-        # reset (INSTALL's cleaning ladder), so the page must keep showing the
-        # provenance even while the values file is gone (snapshot authority).
-        history = (list(reversed(_read_history(scqo_dir / STATE_FILE)))[:200]
-                   if scqo_dir else [])
-        if data:
-            state = data.get("values") or {}
-            authority = "state"
-        elif own_latest:  # no state file yet: that context's last run snapshot
-            state = _read_json(_run_dir(own_latest) / "device_after.json") or {}
-            authority, snapshot_run = "snapshot", own_latest
-        # Stable column order: descriptor order first, then any extra observed
-        # fields. (Fields are heterogeneous per qubit — only measured qubits carry
-        # a value — so the first qubit's keys are NOT a valid header.)
-        observed = {f for fields in state.values() for f in fields}
-        phys = _phys_panel(scqo_dir)
-        return {
-            "name": name, "backend": backend,
-            "state": state, "authority": authority, "snapshot_run": snapshot_run,
-            "latest_run": own_latest,
-            "state_fields": [f for f in INSTRUMENT_FIELD_ORDER if f in observed] + sorted(observed - set(INSTRUMENT_FIELD_ORDER)),
-            "sources": _instrument_sources(scqo_dir),
-            "history": history, "state_path": str(scqo_dir / STATE_FILE) if scqo_dir else "",
-            "physical_rows": phys["rows"], "physical_history": phys["history"],
-        }
 
     @app.get("/device", response_class=HTMLResponse)
     def device_page(request: Request, device: str = ""):
@@ -375,43 +520,56 @@ def create_app(data_root: str | Path) -> FastAPI:
         dev = device
         latest = store.find_runs(device=dev, limit=1)
         registry = load_device_registry(store.data_root)
-        # Cooldown cycles + the ACTIVE cycle's named setups. The registry validates
-        # loudly at RUN time; the viewer must render regardless. No user context
-        # here, so ALL setups are shown — never "the selected one".
+        # Cooldown cycles: the registry validates loudly at RUN time; the
+        # viewer must render regardless. Every cycle's setups link to their
+        # own setup pages — historical cycles stay browsable.
         cooldown_error = ""
         try:
             cycles = load_cooldowns(store.data_root, dev)
         except ValueError as err:
             cycles, cooldown_error = {}, str(err)
         active = active_cooldown(cycles)
-        cid = active[0] if active else ""
-        setups = active[1].get("setup", {}) if active else {}
-        # One section per ACTIVE-cycle setup, each carrying that (cooldown, setup)
-        # context's calibration state AND physical values. No resolvable setups ->
-        # a single snapshot-only section from the device's latest run.
-        sections = [_state_section(dev, cid, name, s.get("backend", ""))
-                    for name, s in setups.items()]
-        if not sections and latest:
+        # The physical-facts matrix: rows = facts, one column per context that
+        # holds any fact history (registry order, ghosts flagged and last).
+        contexts, ghosts = _device_contexts(dev)
+        cells = collect_fact_matrix(contexts)
+        with_data = {(c["cooldown"], c["setup"]) for c in cells}
+        columns = [{"cooldown": cd, "setup": s, "ghost": (cd, s) in ghosts}
+                   for cd, s, _db in contexts if (cd, s) in with_data]
+        by_cell = {(c["entity"], c["field"], c["cooldown"], c["setup"]): c
+                   for c in cells}
+        observed = {c["field"] for c in cells}
+        field_order = ([f for f in PHYSICAL_FIELD_ORDER if f in observed]
+                       + sorted(observed - set(PHYSICAL_FIELD_ORDER)))
+        matrix_rows = []
+        for ent in sorted({c["entity"] for c in cells}):
+            for f in field_order:
+                row = [by_cell.get((ent, f, col["cooldown"], col["setup"]))
+                       for col in columns]
+                if any(row):
+                    matrix_rows.append({"entity": ent, "field": f,
+                                        "cells": row})
+        # Registry-less sample with runs: a trimmed values-only snapshot table
+        # (its knobs have no setup page to live on; the device-level history
+        # context, if any, only holds facts).
+        snapshot_rows = []
+        if not cycles and latest:
             snapshot = _read_json(_run_dir(latest[0]) / "device_after.json") or {}
-            observed = {f for fields in snapshot.values() for f in fields}
-            sections = [{
-                "name": "", "backend": latest[0].get("backend", ""),
-                "state": snapshot, "authority": "snapshot", "snapshot_run": latest[0],
-                "latest_run": latest[0],
-                "state_fields": [f for f in INSTRUMENT_FIELD_ORDER if f in observed] + sorted(observed - set(INSTRUMENT_FIELD_ORDER)),
-                "sources": {}, "history": [], "state_path": "",
-                "physical_rows": [], "physical_history": [],
-            }]
+            snapshot_rows = [
+                {"entity": q, "field": f, "value": v}
+                for q in sorted(snapshot)
+                for f, v in sorted(snapshot[q].items())]
         return templates.TemplateResponse(
             request,
             "device.html",
-            {"sections": sections,
+            {"device": dev, "devices": _known_names(),
              "latest": latest[0] if latest else None,
-             "device": dev, "devices": _known_names(),
              "registry": registry.get(dev) or {},
              "cycles": cycles, "active_cycle": active[0] if active else None,
-             "setups": setups,
-             "cooldown_error": cooldown_error},
+             "cooldown_error": cooldown_error,
+             "matrix_columns": columns, "matrix_rows": matrix_rows,
+             "snapshot_rows": snapshot_rows,
+             "snapshot_run": latest[0] if snapshot_rows else None},
         )
 
     def _load_campaign(campaign_id: str) -> dict:
@@ -484,9 +642,18 @@ def create_app(data_root: str | Path) -> FastAPI:
     return app
 
 
-def _trend_svg(rows: list[dict], width: int = 860, height: int = 300) -> str:
-    """Server-rendered SVG polyline of value vs run index (no JS, no assets)."""
-    pts = [(i, float(r["value"])) for i, r in enumerate(rows) if r["value"] is not None]
+def _trend_svg(rows: list[dict], *, separators: tuple | list = (),
+               xlabels: tuple[str, str] = ("", ""),
+               width: int = 860, height: int = 300) -> str:
+    """Server-rendered SVG polyline of value vs record index (no JS, no assets).
+
+    ``rows`` are chart rows ``{value: float | None, title: str, cls: str}`` —
+    a None value keeps its x slot but draws no point (a non-numeric change).
+    ``separators`` are row indices where a dashed vertical divider lands (a
+    cooldown boundary in the cross-context view); ``cls`` colors each point by
+    context (``ctx-0``..``ctx-5`` in base.html).
+    """
+    pts = [(i, r["value"]) for i, r in enumerate(rows) if r["value"] is not None]
     if not pts:
         return ""
     pad, w, h = 60, width, height
@@ -494,7 +661,7 @@ def _trend_svg(rows: list[dict], width: int = 860, height: int = 300) -> str:
     y_lo, y_hi = min(ys), max(ys)
     if y_hi == y_lo:
         y_lo, y_hi = y_lo - abs(y_lo) * 0.05 - 1e-30, y_hi + abs(y_hi) * 0.05 + 1e-30
-    span_x = max(len(pts) - 1, 1)
+    span_x = max(len(rows) - 1, 1)
 
     def sx(i: float) -> float:
         return pad + (w - 2 * pad) * (i / span_x)
@@ -503,11 +670,20 @@ def _trend_svg(rows: list[dict], width: int = 860, height: int = 300) -> str:
         return h - pad - (h - 2 * pad) * ((y - y_lo) / (y_hi - y_lo))
 
     line = " ".join(f"{sx(i):.1f},{sy(y):.1f}" for i, y in pts)
-    circles = "".join(
-        f'<circle cx="{sx(i):.1f}" cy="{sy(y):.1f}" r="4"><title>{rows[i]["run_id"]}\n{y:.6g}</title></circle>'
-        for i, y in pts
+
+    def _circle(i: int, y: float) -> str:
+        cls = rows[i].get("cls") or ""
+        cls_attr = f' class="{cls}"' if cls else ""
+        return (f'<circle cx="{sx(i):.1f}" cy="{sy(y):.1f}" r="4"{cls_attr}>'
+                f'<title>{escape(rows[i]["title"])}</title></circle>')
+
+    circles = "".join(_circle(i, y) for i, y in pts)
+    seps = "".join(
+        f'<line x1="{sx(i - 0.5):.1f}" y1="{pad}" x2="{sx(i - 0.5):.1f}" '
+        f'y2="{h - pad}" class="ctxsep"/>'
+        for i in separators
     )
-    first, last = rows[0]["started_at"][:16], rows[-1]["started_at"][:16]
+    first, last = xlabels
     return (
         f'<svg viewBox="0 0 {w} {h}" role="img">'
         f'<line x1="{pad}" y1="{h - pad}" x2="{w - pad}" y2="{h - pad}" class="axis"/>'
@@ -516,5 +692,5 @@ def _trend_svg(rows: list[dict], width: int = 860, height: int = 300) -> str:
         f'<text x="{pad - 8}" y="{sy(y_lo) + 4}" text-anchor="end" class="tick">{y_lo:.4g}</text>'
         f'<text x="{pad}" y="{h - pad + 18}" class="tick">{first}</text>'
         f'<text x="{w - pad}" y="{h - pad + 18}" text-anchor="end" class="tick">{last}</text>'
-        f'<polyline points="{line}" class="trend"/>{circles}</svg>'
+        f'{seps}<polyline points="{line}" class="trend"/>{circles}</svg>'
     )

@@ -1,34 +1,22 @@
-"""Shared on-disk plumbing for the two per-context state stores.
+"""The values-file lock shared by the two per-context state stores.
 
-Both stores — :mod:`scqo.config`'s ``scqo_state.json`` and :mod:`scqo.physical`'s
-``physical.json`` — keep the CURRENT values in a small human-readable JSON and the
-full change history in a sidecar, one ChangeRecord JSON object per line::
+Both stores — ``scqo_state.json`` (knobs + monitors) and ``physical.json``
+(facts) — keep their CURRENT values in a small human-readable JSON; change
+provenance lives in the context's ``history.sqlite`` (:mod:`scqo.changes`).
+The lock file here (``<values file>.lock``) guards a whole save — the
+values read-merge-write plus the history transaction it wraps — so two
+same-context sessions cannot erase each other's rows. Lock order is fixed:
+this file lock strictly OUTSIDE, the database transaction strictly INSIDE.
 
-    scqo_state.json   + scqo_state.history.jsonl
-    physical.json     + physical.history.jsonl
-
-The sidecar is *logically* append-only (rows are only ever added, never rewritten)
-but physically maintained by lock-guarded read-merge-rewrite via a unique temp +
-``os.replace``: a save must read the full history anyway (to merge a co-running
-same-context session's rows), atomic replace means no torn half-lines on Windows,
-and a true ``O_APPEND`` would duplicate rows when a partially-failed save is
-retried. Row order in the file is by timestamp (the :func:`scqo.config._now`
-fixed-offset guarantee), which provenance's last-record-wins rule depends on.
-
-``read_history`` falls back to the pre-split layout where the values file itself
-held a ``"history"`` list (dev machines that ran main's WIP before the split);
-the next save writes the sidecar and drops the embedded key.
-
-The lock file (``<values file>.lock``, moved here from :mod:`scqo.physical`)
-guards a whole values+history save so two same-context sessions cannot erase
-each other's rows.
+:func:`history_path` names the RETIRED ``*.history.jsonl`` sidecar of the
+pre-database era — kept only so the v2 fresh-start gate
+(:func:`scqo.stores._archive_pre_v3`) can archive a legacy sidecar
+alongside its values file. Nothing reads sidecars anymore.
 """
 
 from __future__ import annotations
 
-import json
 import os
-import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -100,64 +88,7 @@ def _file_lock(target: Path):
 
 
 def history_path(values_path: str | Path) -> Path:
-    """The history sidecar of a values file (``scqo_state.json`` ->
-    ``scqo_state.history.jsonl``)."""
+    """The RETIRED history sidecar name of a values file
+    (``scqo_state.json`` -> ``scqo_state.history.jsonl``) — used only by the
+    v2 fresh-start gate to archive a legacy sidecar with its values file."""
     return Path(values_path).with_suffix(".history.jsonl")
-
-
-def read_history(values_path: str | Path) -> list[dict]:
-    """Every ChangeRecord dict belonging to a values file — sidecar first.
-
-    When the sidecar exists it wins (an unparseable line — a torn hand edit, a
-    copy truncation — is skipped with a warning rather than taking the whole
-    store down). Otherwise the pre-split fallback reads the ``"history"`` list
-    embedded in the values file itself; the next save splits it out.
-
-    Lock-free readers (the viewer; store constructors) can interleave with
-    another process's FIRST post-split save — sidecar created, then the values
-    file's embedded key stripped. Writers create the sidecar first and never
-    delete it, so "values file without the key" implies the sidecar exists: one
-    re-check closes the window instead of returning an empty history that never
-    existed on disk.
-    """
-    values_path = Path(values_path)
-    sidecar = history_path(values_path)
-    for attempt in (0, 1):
-        if sidecar.is_file():
-            records: list[dict] = []
-            for lineno, line in enumerate(
-                    sidecar.read_text(encoding="utf-8").splitlines(), start=1):
-                if not line.strip():
-                    continue
-                try:
-                    records.append(json.loads(line))
-                except json.JSONDecodeError:
-                    print(f"warning: {sidecar}:{lineno}: unparseable history line skipped",
-                          file=sys.stderr)
-            return records
-        try:
-            data = json.loads(values_path.read_text(encoding="utf-8"))
-        except OSError:
-            return []  # neither file: an empty (or reset) store
-        if "history" in data or attempt:
-            return list(data.get("history", []))
-        # values file present but already stripped: a concurrent first split just
-        # ran — the sidecar must exist now, so look again.
-    return []  # pragma: no cover - unreachable (the loop always returns)
-
-
-def write_history(values_path: str | Path, records: list[dict]) -> None:
-    """Atomically rewrite the history sidecar (one compact JSON object per line).
-
-    Unique temp + ``os.replace`` so a reader never sees a torn file; on failure
-    the temp is removed and the previous sidecar (if any) is left untouched.
-    """
-    sidecar = history_path(values_path)
-    tmp = sidecar.with_name(f"{sidecar.name}.{os.getpid()}.tmp")
-    payload = "".join(json.dumps(r) + "\n" for r in records)
-    try:
-        tmp.write_text(payload, encoding="utf-8")
-        os.replace(tmp, sidecar)
-    except OSError:
-        tmp.unlink(missing_ok=True)
-        raise

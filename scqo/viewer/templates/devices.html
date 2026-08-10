@@ -10,7 +10,7 @@
     <td><a href="/device?device={{ s.name }}"><b>{{ s.name }}</b></a></td>
     <td>{{ s.description or "-" }}</td>
     <td>{% if s.cooldown_error %}<span class="ext">cooldowns.toml error:</span> {{ s.cooldown_error }}
-        {%- elif s.active_cycle %}{{ s.active_cycle }} ({{ s.setup_count }} setup{{ "s" if s.setup_count != 1 else "" }})
+        {%- elif s.active_cycle %}{{ s.active_cycle }}: {% for name in s.setups %}<a href="/setup/{{ s.name }}/{{ s.active_cycle }}/{{ name }}">{{ name }}</a>{% if not loop.last %} · {% endif %}{% else %}<span class="muted">(no setups)</span>{% endfor %}
         {%- else %}-{% endif %}</td>
     <td>{% if s.latest %}<a href="/run/{{ s.latest.run_id }}">{{ s.latest.started_at[:16] }}</a>{% else %}no runs yet{% endif %}</td>
     <td><a href="/trends?device={{ s.name }}">trends</a></td>

@@ -410,8 +410,8 @@ class RecordingDevice:
         self._inner.save()
         self._store.save()
 
-    def history(self):
-        return self._store.history()
+    def history(self, **kwargs):
+        return self._store.history(**kwargs)
 
     # ------------------------------------------------------------- plumbing
 

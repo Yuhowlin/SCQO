@@ -92,9 +92,17 @@ scqo/
                   #   expansion; Design.compare = doctor's design-vs-measured join
   stores.py       # the two per-context value stores, one shape
                   #   {"schema": 3, "values": {entity: {field: ...}}}: physical.json
-                  #   (facts) + scqo_state.json (knobs + monitors); ROLE routes the write
-  _state_io.py    # shared state-file plumbing: the .lock file + the .history.jsonl
-                  #   sidecar (lock-guarded merge-on-save, torn-line tolerance)
+                  #   (facts) + scqo_state.json (knobs + monitors); ROLE routes the write;
+                  #   history appends to the context's changes DB (O(new) saves, no
+                  #   history load at init)
+  changes.py      # the per-context change-history TRUTH: history.sqlite in each
+                  #   scqo/ folder (both stores via the `store` column; ChangeRecord
+                  #   lives here) — per-CONTEXT so lab aggregation stays a folder
+                  #   copy (one writer per context), NEVER dropped/rebuilt (unlike
+                  #   index.sqlite); indexed queries (param_series/latest_two/
+                  #   context_facts/fact_series) + cross-context collect_* helpers
+  _state_io.py    # the values-file .lock (acquired strictly OUTSIDE the changes-DB
+                  #   transaction) + the retired sidecar's name for the v2 gate
   device.py       # vendor views per CHANNEL KIND (make_view_base) + CompositeView
                   #   (per-operation knobs via read_knob/write_knob) + RecordingDevice
                   #   (every write -> ChangeRecord) + DeviceModel ABC
@@ -115,10 +123,10 @@ scqo/
                   #   design coverage, lock drift, roster-vs-vendor inventory, wiring)
   report.py       # report rows behind `scqo state` / `scqo device` - renderer-free,
                   #   JSON-able (CLI prints, viewer + AI loop consume the same shapes).
-                  #   Also the catalog-DERIVED field orders (never hand-kept lists):
-                  #   REPORTABLE_QUANTITIES (facts+monitors+knobs+fit-only) for the
-                  #   viewer's /trends menu, and MEASURED_QUANTITIES (no knobs - a
-                  #   knob is a setting and cannot drift) for the campaign progress line
+                  #   Also the catalog-DERIVED field orders + units (never hand-kept
+                  #   lists): PHYSICAL/INSTRUMENT_FIELD_ORDER + FIELD_UNITS for the
+                  #   viewer's tables, and MEASURED_QUANTITIES (no knobs - a knob is
+                  #   a setting and cannot drift) for the campaign progress line
   campaign.py     # CampaignPlan/CampaignStep/CampaignWriteback + the PURE aggregator
                   #   (summarize / aggregate / stderr_twin / robust_summary) over fit
                   #   dicts; no I/O, no orchestration. scatter_ratio = std /
@@ -148,7 +156,14 @@ scqo/
                   #   components.toml/design.toml text parsed by the real loaders)
   browse.py       # `python -m scqo.browse` - datasette raw-SQL power tool over the index (8081)
   viewer/         # `python -m scqo.viewer` - the daily read-only GUI (8080):
-                  #   runs / run / campaigns / campaign / trends / samples pages
+                  #   runs / run / campaigns / campaign / setup / trends / samples
+                  #   pages; per-setup pages under each cooldown cycle (current +
+                  #   previous run link per parameter), /trends is CHANGE-HISTORY
+                  #   driven (port 1 = one parameter in one setup, latest 50;
+                  #   port 2 = one physical fact across all contexts) and the
+                  #   device page holds the facts x (cooldown, setup) matrix —
+                  #   all read from history.sqlite strictly read-only (never
+                  #   creates one)
   __main__.py     # `python -m scqo <data_root>` - rebuild the index from the run folders
   cli/            # the `scqo` command (run/campaign/find/accept/suggest/set/tag/state/
                   #   user/device/doctor): ONE engine, any-directory;

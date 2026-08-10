@@ -559,14 +559,16 @@ Most "clean-up" needs are lighter than a factory reset. The ladder, mildest firs
    `python -m scqo <data_root>`. Fixes a stale/corrupt index; loses nothing.
 2. **Reset a context's state**: delete that (cooldown, setup)'s
    `<data_root>\<device>\<cooldown>\<setup>\scqo\scqo_state.json` — calibration
-   reseeds from the vendor config at the next session. The change history lives in
-   `scqo_state.history.jsonl` beside it and SURVIVES a values-only delete
-   (provenance stays continuous); delete the sidecar too only for a true
-   history-and-all reset. **Do NOT reflexively delete `physical.json` or
-   `physical.history.jsonl` next to them**: that pair IS that context's
-   measured-physics ledger (T1/T2, arch/dispersive fits + their history) and does
-   NOT reseed from anywhere — delete it only if you truly mean to discard those
-   measurements.
+   reseeds from the vendor config at the next session. The change history lives
+   in `history.sqlite` beside it (one database per context, BOTH stores) and
+   SURVIVES a values-only delete (provenance stays continuous). **Never delete
+   `history.sqlite`** — unlike the index it is change-history TRUTH, not
+   rebuildable from anything. **Do NOT reflexively delete `physical.json`**
+   next to it: it is that context's measured-physics ledger (T1/T2,
+   arch/dispersive fits) and does NOT reseed from anywhere — delete it only if
+   you truly mean to discard those measurements. (Pre-cutover
+   `*.history.jsonl` sidecars are DEAD files — never read since the history
+   database landed; delete them at leisure.)
 3. **Factory reset** — everything below.
 
 ### Factory reset (make a machine "new" again)
@@ -858,22 +860,30 @@ above), aggregation is a **folder copy + reindex** — never a database-level me
 rebuilt index IS the merged database.
 
 ```powershell
-robocopy \\otherPC\qpu_data D:\qpu_data /E /XF index.sqlite*
+robocopy \\otherPC\qpu_data D:\qpu_data /E /XF index.sqlite* *.sqlite-wal *.sqlite-shm
 D:\github\.venv-view\Scripts\python.exe -m scqo D:\qpu_data     # rebuild the index
 ```
 
 - `/E`, **not `/MIR`** — an aggregate root collects several sources, and `/MIR`
   would delete every other source's folders. `/XF index.sqlite*` skips the source's
-  index (the `-wal`/`-shm` siblings match too): a live server's WAL files must never
-  be copied, and the rebuild recreates the index locally anyway.
-- The layout merges by construction: day folders and `campaigns\` land under the
-  same `<device>\` tree, and run ids embed the device name + a millisecond stamp,
-  so cross-server collisions do not occur. A partially copied run (no
-  `record.json`) is skipped by the reindex and healed by re-running the copy —
-  copy + reindex is idempotent.
+  index: the rebuild recreates it locally anyway. `*.sqlite-wal *.sqlite-shm`
+  skips ANY live SQLite side files (a live writer's WAL must never be copied —
+  this also covers the per-context `history.sqlite` databases, whose side files
+  only exist while a session is actively saving).
+- The layout merges by construction: day folders, `campaigns\` and the
+  per-context `<cooldown>\<setup>\scqo\` folders (values + `history.sqlite`)
+  land under the same `<device>\` tree; run ids embed the device name + a
+  millisecond stamp, and **each history context has exactly one writing
+  machine** (a setup is one backend on one control PC), so cross-server
+  collisions do not occur — the change history merges by the same copy, no
+  database-level merge ever. A partially copied run (no `record.json`) is
+  skipped by the reindex and healed by re-running the copy — copy + reindex is
+  idempotent.
 - **Device and qubit names are the merge keys** (§2's moving-a-sample rule): the
   same sample must carry the identical device name on every server, or its history
-  and trends split. `devices.toml` is hand-edited — reconcile it by hand.
+  and trends split. `devices.toml` AND each device's `cooldowns.toml` are
+  hand-edited — reconcile them by hand (a shared device + cooldown lists the
+  UNION of both servers' setups).
 - Recurring aggregation only: run folders are not fully immutable — `scqo tag`,
   `scqo accept` and `scqo suggest` rewrite `record.json` — so agree where runs are
   tagged/decided. Under plain robocopy the SOURCE wins; a central edit to an

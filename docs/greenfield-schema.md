@@ -34,7 +34,9 @@ One value shape, three files, scope encoded by placement; format encodes the wri
   <cooldown>/<setup>/scqo/
     physical.json        # MEASURED facts   {schema, values: {entity: {field: float|float[]}}}
     scqo_state.json      # OPERATING knobs+monitors — same shape (top-level key "values" in BOTH)
-    *.history.jsonl      # append-only provenance sidecars (unchanged from current SCQO)
+    history.sqlite       # the context's change-history TRUTH (both stores, `store` column;
+                         #   per-context so server aggregation stays a folder copy — never
+                         #   deleted, never rebuilt; see scqo/changes.py)
 ```
 
 The roster describes the **sample** only. Instrument wiring — which port feeds which line, LOs,
@@ -518,7 +520,8 @@ boundary rule); post-cut evolution as pure appends.
    `"config"` → `"values"`.
 
 **Preserved**: qubit-anchored instance names and the `_res/_ro/_xy/_z` suffixes; declared
-`high`/`low` (now design-nominal); flat per-(cooldown, setup) stores + history sidecars +
+`high`/`low` (now design-nominal); flat per-(cooldown, setup) stores + per-context change
+history (sidecars at the cutover, `history.sqlite` since the change-history cutover) +
 suggest→accept flow; the TOML/JSON writer rule; vendor wiring outside the roster; the placement
 rule's portable/twin doctrine; governed readout discriminator fields; terminology bans
 ("port", "element", "macro" for chip-side concepts).

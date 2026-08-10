@@ -6,9 +6,13 @@ docs/greenfield-schema.md section 1: per (cooldown, setup) the device has
 
     {"schema": 3, "values": {entity: {field: float | [float, ...]}}}
 
-plus the append-only ``*.history.jsonl`` provenance sidecars (the
-:mod:`scqo._state_io` plumbing survives the cutover verbatim — lock file,
-merge-on-save, torn-line tolerance).
+Change provenance lives in the context's shared ``history.sqlite``
+(:mod:`scqo.changes` — ONE database per scqo/ folder serving both stores
+through its ``store`` column). A store loads NO history at construction;
+``history()`` queries on demand and ``save()`` appends only its own new
+rows, so neither cost grows with the context's lifetime. The pre-cutover
+``*.history.jsonl`` sidecars are never read again — they are dead files an
+operator may delete at leisure.
 
 ONE :class:`Store` class serves both files; the difference is the ROLE SET it
 accepts (``fact`` vs ``knob``+``monitor``) — routing is
@@ -19,23 +23,26 @@ checked, paired arrays equal-length (both directions, re-checked against the
 MERGED values before a save commits), a ``*_waveform`` write requires its
 ``*_waveform_dt_s`` companion already set.
 
-FRESH-START POLICY (doc section 10): files without the ``"schema": 3`` stamp
-are pre-cutover — archived aside (``*.v2.bak``, values and sidecar both,
-keep-oldest) on first contact and never read, at BOTH the load and the
-save-merge site (the v1->v2 precedent). A sidecar whose rows are not v3
-ChangeRecords (v2 leftovers after a values-only reset) is archived the same
-way. An UNPARSEABLE values file is different: it is quarantined alone as
-``*.corrupt.bak`` and the intact sidecar is kept — a torn write must never
-destroy provenance. Knobs reseed from the vendor via ``state_sync="pull"``;
+FRESH-START POLICY (doc section 10): a values file without the
+``"schema": 3`` stamp is pre-cutover — archived aside (``*.v2.bak``, with
+any live legacy sidecar, keep-oldest) on first contact and never read, at
+BOTH the load and the save site (the v1->v2 precedent). An UNPARSEABLE
+values file is different: it is quarantined alone as ``*.corrupt.bak`` —
+the history database is untouched either way; provenance is never
+collateral damage. Knobs reseed from the vendor via ``state_sync="pull"``;
 monitors are re-measured; facts re-accumulate.
 
 Crash consistency in ``save()`` (ported from the proven store): everything
-re-read and validated under the lock BEFORE any write; history sidecar
-written FIRST (a failed sidecar write commits nothing); the merge then
-commits to memory, so a failed values write cannot re-append rows on retry;
-the values file lands by unique-temp + ``os.replace``. For a key several
-sessions wrote, the LATEST-timestamp record wins — the persisted value
-always matches its newest crediting row.
+re-read and validated under the lock BEFORE the history transaction
+commits (a veto rolls the transaction back — zero rows land); the commit
+is the durability point, after which the unsaved buffer is cleared, so a
+failed values write cannot re-append rows on retry — the retry recomputes
+the values from the database; the values file lands by unique-temp +
+``os.replace``. For a key several sessions wrote, the LATEST-timestamp
+record wins — the persisted value always matches its newest crediting row.
+Lock discipline: the values ``.lock`` file is acquired strictly OUTSIDE
+and released strictly AFTER the database transaction, never inverted, so
+no lock cycle is constructible.
 
 Vendor push is NOT here — the store is pure persistence; the recording
 device wrapper (phase 5) pushes knobs in catalog declaration order.
@@ -47,13 +54,13 @@ import getpass
 import json
 import math
 import os
-from dataclasses import asdict, dataclass, fields as _dc_fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ._state_io import _file_lock, history_path, read_history, write_history
+from ._state_io import _file_lock, history_path
 from .catalog import FieldSpec
+from .changes import HISTORY_FILE, ChangeDB, ChangeRecord, record_from_row
 from .roster import Roster
 
 STATE_SCHEMA = 3
@@ -84,53 +91,10 @@ def _current_operator() -> str:
         return ""
 
 
-@dataclass(frozen=True)
-class ChangeRecord:
-    """One recorded change — provenance for the AI loop's memory."""
-
-    timestamp: str
-    entity: str
-    field: str
-    old: float | list[float] | None
-    new: float | list[float]
-    #: the entity's kind, stamped at write time so rows stay self-describing
-    #: even if the roster later changes.
-    kind: str | None = None
-    experiment: str | None = None
-    #: run_id of the datastore run that caused this change.
-    run_id: str | None = None
-    #: campaign_id of the campaign-level accept that caused this change
-    #: (Session.accept_campaign applies an AGGREGATE, so no single run_id
-    #: can be credited — the campaign record is the finer truth there).
-    campaign_id: str | None = None
-    #: OS login of whoever made the change (None only when undeterminable).
-    operator: str | None = None
-    #: Set when this change is the echo of writing another field (one vendor
-    #: knob feeds several neutral fields): names the causing field.
-    coupled_to: str | None = None
-    #: NAMED setup the writing session was bound to.
-    setup: str | None = None
-
-    def as_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-
-_ROW_KEYS = frozenset(f.name for f in _dc_fields(ChangeRecord))
-_ROW_REQUIRED = frozenset({"timestamp", "entity", "field", "new"})
-
-
-def _rehydrate(rows: list[dict]) -> list[ChangeRecord] | None:
-    """Sidecar rows -> ChangeRecords, tolerantly: unknown keys are IGNORED
-    (a future 3.x writer's rows must load), missing optionals default. None
-    means the sidecar is foreign (pre-v3 component/category rows) — the
-    fresh-start policy applies to it."""
-    out: list[ChangeRecord] = []
-    for r in rows:
-        if not (isinstance(r, dict) and _ROW_REQUIRED <= set(r)):
-            return None
-        out.append(ChangeRecord(**{k: v for k, v in r.items()
-                                   if k in _ROW_KEYS}))
-    return out
+# ``ChangeRecord`` lives in :mod:`scqo.changes` with the database that
+# stores it; re-exported here (and from the package root) unchanged.
+__all__ = ["ChangeRecord", "Store", "StoreError", "PHYSICAL_FILE",
+           "STATE_FILE", "STATE_SCHEMA", "physical_store", "state_store"]
 
 
 # ------------------------------------------------------------ file plumbing
@@ -224,32 +188,33 @@ class Store:
     """
 
     def __init__(self, path: str | Path | None, roster: Roster, *,
-                 roles: frozenset[str], setup: str = "") -> None:
+                 roles: frozenset[str], setup: str = "",
+                 cooldown: str = "") -> None:
         #: None = in-memory store (demo/notebook sessions): full validation
         #: and history, no persistence — save() is a no-op.
         self._path = Path(path) if path is not None else None
         self._roster = roster
         self._roles = roles
         self._setup = setup
+        self._cooldown = cooldown
+        self._store_name = "physical" if "fact" in roles else "state"
+        #: the context's shared history database, derived from the values
+        #: path (both stores of one scqo/ folder share the one file).
+        #: Constructing it opens and creates NOTHING — a read-only consumer
+        #: (doctor) can hold a Store without ever minting a database.
+        self._changes = (ChangeDB(self._path.parent / HISTORY_FILE)
+                         if self._path is not None else None)
         self._values: dict[str, dict[str, float | list[float]]] = {}
-        #: merge-on-save baseline: rows [:_saved] were loaded/merged from the
-        #: file, rows [_saved:] are ours and not yet persisted.
-        self._saved = 0
+        #: our recorded rows not yet committed to the history database.
+        self._unsaved: list[ChangeRecord] = []
         #: (entity, field) keys we wrote since load/save — the only value
         #: keys ``save()`` may overwrite.
         self._dirty: set[tuple[str, str]] = set()
-        self._history: list[ChangeRecord] = []
         if self._path is None:
             return
         data = _load_v3(self._path)
         if data is not None:
             self._values = _clean_values(data.get("values"), roster)
-        rows = _rehydrate(read_history(self._path))
-        if rows is None:  # foreign sidecar (v2 leftover / values-only reset)
-            _archive_pre_v3(self._path, sidecar_only=data is not None)
-            rows = []
-        self._history = rows
-        self._saved = len(rows)
 
     # ------------------------------------------------------------- reading
 
@@ -264,8 +229,21 @@ class Store:
                     for f, v in fields.items()}
                 for e, fields in self._values.items()}
 
-    def history(self) -> tuple[ChangeRecord, ...]:
-        return tuple(self._history)
+    def history(self, *, entity: str | None = None,
+                limit: int | None = None) -> tuple[ChangeRecord, ...]:
+        """Recorded changes of THIS store, oldest first: the context
+        database's committed rows plus our unsaved buffer. ``entity``
+        narrows to one entity; ``limit`` keeps the last N."""
+        committed = ([] if self._changes is None else
+                     [record_from_row(r) for r in self._changes.
+                      context_history(self._store_name, entity=entity,
+                                      limit=limit)])
+        ours = [r for r in self._unsaved
+                if entity is None or r.entity == entity]
+        rows = committed + ours
+        if limit is not None:
+            rows = rows[-limit:]
+        return tuple(rows)
 
     # ------------------------------------------------------------- writing
 
@@ -355,7 +333,7 @@ class Store:
         """Record one value: validate, append history, update values —
         never any vendor (push is the recording device's job)."""
         value = self.check(entity, field, value)
-        self._history.append(ChangeRecord(
+        self._unsaved.append(ChangeRecord(
             timestamp=_now(), entity=entity, field=field,
             old=self.get(entity, field),
             # the history row owns its OWN copy — mutating a row must never
@@ -364,7 +342,8 @@ class Store:
             kind=self._roster.entities[entity].kind,
             experiment=experiment, run_id=run_id, campaign_id=campaign_id,
             operator=_current_operator() or None,
-            coupled_to=coupled_to, setup=self._setup or None))
+            coupled_to=coupled_to, setup=self._setup or None,
+            cooldown=self._cooldown or None))
         self._values.setdefault(entity, {})[field] = value
         self._dirty.add((entity, field))
 
@@ -373,16 +352,20 @@ class Store:
     def save(self) -> None:
         """Merge-persist under the lock (ported crash discipline).
 
-        Under the lock the on-disk state is re-read THROUGH THE V3 GATE; its
-        history plus OUR unsaved rows are unioned (ordered by timestamp) and
-        only the value keys WE wrote change in the file — each set to the
-        LATEST-timestamp record across the merged history, so a concurrent
-        session's newer value wins and the persisted value always matches
-        its crediting row. Everything is validated BEFORE any write; the
-        history sidecar goes FIRST (a failed sidecar write commits nothing;
-        once it lands the merge is committed to memory, so a failed values
-        write cannot re-append rows on retry); the values file lands by
-        unique-temp + atomic replace.
+        Under the lock the on-disk values are re-read THROUGH THE V3 GATE;
+        OUR unsaved rows are appended to the context's history database in
+        ONE transaction, and each value key WE wrote is set to the
+        LATEST-timestamp record across ALL sessions' rows (a same-timestamp
+        tie resolves to the later insertion), so a concurrent session's
+        newer value wins and the persisted value always matches its
+        crediting row. Everything is validated BEFORE the transaction
+        commits — a veto rolls it back and zero rows land. The commit is
+        the durability point (the sidecar era's "history written FIRST"):
+        the buffer is then cleared, so a failed values write cannot
+        re-append rows on retry — the retry recomputes the values FROM the
+        database; the values file lands by unique-temp + atomic replace.
+        Lock order: values ``.lock`` strictly outside, database transaction
+        strictly inside — never inverted, so no lock cycle can form.
         """
         if self._path is None:  # in-memory store: nothing to persist
             return
@@ -391,25 +374,17 @@ class Store:
             data = _load_v3(self._path)  # archive side effects under the lock
             file_values = (_clean_values(data.get("values"), self._roster)
                            if data else {})
-            file_history = _rehydrate(read_history(self._path))
-            if file_history is None:  # foreign sidecar met at the save site
-                _archive_pre_v3(self._path, sidecar_only=data is not None)
-                file_history = []
-            ours = self._history[self._saved:]
-            merged = sorted(file_history + ours,
-                            key=lambda r: r.timestamp)  # stable
-            latest: dict[tuple[str, str], Any] = {}
-            for r in merged:  # ascending -> last write per key wins
-                latest[(r.entity, r.field)] = r.new
-            candidate = file_values
-            for entity, field in self._dirty:
-                v = latest[(entity, field)]
-                candidate.setdefault(entity, {})[field] = (
-                    list(v) if isinstance(v, list) else v)
-            self._check_merged(candidate)  # fail fast: nothing written yet
-            write_history(self._path, [r.as_dict() for r in merged])
-            self._history = merged
-            self._saved = len(merged)
+            with self._changes.transaction() as db:
+                ChangeDB.insert(db, self._unsaved, store=self._store_name)
+                latest = ChangeDB.latest_new(db, store=self._store_name,
+                                             keys=self._dirty)
+                candidate = file_values
+                for entity, field in self._dirty:
+                    v = latest[(entity, field)]
+                    candidate.setdefault(entity, {})[field] = (
+                        list(v) if isinstance(v, list) else v)
+                self._check_merged(candidate)  # veto -> rollback, zero rows
+            self._unsaved.clear()  # committed — a retry must not re-insert
             payload = json.dumps({"schema": STATE_SCHEMA,
                                   "values": candidate},
                                  indent=2, allow_nan=False)
@@ -426,15 +401,16 @@ class Store:
 
 
 def physical_store(scqo_dir: str | Path | None, roster: Roster, *,
-                   setup: str = "") -> Store:
+                   setup: str = "", cooldown: str = "") -> Store:
     """The measured-facts store of one context directory (None = in-memory)."""
     path = Path(scqo_dir) / PHYSICAL_FILE if scqo_dir is not None else None
-    return Store(path, roster, roles=frozenset({"fact"}), setup=setup)
+    return Store(path, roster, roles=frozenset({"fact"}), setup=setup,
+                 cooldown=cooldown)
 
 
 def state_store(scqo_dir: str | Path | None, roster: Roster, *,
-                setup: str = "") -> Store:
+                setup: str = "", cooldown: str = "") -> Store:
     """The operating store of one context directory (None = in-memory)."""
     path = Path(scqo_dir) / STATE_FILE if scqo_dir is not None else None
     return Store(path, roster, roles=frozenset({"knob", "monitor"}),
-                 setup=setup)
+                 setup=setup, cooldown=cooldown)

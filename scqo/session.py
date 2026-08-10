@@ -149,18 +149,23 @@ class Session:
         #: (None = in-memory session: full validation, no persistence).
         self.scqo_dir = Path(scqo_dir) if scqo_dir is not None else None
         self._persist = scqo_dir is not None
-        self.state = state_store(scqo_dir, roster, setup=self.setup_name)
+        self.state = state_store(scqo_dir, roster, setup=self.setup_name,
+                                 cooldown=self.cooldown_id)
         if scqo_dir is None and data_root is not None:
             # Setup-less direct-API escape hatch: measured physics still
             # persists at the device level — losing it on restart is THE
-            # regression the store prevents (old-session parity).
+            # regression the store prevents (old-session parity). Its
+            # history database lands next to it (<device>/history.sqlite,
+            # the ("", "") context).
             from .stores import PHYSICAL_FILE, Store
             self.physical = Store(
                 Path(data_root) / device_name / PHYSICAL_FILE, roster,
-                roles=frozenset({"fact"}), setup=self.setup_name)
+                roles=frozenset({"fact"}), setup=self.setup_name,
+                cooldown=self.cooldown_id)
         else:
             self.physical = physical_store(scqo_dir, roster,
-                                           setup=self.setup_name)
+                                           setup=self.setup_name,
+                                           cooldown=self.cooldown_id)
         self.device = RecordingDevice(backend.device, roster, self.state,
                                       on_load=state_sync)
         self.datastore = (
@@ -428,8 +433,7 @@ class Session:
         ``scqo accept --campaign``). ``"apply"`` is allowed with a warning:
         legitimate for a repeated RE-TUNING campaign, but it moves the device
         under its own measurement (so the statistic measures the feedback
-        loop, not the qubit), each child's ``Store.save()`` rewrites the whole
-        history sidecar — and no aggregate suggestions are generated (the
+        loop, not the qubit) — and no aggregate suggestions are generated (the
         series is a feedback trace, not repeated measurements of one value).
 
         PRE-FLIGHT: before repeat 0 every step's Parameters are constructed and
@@ -1615,12 +1619,17 @@ class Session:
                 out[member] = merged
         return out
 
-    def history(self, store: str = "state") -> list[dict]:
+    def history(self, store: str = "state", *, entity: str | None = None,
+                limit: int | None = None) -> list[dict]:
         """The recorded change history (the loop's memory): ``"state"``
-        (knobs + monitors) or ``"physical"`` (measured facts)."""
+        (knobs + monitors) or ``"physical"`` (measured facts). ``entity``
+        narrows to one entity; ``limit`` keeps the last N — both push down
+        into the context's history database instead of loading everything."""
         if store == "physical":
-            return [r.as_dict() for r in self.physical.history()]
+            return [r.as_dict()
+                    for r in self.physical.history(entity=entity, limit=limit)]
         if store != "state":
             raise ValueError(
                 f"store must be 'state' or 'physical', got {store!r}")
-        return [r.as_dict() for r in self.device.history()]
+        return [r.as_dict()
+                for r in self.device.history(entity=entity, limit=limit)]

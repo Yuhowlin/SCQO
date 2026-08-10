@@ -6,6 +6,7 @@
 </h2>
 <p class="muted">{{ record.experiment }} · {{ record.started_at }} · backend {{ record.backend }}
 {%- if record.operator %} · operator {{ record.operator }}{% endif %}
+{%- if record.cooldown and record.setup %} · setup <a href="/setup/{{ record.device }}/{{ record.cooldown }}/{{ record.setup }}">{{ record.cooldown }}/{{ record.setup }}</a>{% endif %}
 {%- if record.campaign %} · campaign <a href="/campaign/{{ record.campaign }}">{{ record.campaign }}</a> (r{{ record.repeat_idx }} s{{ record.step_idx }}){% endif %} ·
 folder <code>{{ path }}</code></p>
 

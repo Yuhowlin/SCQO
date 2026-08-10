@@ -203,36 +203,28 @@ def test_values_only_reset_preserves_history(tmp_path, roster):
     assert fresh.get("q2_xy", "pi_amp") == 0.214     # ...new value persisted
 
 
-def test_corrupt_values_file_quarantined_sidecar_survives(tmp_path, roster):
+def test_corrupt_values_file_quarantined_history_survives(tmp_path, roster):
     state = state_store(tmp_path, roster)
     state.record("q1_xy", "pi_amp", 0.209)
     state.save()
     (tmp_path / "scqo_state.json").write_text('{"schema": 3, "val')  # torn
     again = state_store(tmp_path, roster)
-    assert len(again.history()) == 1                 # provenance intact
+    assert len(again.history()) == 1                 # provenance intact (DB)
     assert (tmp_path / "scqo_state.json.corrupt.bak").is_file()
-    assert not (tmp_path / "scqo_state.history.jsonl.v2.bak").exists()
 
 
-def test_orphan_v2_sidecar_archived_not_bricking(tmp_path, roster):
+def test_retired_sidecar_is_ignored_never_read(tmp_path, roster):
+    """Pre-database ``*.history.jsonl`` files are dead: never read, never
+    imported, left in place for the operator to delete at leisure."""
     (tmp_path / "scqo_state.history.jsonl").write_text(
-        '{"timestamp": "t", "component": "q1", "field": "readout_freq", '
-        '"old": null, "new": 5.9}\n')                # v2 row shape, no values
-    state = state_store(tmp_path, roster)            # must NOT raise
-    assert state.history() == ()
-    assert (tmp_path / "scqo_state.history.jsonl.v2.bak").is_file()
-
-
-def test_future_row_keys_are_tolerated(tmp_path, roster):
+        '{"timestamp": "t", "entity": "q1_xy", "field": "pi_amp", '
+        '"old": null, "new": 0.111}\n')              # even a v3-shaped row
     state = state_store(tmp_path, roster)
+    assert state.history() == ()                     # fresh start
     state.record("q1_xy", "pi_amp", 0.209)
     state.save()
-    sidecar = tmp_path / "scqo_state.history.jsonl"
-    row = sidecar.read_text().strip()
-    row = row[:-1] + ', "future_key": "x"}'          # a 3.x writer's row
-    sidecar.write_text(row + "\n")
-    again = state_store(tmp_path, roster)
-    assert again.history()[0].new == 0.209
+    assert [r.new for r in state.history()] == [0.209]
+    assert (tmp_path / "scqo_state.history.jsonl").is_file()  # untouched
 
 
 def test_same_key_latest_timestamp_wins_regardless_of_save_order(
@@ -277,6 +269,7 @@ def test_merged_paired_arrays_cannot_go_unequal(tmp_path, roster):
         b.save()
     fresh = physical_store(tmp_path, roster)
     assert fresh.get("q1_z", "distortion_amp") is None   # nothing committed
+    assert len(fresh.history()) == 1                     # veto rolled back
 
 
 def test_hand_mangled_file_values_are_dropped_at_load(tmp_path, roster):
@@ -299,7 +292,7 @@ def test_history_rows_do_not_alias_live_values(stores):
 
 def test_record_stamps_campaign_id(tmp_path, roster):
     """A campaign-level accept stamps campaign_id (run_id stays None); the row
-    survives the sidecar round trip, and a plain record() leaves it None."""
+    survives the database round trip, and a plain record() leaves it None."""
     physical = physical_store(tmp_path, roster)
     physical.record("q1", "f_01_hz", 5.1e9, experiment="qubit_ramsey",
                     campaign_id="20260809-100000-000-devA-stab-01")

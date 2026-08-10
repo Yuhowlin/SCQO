@@ -1,11 +1,13 @@
 """Run-viewer: pages render from a real (simulated-run) datastore; the only write
 is tag/note editing; file serving never escapes the run folder.
 
-Greenfield migration note: nothing was dropped here — every assertion was
-re-pointed at the entity model (``q0_ro.readout_freq_hz`` instead of
-``q0.readout_freq``, ``q0_res.g_hz``, ``fidelity_g``/``fidelity_e`` instead of
-the deleted ``readout_fidelity``) and at the schema-3 store files (top-level
-``"values"``, no ``"config"``).
+Change-history cutover note: provenance now comes from each context's
+``history.sqlite`` (scqo.changes) — the viewer reads it strictly read-only.
+Every setup of every cooldown cycle has its own page (``/setup/...``) carrying
+the calibration + physical tables with current AND previous run links; the
+device page holds the cycles table and the physical-facts matrix; ``/trends``
+charts change history (port 1 = one parameter in one setup, latest 50; port 2 =
+one physical fact across every context).
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ pytest.importorskip("multipart")
 from fastapi.testclient import TestClient  # noqa: E402
 
 from scqo import Session  # noqa: E402
+from scqo.changes import HISTORY_FILE, ChangeDB, ChangeRecord  # noqa: E402
 from scqo.testing import SimulatedBackend, demo_device  # noqa: E402
 from scqo.viewer.app import create_app  # noqa: E402
 
@@ -49,19 +52,27 @@ def _session(root: Path, dev: str, *, cid: str = "", setup: str = "",
 
 @pytest.fixture(scope="module")
 def lab(tmp_path_factory):
-    """A datastore with APPLIED runs on TWO setups of devV (per-(cooldown, setup)
-    scqo/ folders), one PENDING run, a run stamped with a VANISHED setup name, a
-    second sample (chipZ), a registry-less sample (bare), and a viewer client."""
+    """A datastore with APPLIED runs on TWO setups of devV's active cycle plus a
+    CLOSED earlier cycle (cdU/sim_old — the cross-cooldown fixtures), one
+    PENDING run, a run stamped with a VANISHED setup name, a second sample
+    (chipZ), a registry-less sample (bare), and a viewer client."""
     root = tmp_path_factory.mktemp("data")
     (root / "devV").mkdir()
     # Cycle registry BEFORE the runs; sessions bind their (cooldown, setup) era
-    # explicitly and each context persists its OWN scqo/ folder.
+    # explicitly and each context persists its OWN scqo/ folder. cdU is a
+    # CLOSED cycle that ran first — registry order matches chronology.
     (root / "devV" / "cooldowns.toml").write_text(
+        '[cdU]\nstart = 2026-06-01\nend = 2026-06-20\nfridge = "BlueforsA"\n\n'
+        '[cdU.setup.sim_old]\nbackend = "simulated"\n\n'
         '[cdV]\nstart = 2026-07-01\nfridge = "BlueforsA"\npackaging = "PCB v3"\n\n'
         '[cdV.setup.sim_main]\nbackend = "simulated"\n'
         '[cdV.setup.sim_alt]\nbackend = "simulated"\n',
         encoding="utf-8",
     )
+    # the CLOSED cycle's run lands FIRST (chronological change history)
+    sess_old = _session(root, "devV", cid="cdU", setup="sim_old")
+    r_old = sess_old.run("resonator_spectroscopy", {"targets": ["q0"]}, update="apply")
+
     sess = _session(root, "devV", cid="cdV", setup="sim_main")
     r_res = sess.run("resonator_spectroscopy", {"targets": ["q0"]}, update="apply", tags=["cool1"])
     # a second applied run SUPERSEDES r_res's readout_freq_hz (live-source tests)
@@ -77,7 +88,7 @@ def lab(tmp_path_factory):
     sess.physical.save()
 
     # A finished campaign with aggregate suggestions: the q0 FACT is accepted
-    # (device page gets a campaign-credited value; q0 deliberately, so q1's
+    # (the setup page gets a campaign-credited value; q0 deliberately, so q1's
     # run-credit assertions stay untouched), the q0_xy knob stays PENDING
     # (badge + filter stay exercisable). statistics.png is written by the CLI
     # layer, not run_campaign — a placeholder keeps matplotlib out of here.
@@ -136,7 +147,8 @@ def lab(tmp_path_factory):
     (root / "brokenB" / "cooldowns.toml").write_text("not [valid toml\n", encoding="utf-8")
 
     client = TestClient(create_app(root))
-    return {"client": client, "root": root, "res": r_res, "res2": r_res2, "ram": r_ram,
+    return {"client": client, "root": root, "old": r_old,
+            "res": r_res, "res2": r_res2, "ram": r_ram,
             "t1": r_t1, "pend": r_pend, "alt": r_alt, "ghost": r_ghost,
             "chipz": r_z, "bare": r_bare,
             "campaign": camp, "running_id": running_id}
@@ -190,44 +202,311 @@ def test_tag_editing_is_the_only_write(lab):
     assert posts == [f"/run/{{run_id}}/tags".replace("{{", "{").replace("}}", "}")]
 
 
-def test_trends_page_charts_t1(lab):
+# ------------------------------------------------------------------- trends
+
+def test_trends_chart_a_fact_across_the_device(lab):
+    """Port 2: a physical fact charts from its change history, run-linked."""
     c = lab["client"]
-    page = c.get("/trends", params={"target": "q1", "quantity": "t1_s", "device": "devV"}).text
+    page = c.get("/trends", params={"entity": "q1", "field": "t1_s", "device": "devV"}).text
     assert "<svg" in page and "<circle" in page
     assert lab["t1"]["run_id"] in page
 
 
-def test_device_page_state_and_history(lab):
+def test_trends_menu_offers_only_recorded_parameters(lab):
+    """The menu is DB-derived: parameters WITH history appear (facts device-wide,
+    state parameters per setup); a catalogued field nothing wrote does not."""
+    page = lab["client"].get("/trends", params={"device": "devV"}).text
+    assert "q1.t1_s" in page                       # a recorded fact
+    assert "q0_res.g_hz" in page                   # the manual physical write
+    assert "readout_freq_hz" in page               # a state parameter with rows
+    assert "/setup/devV/cdV/sim_main" in page      # state block names its setup
+    assert "pump_freq_hz" not in page              # catalogued, never written
+
+
+def test_port1_trend_is_scoped_to_its_setup(lab):
+    """Port 1: the same parameter name in ANOTHER setup shows that setup's
+    changes only — an unmeasured context reads as empty, never as a neighbor's."""
     c = lab["client"]
-    page = c.get("/device", params={"device": "devV"}).text
-    assert "Device: devV" in page
-    assert "All samples" in page  # the detail page always links back to the overview
-    # the calibration table holds what the runs WROTE (schema-3 stores carry a
-    # field only once it is recorded — an untouched vendor knob is not state)
-    assert "readout_freq_hz" in page
-    assert "Change history" in page
-    assert lab["res"]["run_id"] in page  # history entry links to its run
+    main = c.get("/trends", params={"device": "devV", "entity": "q0_ro",
+                                    "field": "readout_freq_hz",
+                                    "cooldown": "cdV", "setup": "sim_main"}).text
+    assert "Latest 50 changes" in main
+    assert lab["res"]["run_id"] in main and lab["res2"]["run_id"] in main
+    assert lab["old"]["run_id"] not in main        # cdU's change stays in cdU
+    alt = c.get("/trends", params={"device": "devV", "entity": "q0_ro",
+                                   "field": "readout_freq_hz",
+                                   "cooldown": "cdV", "setup": "sim_alt"}).text
+    assert "No recorded changes" in alt            # sim_alt never wrote q0_ro
 
 
-def test_device_page_history_operator_column(lab):
-    """P3 attribution: the change history shows WHO made each change."""
+def test_port2_trend_crosses_cooldowns_with_context(lab):
+    """Port 2: one fact across every context — cdU then cdV, a dashed cooldown
+    separator, context-colored points, a legend, and setup-page links."""
+    page = lab["client"].get("/trends", params={
+        "device": "devV", "entity": "q0_res", "field": "f_r_hz"}).text
+    assert lab["old"]["run_id"] in page and lab["res2"]["run_id"] in page
+    assert 'class="ctxsep"' in page                # a cooldown boundary
+    assert "ctx-0" in page and "ctx-1" in page     # two colored contexts
+    assert '/setup/devV/cdU/sim_old' in page       # legend/table link contexts
+    assert '/setup/devV/cdV/sim_main' in page
+    assert "<th>cooldown</th>" in page             # the cross-context table
+    # chronological: the closed cycle's change precedes the active cycle's
+    table = page.split("<table", 1)[1]
+    assert table.index(lab["old"]["run_id"]) > table.index(lab["res2"]["run_id"])  # newest-first table
+
+
+def test_bare_trends_redirects_to_sample_overview(lab):
+    """Device-less /trends is not a page of its own: a trend needs an explicit
+    sample first, and the ONE sample picker is the /device overview (each row
+    links its per-sample trends)."""
+    resp = lab["client"].get("/trends", follow_redirects=False)
+    assert resp.status_code == 307
+    assert resp.headers["location"] == "/device"
+
+
+def test_trends_never_mix_samples(lab):
+    c = lab["client"]
+    # q0_res.f_r_hz exists on BOTH samples ("q1 exists on every chip" problem):
+    # there is NO silent default sample — device-less /trends bounces to the
+    # sample overview, and a chart is always explicitly device-scoped.
+    bare = c.get("/trends").text  # redirect followed → the /device overview
+    assert "<svg" not in bare and "<circle" not in bare
+    assert "/trends?device=devV" in bare and "/trends?device=chipZ" in bare
+    dev = c.get("/trends", params={"entity": "q0_res", "field": "f_r_hz", "device": "devV"}).text
+    assert lab["res"]["run_id"] in dev
+    assert lab["chipz"]["run_id"] not in dev
+    z = c.get("/trends", params={"entity": "q0_res", "field": "f_r_hz", "device": "chipZ"}).text
+    assert lab["chipz"]["run_id"] in z and lab["res"]["run_id"] not in z
+
+
+# --------------------------------------------------------------- setup pages
+
+def test_setup_page_state_values_and_metadata(lab):
+    """The per-setup page carries what the old device-page section held: the
+    calibration values, the cycle facts and the setup metadata."""
+    page = lab["client"].get("/setup/devV/cdV/sim_main").text
+    assert "Setup: sim_main" in page
+    assert "All samples" in page                   # breadcrumb to the overview
+    assert "readout_freq_hz" in page               # a recorded knob renders
+    assert "Current calibration" in page
+    assert "simulated" in page and "(built-in)" in page  # backend metadata
+    assert "PCB v3" in page                        # its cycle's facts
+
+
+def test_setup_page_current_and_previous_run_links(lab):
+    """Requirement: each parameter row shows ONLY the current value's run and
+    the ONE-BEFORE run — here readout_freq_hz was set by res then res2."""
+    page = lab["client"].get("/setup/devV/cdV/sim_main").text
+    row = next(r for r in page.split("<tr")
+               if ">readout_freq_hz</a>" in r and "q0_ro" in r)
+    assert f"/run/{lab['res2']['run_id']}" in row  # source = current run
+    assert f"/run/{lab['res']['run_id']}" in row   # previous = the run before
+    # and no 200-row history tables anymore
+    assert "Change history" not in page
+
+
+def test_setup_page_physical_rows_and_manual_marker(lab):
+    page = lab["client"].get("/setup/devV/cdV/sim_main").text
+    physical = page.split("Physical parameters", 1)[1]
+    assert f"/run/{lab['t1']['run_id']}" in physical  # t1_s -> its run
+    assert "(manual)" in physical                     # the notebook-written g_hz
+    for field in ("t1_s", "t2_star_s", "g_hz"):
+        assert f">{field}</a>" in physical            # rows render, names link
+
+
+def test_setup_page_param_names_link_scoped_trends(lab):
+    page = lab["client"].get("/setup/devV/cdV/sim_main").text
+    assert ("/trends?device=devV&entity=q0_ro&field=readout_freq_hz"
+            "&cooldown=cdV&setup=sim_main") in page
+
+
+def test_setup_pages_do_not_bleed_across_setups(lab):
+    """Two setups of one device = two independent pages, each holding only its
+    own runs' provenance."""
+    c = lab["client"]
+    main = c.get("/setup/devV/cdV/sim_main").text
+    alt = c.get("/setup/devV/cdV/sim_alt").text
+    assert lab["res2"]["run_id"] in main and lab["alt"]["run_id"] in alt
+    assert lab["alt"]["run_id"] not in main        # no cross-setup bleed
+    assert lab["res2"]["run_id"] not in alt
+
+
+def test_setup_page_latest_run_link_is_its_own(lab):
+    """The 'latest run' caption links this SETUP's own latest run — never the
+    device-wide newest (here r_ghost, bound to a vanished setup name)."""
+    page = lab["client"].get("/setup/devV/cdV/sim_main").text
+    caption = page.split("latest run:", 1)[1].split("</p>", 1)[0]
+    assert lab["ghost"]["run_id"] not in caption
+    assert "/run/20" in caption
+
+
+def test_setup_page_operator_on_trend_table(lab):
+    """P3 attribution: the change trend shows WHO made each change."""
     import getpass
 
-    page = lab["client"].get("/device", params={"device": "devV"}).text
+    page = lab["client"].get("/trends", params={
+        "device": "devV", "entity": "q0_ro", "field": "readout_freq_hz",
+        "cooldown": "cdV", "setup": "sim_main"}).text
     assert "<th>operator</th>" in page
     assert getpass.getuser() in page  # this test process's login, stamped on the runs
 
 
-def test_physical_panel_is_per_setup_section(lab):
-    """Physical values live inside their setup's section (per (cooldown, setup)
-    context) — flat rows, no setup column. Only sim_main measured physics here."""
-    page = lab["client"].get("/device", params={"device": "devV"}).text
-    assert "Physical parameters — sim_main" in page
-    values_table = page.split("Physical parameters — sim_main", 1)[1].split("</table>", 1)[0]
-    assert "<th>setup</th>" not in values_table  # one context per section: no setup column
-    for field in ("t1_s", "t2_star_s", "g_hz"):
-        assert f"<td>{field}</td>" in values_table
+def test_setup_page_flags_external_change(lab):
+    """Hand-edit chipZ's state file: the strict-match rule must show the value as
+    externally changed and credit NO run. (chipZ so devV fixtures stay pristine.)"""
+    state_path = Path(lab["root"]) / "chipZ" / "cdZ" / "z_main" / "scqo" / "scqo_state.json"
+    data = json.loads(state_path.read_text(encoding="utf-8"))
+    data["values"]["q0_ro"]["readout_freq_hz"] = 9.9e9  # another tool wrote the state
+    state_path.write_text(json.dumps(data), encoding="utf-8")
 
+    page = lab["client"].get("/setup/chipZ/cdZ/z_main").text
+    tampered = next(r for r in page.split("<tr")
+                    if ">readout_freq_hz</a>" in r and "q0_ro" in r)
+    source_cell = tampered.split("<td")[5]         # the source column
+    assert "externally changed" in source_cell
+    assert "/run/" not in source_cell              # never a false credit
+    # ... while the run's UNTOUCHED value is still credited: one hand-edit must
+    # not discredit everything else the same run legitimately set.
+    credited = next(r for r in page.split("<tr")
+                    if ">readout_depletion_s</a>" in r)
+    assert f"/run/{lab['chipz']['run_id']}" in credited
+
+
+def test_setup_page_credits_a_campaign_accept(lab):
+    c = lab["client"]
+    cid = lab["campaign"]["campaign_id"]
+    page = c.get("/setup/devV/cdV/sim_main").text
+    # the accepted q0.t1_s fact links its value to the campaign, not a run
+    assert f'href="/campaign/{cid}"' in page
+    assert "(campaign)" in page
+
+
+def test_setup_page_history_survives_values_only_reset(tmp_path):
+    """REGRESSION: after the documented values-only reset (delete
+    scqo_state.json — history.sqlite survives) the setup page must still render
+    run-linked provenance; hiding it would silently break the cutover's
+    guarantee that provenance is never collateral damage."""
+    (tmp_path / "devR").mkdir()
+    (tmp_path / "devR" / "cooldowns.toml").write_text(
+        '[cdR]\nstart = 2026-07-01\n[cdR.setup.main]\nbackend = "simulated"\n',
+        encoding="utf-8")
+    sess = _session(tmp_path, "devR", cid="cdR", setup="main")
+    r = sess.run("resonator_spectroscopy", {"targets": ["q0"]}, update="apply")
+    (_scqo_dir(tmp_path, "devR", "cdR", "main") / "scqo_state.json").unlink()
+
+    page = TestClient(create_app(tmp_path)).get("/setup/devR/cdR/main").text
+    assert "device_after snapshot" in page          # values fell back...
+    assert f"/run/{r['run_id']}" in page            # ...provenance did NOT
+
+
+def test_setup_page_unknown_context_renders_empty_not_404(lab):
+    c = lab["client"]
+    page = c.get("/setup/devV/cdV/nonexistent")
+    assert page.status_code == 200
+    assert "No calibration recorded" in page.text
+    assert "not in cooldowns.toml" in page.text
+    # only a non-filename-safe segment 404s
+    assert c.get("/setup/devV/cd%20bad/main").status_code == 404
+
+
+# --------------------------------------------------------------- device page
+
+def test_device_page_cycles_link_every_setup(lab):
+    """EVERY cycle's setups — closed cycles included — are links to their own
+    setup pages; the metadata table moved there."""
+    page = lab["client"].get("/device", params={"device": "devV"}).text
+    assert "Device: devV" in page and "Cooldown cycles" in page
+    assert "cdV" in page and "(active)" in page
+    assert "PCB v3" in page                        # packaging is a cycle fact
+    assert 'href="/setup/devV/cdV/sim_main"' in page
+    assert 'href="/setup/devV/cdV/sim_alt"' in page
+    assert 'href="/setup/devV/cdU/sim_old"' in page  # the CLOSED cycle links too
+
+
+def test_device_page_matrix_facts_by_context(lab):
+    """The physical-facts matrix: rows = facts linking their port-2 trend,
+    columns = contexts linking their setup pages, cells = latest values. The
+    ghost run's escape-hatch physics (device-level history) is a flagged
+    fourth column — shown, never hidden."""
+    page = lab["client"].get("/device", params={"device": "devV"}).text
+    assert "Physical properties" in page
+    matrix = page.split("Physical properties", 1)[1].split("</table>", 1)[0]
+    assert "cdU/sim_old" in matrix and "cdV/sim_main" in matrix
+    assert "(device-level)" in matrix              # the ghost run's physics
+    assert ("/trends?device=devV&entity=q0_res&field=f_r_hz") in matrix
+    row = next(r for r in matrix.split("<tr") if "q0_res.f_r_hz" in r)
+    assert row.count("<td") == 5                   # parameter + 4 context cells
+    assert ">-</td>" in row                        # sim_alt never measured q0
+
+
+def test_device_page_matrix_flags_ghost_contexts(tmp_path):
+    """A context on disk but not in cooldowns.toml still shows — flagged, never
+    hidden (hiding it would make the matrix disagree with the trend chart)."""
+    (tmp_path / "devG").mkdir()
+    (tmp_path / "devG" / "cooldowns.toml").write_text(
+        '[cd1]\nstart = 2026-07-01\n[cd1.setup.main]\nbackend = "simulated"\n',
+        encoding="utf-8")
+    for cid, setup in (("cd1", "main"), ("cdX", "mystery")):
+        db = ChangeDB(_scqo_dir(tmp_path, "devG", cid, setup) / HISTORY_FILE)
+        with db.transaction() as con:
+            ChangeDB.insert(con, [ChangeRecord(
+                timestamp=f"2026-07-0{1 if cid == 'cd1' else 2}T10:00:00+08:00",
+                entity="q0", field="t1_s", old=None, new=2.5e-5,
+                cooldown=cid, setup=setup)], store="physical")
+    page = TestClient(create_app(tmp_path)).get(
+        "/device", params={"device": "devG"}).text
+    assert "cd1/main" in page
+    assert "cdX/mystery" in page                   # the ghost column renders...
+    assert "not in cooldowns.toml" in page         # ...flagged
+
+
+def test_registry_less_device_shows_snapshot_only(lab):
+    """No registry = no setup pages: the device page falls back to the last
+    run's device_after snapshot for the KNOBS (values only), while the
+    escape-hatch device-level facts still render in the matrix."""
+    page = lab["client"].get("/device", params={"device": "bare"}).text
+    assert "Last observed calibration" in page
+    assert "device_after snapshot" in page and lab["bare"]["run_id"] in page
+    assert "Current calibration" not in page
+    assert "(device-level)" in page  # the escape-hatch physics column
+
+
+def test_multi_device_filter_and_device_page(lab):
+    c = lab["client"]
+    rid = lab["chipz"]["run_id"]
+
+    only_z = c.get("/", params={"device": "chipZ"}).text
+    assert rid in only_z and lab["res"]["run_id"] not in only_z
+
+    page_z = c.get("/device", params={"device": "chipZ"}).text
+    assert "Device: chipZ" in page_z
+    assert "second sample on the other fridge" in page_z  # devices.toml card rendered
+    assert rid in c.get("/setup/chipZ/cdZ/z_main").text   # provenance on ITS page
+
+
+def test_viewer_never_creates_history_databases(tmp_path):
+    """The read-only invariant: rendering every page of a DB-less device mints
+    no history.sqlite anywhere (sqlite3.connect would create one)."""
+    (tmp_path / "devN").mkdir()
+    (tmp_path / "devN" / "cooldowns.toml").write_text(
+        '[cd1]\nstart = 2026-07-01\n[cd1.setup.main]\nbackend = "simulated"\n',
+        encoding="utf-8")
+    scqo_dir = _scqo_dir(tmp_path, "devN", "cd1", "main")
+    scqo_dir.mkdir(parents=True)
+    (scqo_dir / "scqo_state.json").write_text(
+        '{"schema": 3, "values": {"q0_ro": {"readout_freq_hz": 5.9e9}}}',
+        encoding="utf-8")
+    c = TestClient(create_app(tmp_path))
+    for url in ("/device?device=devN", "/setup/devN/cd1/main",
+                "/trends?device=devN",
+                "/trends?device=devN&entity=q0&field=t1_s",
+                "/trends?device=devN&entity=q0_ro&field=readout_freq_hz"
+                "&cooldown=cd1&setup=main"):
+        assert c.get(url).status_code == 200
+    assert list(tmp_path.rglob(HISTORY_FILE)) == []
+
+
+# ---------------------------------------------------------- runs / run pages
 
 def test_run_page_shows_suggestions_table(lab):
     c = lab["client"]
@@ -241,24 +520,6 @@ def test_run_page_shows_suggestions_table(lab):
     assert "Suggested updates" in page_applied and "accepted" in page_applied
 
 
-def test_device_page_history_survives_values_only_reset(tmp_path):
-    """REGRESSION: after the documented values-only reset (delete scqo_state.json,
-    keep its .history.jsonl sidecar) the device page must still render the change
-    history — the split's guarantee is that provenance is never silently hidden."""
-    (tmp_path / "devR").mkdir()
-    (tmp_path / "devR" / "cooldowns.toml").write_text(
-        '[cdR]\nstart = 2026-07-01\n[cdR.setup.main]\nbackend = "simulated"\n',
-        encoding="utf-8")
-    sess = _session(tmp_path, "devR", cid="cdR", setup="main")
-    r = sess.run("resonator_spectroscopy", {"targets": ["q0"]}, update="apply")
-    (_scqo_dir(tmp_path, "devR", "cdR", "main") / "scqo_state.json").unlink()  # sidecar survives
-
-    page = TestClient(create_app(tmp_path)).get("/device", params={"device": "devR"}).text
-    assert "Change history" in page
-    assert r["run_id"] in page  # rows render from the surviving sidecar
-    assert "All samples" in page  # single-sample root: the overview link renders anyway
-
-
 def test_run_page_marks_operator_suggestion(lab):
     """A human-attached value (Session.suggest / scqo suggest) renders with the
     operator badge; estimator rows never carry it."""
@@ -267,6 +528,11 @@ def test_run_page_marks_operator_suggestion(lab):
     assert "read off the decay" in page  # the proposal comment is shown
     page_estimator = lab["client"].get(f"/run/{lab['res']['run_id']}").text
     assert "badge operator" not in page_estimator
+
+
+def test_run_page_links_its_setup_page(lab):
+    page = lab["client"].get(f"/run/{lab['res']['run_id']}").text
+    assert 'href="/setup/devV/cdV/sim_main"' in page
 
 
 def test_runs_page_pending_filter_and_updates_column(lab):
@@ -278,13 +544,6 @@ def test_runs_page_pending_filter_and_updates_column(lab):
     assert "4 pending" in full  # the updates column flags the undecided run
 
 
-def test_trends_offer_descriptor_quantities(lab):
-    # the quantity menu lives on the device-scoped chart page, not the picker
-    page = lab["client"].get("/trends", params={"device": "devV"}).text
-    assert "t2_echo_s" in page
-    assert "fidelity_g" in page and "fidelity_e" in page
-
-
 def test_runs_page_cooldown_filter_and_column(lab):
     c = lab["client"]
     page = c.get("/", params={"cooldown": "cdV"}).text
@@ -293,12 +552,12 @@ def test_runs_page_cooldown_filter_and_column(lab):
 
 
 def test_runs_page_setup_filter_and_column(lab):
-    """Runs stamped with a setup NAME show it in the setup column; ?setup= filters."""
+    """Runs stamped with a setup NAME link it in the setup column; ?setup= filters."""
     c = lab["client"]
     page = c.get("/").text
     assert "<th>setup</th>" in page
-    assert "<td>sim_main</td>" in _row_chunk(page, lab["res"]["run_id"])
-    assert "<td>z_main</td>" in _row_chunk(page, lab["chipz"]["run_id"])
+    assert ">sim_main</a>" in _row_chunk(page, lab["res"]["run_id"])
+    assert ">z_main</a>" in _row_chunk(page, lab["chipz"]["run_id"])
     # the registry-less sample's run carries no setup name
     assert "sim_main" not in _row_chunk(page, lab["bare"]["run_id"])
 
@@ -307,30 +566,6 @@ def test_runs_page_setup_filter_and_column(lab):
     assert lab["alt"]["run_id"] not in filtered  # the other setup's run
     assert lab["chipz"]["run_id"] not in filtered
     assert c.get("/", params={"setup": "nope"}).text.count("/run/") == 0
-
-
-def test_device_page_shows_cycle_and_setup(lab):
-    page = lab["client"].get("/device", params={"device": "devV"}).text
-    assert "Cooldown cycles" in page
-    assert "cdV" in page and "(active)" in page
-    assert "PCB v3" in page  # packaging is a cycle fact
-    # the ACTIVE cycle's named-setups table: name + backend rendered
-    assert "<b>sim_main</b>" in page
-    assert "simulated" in page
-    assert "(built-in)" in page  # simulated setups carry no instrument_config
-
-
-def test_multi_device_filter_and_device_page(lab):
-    c = lab["client"]
-    rid = lab["chipz"]["run_id"]
-
-    only_z = c.get("/", params={"device": "chipZ"}).text
-    assert rid in only_z and lab["res"]["run_id"] not in only_z
-
-    page_z = c.get("/device", params={"device": "chipZ"}).text
-    assert "Device: chipZ" in page_z
-    assert "second sample on the other fridge" in page_z  # devices.toml card rendered
-    assert rid in page_z  # history via z_main's per-setup state file
 
 
 def test_main_initializes_fresh_data_root_but_rejects_typos(tmp_path, monkeypatch):
@@ -370,19 +605,6 @@ def test_runs_page_live_column(lab):
     assert "4 pending" in pending_row
 
 
-def test_device_page_values_link_to_source_runs(lab):
-    """Strict match: each value links to the run that set it; manual writes are
-    marked; the assertions are scoped to the VALUE tables (history links too)."""
-    page = lab["client"].get("/device", params={"device": "devV"}).text
-    # slice to the value TABLE itself — the caption above it links the latest run
-    state_table = page.split("Current calibration", 1)[1].split("<table>", 1)[1].split("</table>", 1)[0]
-    assert f"/run/{lab['res2']['run_id']}" in state_table  # readout_freq_hz -> its run
-    assert f"/run/{lab['res']['run_id']}" not in state_table  # superseded: no credit
-    physical_table = page.split("Physical parameters", 1)[1].split("</table>", 1)[0]
-    assert f"/run/{lab['t1']['run_id']}" in physical_table  # t1_s -> its run
-    assert "(manual)" in physical_table  # the notebook-written g_hz
-
-
 def test_run_page_live_and_superseded_badges(lab):
     c = lab["client"]
     assert "LIVE on device" in c.get(f"/run/{lab['res2']['run_id']}").text
@@ -391,109 +613,38 @@ def test_run_page_live_and_superseded_badges(lab):
     assert f'<a href="/run/{lab["res2"]["run_id"]}" title=' in superseded_page  # superseded -> by whom
 
 
-def test_device_page_flags_external_change(lab):
-    """Hand-edit chipZ's state file: the strict-match rule must show the value as
-    externally changed and credit NO run. (chipZ so devV fixtures stay pristine.)"""
-    state_path = Path(lab["root"]) / "chipZ" / "cdZ" / "z_main" / "scqo" / "scqo_state.json"
-    data = json.loads(state_path.read_text(encoding="utf-8"))
-    data["values"]["q0_ro"]["readout_freq_hz"] = 9.9e9  # another tool wrote the state
-    state_path.write_text(json.dumps(data), encoding="utf-8")
-
-    page = lab["client"].get("/device", params={"device": "chipZ"}).text
-    state_table = page.split("Current calibration", 1)[1].split("<table>", 1)[1].split("</table>", 1)[0]
-    # Fields are COLUMNS here, so scope to CELLS: provenance is per VALUE, and
-    # this run writes more than one knob (readout_freq_hz + readout_depletion_s).
-    q0_ro = next(r for r in state_table.split("<tr")
-                 if "q0_ro" in r and "externally changed" in r)
-    cells = q0_ro.split("<td")
-    tampered = [c for c in cells if "externally changed" in c]
-    credited = [c for c in cells if f"/run/{lab['chipz']['run_id']}" in c]
-
-    assert tampered
-    assert not any("/run/" in c for c in tampered)  # never a false credit
-    # ... while the run's UNTOUCHED value is still credited: one hand-edit must
-    # not discredit everything else the same run legitimately set.
-    assert credited
-
-
-def test_device_page_renders_one_section_per_setup(lab):
-    """Two setups of one device = two independent calibration sections, each
-    captioned with its own state file and holding only its own runs' history."""
-    page = lab["client"].get("/device", params={"device": "devV"}).text
-    assert "setup <b>sim_main</b>" in page and "setup <b>sim_alt</b>" in page
-    main_sec = page.split("setup <b>sim_main</b>", 1)[1].split("setup <b>sim_alt</b>", 1)[0]
-    alt_sec = page.split("setup <b>sim_alt</b>", 1)[1]
-    # each section names its own scqo/ folder path and shows only its own runs
-    assert "sim_main" in main_sec and "scqo_state.json" in main_sec and lab["res2"]["run_id"] in main_sec
-    assert "sim_alt" in alt_sec and lab["alt"]["run_id"] in alt_sec
-    assert lab["alt"]["run_id"] not in main_sec  # no cross-setup bleed
-    assert lab["res2"]["run_id"] not in alt_sec
-
-
-def test_device_section_latest_run_link_is_per_setup(lab):
-    """The 'latest run' caption in each per-setup calibration section must link
-    that SETUP's own latest run — never the device-wide newest (here r_ghost, a
-    run bound to a setup no longer in the active cycle)."""
-    page = lab["client"].get("/device", params={"device": "devV"}).text
-    main_sec = page.split("setup <b>sim_main</b>", 1)[1].split("setup <b>sim_alt</b>", 1)[0]
-    caption = main_sec.split("latest run:", 1)[1].split("</p>", 1)[0]
-    assert lab["ghost"]["run_id"] not in caption  # not the foreign device-wide latest
-    assert "/run/20" in caption  # a real sim_main run is linked
-
-
 def test_runs_page_live_credit_is_per_setup(lab):
-    """Each run's live credit comes from ITS OWN setup's state file; a run whose
+    """Each run's live credit comes from ITS OWN setup's context; a run whose
     setup name is not in the active cycle gets none at all."""
     page = lab["client"].get("/").text
-    assert "live:" in _row_chunk(page, lab["alt"]["run_id"])  # alt's own file credits it
+    assert "live:" in _row_chunk(page, lab["alt"]["run_id"])  # alt's own context credits it
     ghost_row = _row_chunk(page, lab["ghost"]["run_id"])
     assert "live:" not in ghost_row  # applied, but its setup vanished -> no credit
 
 
 def test_run_page_vanished_setup_shows_no_on_device_state(lab):
     """An applied run bound to a setup absent from the active cycle: the viewer can
-    resolve no state file for it, so the on-device column stays '-'."""
+    resolve no state for it, so the on-device column stays '-'."""
     page = lab["client"].get(f"/run/{lab['ghost']['run_id']}").text
     assert "Suggested updates" in page and "accepted" in page
     assert "LIVE on device" not in page and "superseded" not in page
 
 
-def test_registry_less_device_shows_snapshot_only(lab):
-    """No registry = no resolvable setups: the device page falls back to the last
-    run's device_after snapshot and offers no per-setup calibration section."""
-    page = lab["client"].get("/device", params={"device": "bare"}).text
-    assert "Last observed calibration" in page
-    assert "device_after snapshot" in page and lab["bare"]["run_id"] in page
-    assert "Current calibration" not in page
-
-
-def test_trends_never_mix_samples(lab):
-    c = lab["client"]
-    # q0 readout_freq_hz exists on BOTH samples ("q1 exists on every chip" problem):
-    # there is NO silent default sample — device-less /trends bounces to the
-    # sample overview, and a chart is always explicitly device-scoped.
-    bare = c.get("/trends").text  # redirect followed → the /device overview
-    assert "<svg" not in bare and "<circle" not in bare
-    assert "/trends?device=devV" in bare and "/trends?device=chipZ" in bare
-    dev = c.get("/trends", params={"target": "q0", "quantity": "readout_freq_hz", "device": "devV"}).text
-    assert lab["res"]["run_id"] in dev
-    assert lab["chipz"]["run_id"] not in dev
-    z = c.get("/trends", params={"target": "q0", "quantity": "readout_freq_hz", "device": "chipZ"}).text
-    assert lab["chipz"]["run_id"] in z and lab["res"]["run_id"] not in z
-
+# ------------------------------------------------------------------ overview
 
 def test_device_overview_lists_all_samples(lab):
     """Bare /device is the lab-wide sample overview: EVERY known sample appears —
     indexed ones and index-free ones (fresh folder+cycle, registry-only) alike —
-    with description, active cooldown, latest run, and detail + trends links."""
+    with description, the active cycle's setup LINKS, latest run, trends."""
     page = lab["client"].get("/device").text
     for name in ("devV", "chipZ", "bare", "freshY", "paperX"):
         assert f"/device?device={name}" in page
         assert f"/trends?device={name}" in page
     assert "second sample on the other fridge" in page  # devices.toml description
     assert "registry-only sample" in page  # paperX exists ONLY in devices.toml
-    assert "cdV (2 setups)" in page
-    assert "cdF (1 setup)" in page  # freshY: cycle declared, nothing measured yet
+    assert 'href="/setup/devV/cdV/sim_main"' in page   # active-cycle setup links
+    assert 'href="/setup/freshY/cdF/f_main"' in page   # cycle declared, no runs yet
+    assert 'href="/setup/devV/cdU/sim_old"' not in page  # closed cycles: detail page only
     assert "no runs yet" in page
     assert "/run/20" in page  # some sample's latest run is linked
 
@@ -505,16 +656,7 @@ def test_device_overview_tolerates_broken_cooldowns(lab):
     assert resp.status_code == 200
     row = resp.text.split("brokenB", 2)[2].split("</tr>", 1)[0]
     assert "cooldowns.toml error:" in row
-    assert "cdV (2 setups)" in resp.text  # the healthy rows are unaffected
-
-
-def test_bare_trends_redirects_to_sample_overview(lab):
-    """Device-less /trends is not a page of its own: a trend needs an explicit
-    sample first, and the ONE sample picker is the /device overview (each row
-    links its per-sample trends)."""
-    resp = lab["client"].get("/trends", follow_redirects=False)
-    assert resp.status_code == 307
-    assert resp.headers["location"] == "/device"
+    assert 'href="/setup/devV/cdV/sim_main"' in resp.text  # healthy rows unaffected
 
 
 # ---------------------------------------------------------------- campaigns
@@ -593,12 +735,3 @@ def test_runs_page_campaign_column_and_filter(lab):
     assert lab["ram"]["run_id"] not in page
     # the column cell links the child to its campaign
     assert f'href="/campaign/{cid}"' in page and "r0 s0" in page
-
-
-def test_device_page_credits_a_campaign_accept(lab):
-    c = lab["client"]
-    cid = lab["campaign"]["campaign_id"]
-    page = c.get("/device", params={"device": "devV"}).text
-    # the accepted q0.t1_s fact links its value to the campaign, not a run
-    assert f'href="/campaign/{cid}"' in page
-    assert "(campaign)" in page

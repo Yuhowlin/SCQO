@@ -25,6 +25,9 @@ measured values stay in runs with their backend recorded.</p>
 {% endif %}
 {% if cycles %}
 <h3>Cooldown cycles</h3>
+<p class="muted">Every setup of every cycle has its own page — calibration, physical values
+and per-parameter trends live there (each account picks its own working setup with
+<code>scqo user --setup &lt;name&gt;</code>).</p>
 <table>
   <tr><th>cycle</th><th>start</th><th>end</th><th>fridge</th><th>packaging</th><th>setups</th></tr>
   {% for cid, c in cycles.items() %}
@@ -32,113 +35,58 @@ measured values stay in runs with their backend recorded.</p>
     <td>{% if cid == active_cycle %}<b>{{ cid }}</b> (active){% else %}{{ cid }}{% endif %}</td>
     <td>{{ c.start }}</td><td>{{ c.end or "-" }}</td>
     <td>{{ c.fridge or "-" }}</td><td>{{ c.packaging or "-" }}</td>
-    <td>{{ c.setup | default([]) | length }}</td>
+    <td>{% for name in c.setup | default({}) %}<a href="/setup/{{ device }}/{{ cid }}/{{ name }}"><b>{{ name }}</b></a>{% if not loop.last %} · {% endif %}{% else %}<span class="muted">(no setups)</span>{% endfor %}</td>
   </tr>
   {% endfor %}
 </table>
-{% if setups %}
-<p class="muted">Setups of <b>{{ active_cycle }}</b> — ALL of them (the viewer has no user context;
-each account picks its own with <code>scqo user --setup &lt;name&gt;</code>):</p>
-<table>
-  <tr><th>setup</th><th>backend</th><th>instrument config</th><th>note</th></tr>
-  {% for name, s in setups.items() %}
-  <tr>
-    <td><b>{{ name }}</b></td>
-    <td>{{ s.backend }}</td>
-    <td>{% if s.instrument_config %}<code>{{ s.instrument_config }}</code>{% else %}(built-in){% endif %}</td>
-    <td>{{ s.note or "-" }}</td>
-  </tr>
-  {% endfor %}
-</table>
-{% elif active_cycle %}
+{% if active_cycle and not (cycles[active_cycle].setup | default({})) %}
 <p class="muted">{{ active_cycle }} has no setups yet — hand-add [{{ active_cycle }}.setup.&lt;name&gt;]
 blocks (backend [+ note]) to <code>cooldowns.toml</code>; runs refuse until one exists.</p>
 {% endif %}
 {% endif %}
 
-{% for sec in sections %}
-<h3>Calibration{% if sec.name %} — setup <b>{{ sec.name }}</b>{% if sec.backend %} ({{ sec.backend }}){% endif %}{% endif %}</h3>
-{% if sec.authority == "state" %}
-<p class="muted">Current calibration — from <code>{{ sec.state_path }}</code> (deferred accepts included).
-Values link to the run that set them{% if sec.latest_run %} · latest run: <a href="/run/{{ sec.latest_run.run_id }}">{{ sec.latest_run.run_id }}</a>{% endif %}.</p>
-{% elif sec.authority == "snapshot" %}
-<p class="muted">Last observed calibration — from
-  <a href="/run/{{ sec.snapshot_run.run_id }}">{{ sec.snapshot_run.run_id }}</a>
-  (device_after snapshot; no state file yet).</p>
-{% else %}
-<p class="muted">No state yet — this setup has no saved calibration and no runs.</p>
-{% endif %}
-{% if sec.state %}
+{% if matrix_rows %}
+<h3>Physical properties <span class="muted">— latest value per (cooldown, setup)</span></h3>
+<p class="muted">A parameter links its full cross-cooldown trend; a column header opens that
+setup's page. Each value is a measurement THROUGH that setup — compare, never average.</p>
 <table>
-  <tr><th>entity</th>{% for f in sec.state_fields %}<th>{{ f }}</th>{% endfor %}</tr>
-  {% for q, fields in sec.state.items() %}
-  <tr><td>{{ q }}</td>
-    {% for f in sec.state_fields %}{% set v = fields.get(f) %}{% set src = sec.sources.get(q, {}).get(f) %}{% set fmt = "%.8g" | format(v) if v is number else (v if v is not none else "-") %}<td>
-      {%- if src and src.status == "run" %}<a href="/run/{{ src.run_id }}" title="{{ (src.timestamp or '')[:19] }} · {{ src.operator or '-' }}">{{ fmt }}</a>
-      {%- elif src and src.status == "campaign" %}<a href="/campaign/{{ src.campaign_id }}" title="{{ (src.timestamp or '')[:19] }} · {{ src.operator or '-' }}">{{ fmt }}</a> <span class="muted">(campaign)</span>
-      {%- elif src and src.status == "external" %}{{ fmt }} <span class="ext">(externally changed)</span>
-      {%- elif src and src.status == "manual" %}{{ fmt }} <span class="muted">(manual)</span>
-      {%- else %}{{ fmt }}{% endif %}</td>{% endfor %}
+  <tr><th>parameter</th>
+    {% for col in matrix_columns %}
+    <th>{% if col.cooldown and col.setup %}<a href="/setup/{{ device }}/{{ col.cooldown }}/{{ col.setup }}">{{ col.cooldown }}/{{ col.setup }}</a>{% else %}(device-level){% endif %}{% if col.ghost %} <span class="ext" title="not in cooldowns.toml">*</span>{% endif %}</th>
+    {% endfor %}
   </tr>
-  {% endfor %}
-</table>
-{% endif %}
-{% if sec.history %}
-<h4>Change history{% if sec.name %} — {{ sec.name }}{% endif %}</h4>
-<table>
-  <tr><th>when</th><th>entity</th><th>field</th><th>old</th><th>new</th><th>experiment</th><th>operator</th><th>run</th></tr>
-  {% for h in sec.history %}
+  {% for row in matrix_rows %}
   <tr>
-    <td>{{ h.timestamp[:19] }}</td><td>{{ h.entity }}</td><td>{{ h.field }}</td>
-    <td>{{ "%.8g" | format(h.old) if h.old is number else h.old }}</td>
-    <td>{{ "%.8g" | format(h.new) if h.new is number else h.new }}</td>
-    <td>{{ h.experiment }}</td>
-    <td>{{ h.operator or "-" }}</td>
-    <td>{% if h.run_id %}<a href="/run/{{ h.run_id }}">{{ h.run_id }}</a>{% elif h.campaign_id %}<a href="/campaign/{{ h.campaign_id }}">{{ h.campaign_id }}</a>{% else %}-{% endif %}</td>
+    <td><a href="/trends?device={{ device }}&entity={{ row.entity }}&field={{ row.field }}">{{ row.entity }}.{{ row.field }}</a></td>
+    {% for cell in row.cells %}
+    <td>{% if cell %}<span title="{{ (cell.timestamp or '')[:19] }}">{{ "%.8g" | format(cell.new) if cell.new is number else cell.new }}</span>{% else %}-{% endif %}</td>
+    {% endfor %}
   </tr>
   {% endfor %}
 </table>
-{% elif sec.authority == "state" %}
-<p class="muted">No change history yet at {{ sec.state_path }}.</p>
+{% if matrix_columns | selectattr("ghost") | list %}
+<p class="muted"><span class="ext">*</span> context not in cooldowns.toml (removed, renamed, or never registered).</p>
 {% endif %}
-{% if sec.physical_rows %}
-<h4>Physical parameters{% if sec.name %} — {{ sec.name }}{% endif %}</h4>
-<p class="muted">Measured physics for this (cooldown, setup) — each value is a measurement
-THROUGH this setup; compare across setups/cooldowns via the trends page, never average.</p>
+{% elif cycles %}
+<p class="muted">No recorded physical-property changes yet — the physical-properties matrix
+appears once experiments start writing facts.</p>
+{% endif %}
+
+{% if snapshot_rows %}
+<h3>Last observed calibration</h3>
+<p class="muted">From <a href="/run/{{ snapshot_run.run_id }}">{{ snapshot_run.run_id }}</a>
+(device_after snapshot — this sample has no cooldown registry, so there is no context to
+resolve provenance against).</p>
 <table>
   <tr><th>entity</th><th>field</th><th>value</th></tr>
-  {% for r in sec.physical_rows %}
+  {% for r in snapshot_rows %}
   <tr><td>{{ r.entity }}</td><td>{{ r.field }}</td>
-    {% set src = r.source %}{% set fmt = "%.8g" | format(r.value) if r.value is number else r.value %}<td>
-      {%- if src and src.status == "run" %}<a href="/run/{{ src.run_id }}" title="{{ (src.timestamp or '')[:19] }} · {{ src.operator or '-' }}">{{ fmt }}</a>
-      {%- elif src and src.status == "campaign" %}<a href="/campaign/{{ src.campaign_id }}" title="{{ (src.timestamp or '')[:19] }} · {{ src.operator or '-' }}">{{ fmt }}</a> <span class="muted">(campaign)</span>
-      {%- elif src and src.status == "external" %}{{ fmt }} <span class="ext">(externally changed)</span>
-      {%- elif src and src.status == "manual" %}{{ fmt }} <span class="muted">(manual)</span>
-      {%- else %}{{ fmt }}{% endif %}</td>
-  </tr>
-  {% endfor %}
-</table>
-{% if sec.physical_history %}
-<table>
-  <tr><th>when</th><th>entity</th><th>field</th><th>old</th><th>new</th><th>experiment</th><th>operator</th><th>run</th></tr>
-  {% for h in sec.physical_history %}
-  <tr>
-    <td>{{ h.timestamp[:19] }}</td><td>{{ h.entity }}</td><td>{{ h.field }}</td>
-    <td>{{ "%.8g" | format(h.old) if h.old is number else (h.old if h.old is not none else "-") }}</td>
-    <td>{{ "%.8g" | format(h.new) if h.new is number else h.new }}</td>
-    <td>{{ h.experiment }}</td>
-    <td>{{ h.operator or "-" }}</td>
-    <td>{% if h.run_id %}<a href="/run/{{ h.run_id }}">{{ h.run_id }}</a>{% elif h.campaign_id %}<a href="/campaign/{{ h.campaign_id }}">{{ h.campaign_id }}</a>{% else %}-{% endif %}</td>
-  </tr>
+    <td>{{ "%.8g" | format(r.value) if r.value is number else r.value }}</td></tr>
   {% endfor %}
 </table>
 {% endif %}
-{% endif %}
-{% endfor %}
-{% if sections %}
-<p class="muted">A linked value is LIVE from that run (strict match); (externally changed) = the
-current value matches no SCQO record — reseeded by the vendor or written by another tool.</p>
-{% else %}
+
+{% if not cycles and not matrix_rows and not snapshot_rows %}
 <p>No runs and no setups yet — nothing to show for this device.</p>
 {% endif %}
 {% endblock %}

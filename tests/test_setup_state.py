@@ -2,10 +2,10 @@
 
 Every setup of every cooldown gets its own ``<device>/<cooldown>/<setup>/scqo/``
 folder holding ``scqo_state.json`` (knobs + monitors) and ``physical.json``
-(measured facts), each with its append-only ``.history.jsonl`` change-history
-sidecar (scqo._state_io). SCQO never writes into a setup's vendor-config
-``instrument_config`` folder, so the QM backend's QUAM load never sweeps up SCQO
-files. Two users on two setups of ONE device never share a file.
+(measured facts), plus the shared ``history.sqlite`` change-history database
+(scqo.changes — one per context, both stores). SCQO never writes into a setup's
+vendor-config ``instrument_config`` folder, so the QM backend's QUAM load never
+sweeps up SCQO files. Two users on two setups of ONE device never share a file.
 """
 
 from __future__ import annotations
@@ -16,9 +16,14 @@ from pathlib import Path
 import pytest
 
 from scqo import RecordingDevice, physical_store, state_store
-from scqo._state_io import read_history
+from scqo.changes import HISTORY_FILE, ChangeDB
 from scqo.datastore import load_cooldowns, setup_scqo_dir, setup_state_path
 from scqo.testing import demo_device
+
+
+def _db_rows(scqo_dir, store: str) -> list[dict]:
+    """The context database's committed rows of one store, ascending."""
+    return ChangeDB(Path(scqo_dir) / HISTORY_FILE).context_history(store)
 
 
 def _demo():
@@ -204,8 +209,9 @@ def test_physical_flat_values_round_trip(tmp_path):
 
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["values"]["q0"]["t1_s"] == 26e-6  # FLAT — one context per file
-    assert "history" not in data  # values-only: history lives in the sidecar
-    assert [r["setup"] for r in read_history(path)] == ["qm_main", "qm_main"]
+    assert "history" not in data  # values-only: history lives in the database
+    assert [r["setup"] for r in _db_rows(tmp_path, "physical")] == [
+        "qm_main", "qm_main"]
 
     reloaded = physical_store(tmp_path, roster)
     assert reloaded.values() == {"q0": {"t1_s": 26e-6}}
@@ -277,7 +283,8 @@ def test_physical_pre_cutover_file_is_archived_aside(tmp_path):
     store.save()
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["schema"] == 3 and "history" not in data
-    assert [r["new"] for r in read_history(path)] == [12e-6]  # v2 rows never merged
+    assert [r["new"] for r in _db_rows(tmp_path, "physical")] == [
+        12e-6]  # v2 rows never merged
 
 
 def test_physical_save_takes_over_stale_lock_then_times_out_on_fresh(tmp_path, monkeypatch):
@@ -302,65 +309,69 @@ def test_physical_save_takes_over_stale_lock_then_times_out_on_fresh(tmp_path, m
         store.save()
 
 
-def test_physical_save_failure_keeps_rows_for_retry(tmp_path, monkeypatch):
-    """A failed history write (Write 1) must NOT drop the just-recorded rows: the
-    in-memory merge commits only after the sidecar lands, so the next save()
-    re-persists them."""
-    from scqo import _state_io
+def test_physical_history_commit_failure_keeps_rows_for_retry(
+        tmp_path, monkeypatch):
+    """A failed history transaction (Write 1) must NOT drop the just-recorded
+    rows: the buffer clears only after the commit, so the next save()
+    re-inserts them — and the rollback leaves zero rows behind."""
+    import sqlite3
+
+    from scqo import changes as changes_mod
 
     path = tmp_path / "physical.json"
     store = physical_store(tmp_path, _roster(), setup="alpha")
     store.record("q0", "t1_s", 25e-6, run_id="run-a")
 
     boom = {"n": 1}
-    real_replace = _state_io.os.replace  # capture before patching (same module object)
+    real_insert = changes_mod.ChangeDB.insert
 
-    def flaky_replace(src, dst):
+    def flaky_insert(db, records, *, store):
         if boom["n"]:
             boom["n"] -= 1
-            raise PermissionError("file momentarily locked")
-        return real_replace(src, dst)
+            raise sqlite3.OperationalError("database is locked")
+        return real_insert(db, records, store=store)
 
-    monkeypatch.setattr(_state_io.os, "replace", flaky_replace)
-    with pytest.raises(PermissionError):
-        store.save()  # the FIRST replace is the history sidecar's
-    assert not path.exists() and not _state_io.history_path(path).exists()
-    assert list(tmp_path.glob("*.tmp")) == []  # and no orphan temp left behind
+    monkeypatch.setattr(changes_mod.ChangeDB, "insert",
+                        staticmethod(flaky_insert))
+    with pytest.raises(sqlite3.OperationalError):
+        store.save()  # the transaction rolls back before the values write
+    assert not path.exists()
+    assert _db_rows(tmp_path, "physical") == []      # rollback: zero rows
+    assert list(tmp_path.glob("*.tmp")) == []        # no orphan temp
 
     store.save()  # healthy retry re-persists with provenance
     saved = json.loads(path.read_text(encoding="utf-8"))
     assert saved["values"]["q0"]["t1_s"] == 25e-6
-    assert [(r["run_id"], r["setup"]) for r in read_history(path)] == [("run-a", "alpha")]
+    assert [(r["run_id"], r["setup"]) for r in _db_rows(
+        tmp_path, "physical")] == [("run-a", "alpha")]
 
 
 def test_physical_values_write_failure_self_heals_on_retry(tmp_path, monkeypatch):
-    """Write 2 (values) fails AFTER the sidecar landed: the merge is already
-    committed (no duplicate rows on retry) and the dirty keys stay, so the retry
-    rebuilds the values file from the durable history."""
-    from scqo import _state_io
+    """Write 2 (values) fails AFTER the history transaction committed: the
+    buffer is already cleared (no duplicate rows on retry) and the dirty keys
+    stay, so the retry rebuilds the values file FROM the database."""
+    from scqo import stores as stores_mod
 
     path = tmp_path / "physical.json"
     store = physical_store(tmp_path, _roster(), setup="alpha")
     store.record("q0", "t1_s", 25e-6, run_id="run-a")
 
-    boom = {"n": 1}
-    real_replace = _state_io.os.replace
+    real_replace = stores_mod.os.replace
 
-    def fail_second_replace(src, dst):  # sidecar lands, values write fails
-        if boom["n"] == 0:
-            raise PermissionError("file momentarily locked")
-        boom["n"] -= 1
-        return real_replace(src, dst)
+    def failing_replace(src, dst):
+        raise PermissionError("file momentarily locked")
 
-    monkeypatch.setattr(_state_io.os, "replace", fail_second_replace)
+    monkeypatch.setattr(stores_mod.os, "replace", failing_replace)
     with pytest.raises(PermissionError):
         store.save()
-    assert _state_io.history_path(path).is_file() and not path.exists()
-    monkeypatch.setattr(_state_io.os, "replace", real_replace)
+    monkeypatch.setattr(stores_mod.os, "replace", real_replace)
+    assert not path.exists()                          # values write failed...
+    assert [r["run_id"] for r in _db_rows(tmp_path, "physical")] == [
+        "run-a"]                                      # ...history is durable
 
-    store.save()  # heals: values rebuilt, history NOT duplicated
+    store.save()  # heals: values rebuilt FROM the database, rows NOT duplicated
     assert json.loads(path.read_text(encoding="utf-8"))["values"]["q0"]["t1_s"] == 25e-6
-    assert [r["run_id"] for r in read_history(path)] == ["run-a"]
+    assert [r["run_id"] for r in _db_rows(tmp_path, "physical")] == ["run-a"]
 
 
 def test_physical_lock_is_released_only_by_its_owner(tmp_path):
@@ -386,10 +397,13 @@ def test_persist_is_atomic_and_leaves_no_temp(tmp_path):
     assert path.is_file()
     assert list(path.parent.glob("*.tmp")) == []
     assert list(path.parent.glob("*.lock")) == []  # released after the save
+    # short-lived connections checkpoint WAL on close: an idle context folder
+    # holds no -wal/-shm side files, so a folder copy is always clean
+    assert list(path.parent.glob("*.sqlite-*")) == []
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["schema"] == 3  # the model-cutover stamp
-    assert "history" not in data  # values-only: history lives in the sidecar
-    assert read_history(path)[0]["setup"] == "alpha"
+    assert "history" not in data  # values-only: history lives in the database
+    assert _db_rows(scqo_dir, "state")[0]["setup"] == "alpha"
 
 
 def test_device_history_merges_same_setup_sessions(tmp_path):
@@ -405,7 +419,8 @@ def test_device_history_merges_same_setup_sessions(tmp_path):
     b.component("q0_xy").drive_freq_hz = 3.9e9
     b.save()  # must NOT erase a's pi_amp row
 
-    rows = {(r["field"], r["new"]) for r in read_history(path)}
+    assert path.is_file()
+    rows = {(r["field"], r["new"]) for r in _db_rows(tmp_path, "state")}
     assert rows == {("pi_amp", 0.3), ("drive_freq_hz", 3.9e9)}
 
 
@@ -431,45 +446,23 @@ def test_pre_cutover_state_file_is_archived_on_save_path_too(tmp_path):
 
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["schema"] == 3 and "history" not in data
-    assert [r["new"] for r in read_history(path)] == [0.4]  # v2 rows never resurrect
+    assert [r["new"] for r in _db_rows(tmp_path, "state")] == [
+        0.4]  # v2 rows never resurrect
 
 
-def test_values_only_reset_keeps_history_sidecar(tmp_path):
-    """The documented reset (delete scqo_state.json) reseeds calibration from the
-    vendor but never silently drops provenance: the sidecar still loads."""
+def test_values_only_reset_keeps_history(tmp_path):
+    """The documented reset (delete scqo_state.json) reseeds calibration from
+    the vendor but never silently drops provenance: the database still holds
+    every row."""
     path = tmp_path / "scqo_state.json"
     dev = _recorder(tmp_path, setup="alpha")
     dev.component("q0_xy").pi_amp = 0.3
     dev.save()
 
-    path.unlink()  # the reset: values gone, sidecar stays
+    path.unlink()  # the reset: values gone, history.sqlite stays
     fresh = _recorder(tmp_path, setup="alpha")
     assert fresh.component("q0_xy").pi_amp == 0.1  # reseeded from the vendor
     assert [r.new for r in fresh.history()] == [0.3]  # provenance continuous
-
-
-def test_read_history_stripped_values_without_sidecar_is_empty(tmp_path):
-    """The fallback loop terminates: a post-split values file (no embedded key)
-    whose sidecar was hand-deleted reads as an empty history, not an error."""
-    path = tmp_path / "physical.json"
-    path.write_text('{"values": {}}', encoding="utf-8")
-    assert read_history(path) == []
-
-
-def test_read_history_skips_torn_trailing_line(tmp_path, capsys):
-    """A torn/hand-mangled sidecar line is skipped with a warning — one bad line
-    must not take the whole store down."""
-    path = tmp_path / "physical.json"
-    from scqo._state_io import history_path
-
-    history_path(path).write_text(
-        '{"timestamp": "2026-07-01T10:00:00+08:00", "entity": "q0", '
-        '"field": "t1_s", "old": null, "new": 2.5e-05}\n'
-        '{"timestamp": "2026-07-01T10:01:00+08:00", "entity": "q0", "fi',  # torn
-        encoding="utf-8")
-    rows = read_history(path)
-    assert [r["new"] for r in rows] == [2.5e-05]
-    assert "unparseable history line skipped" in capsys.readouterr().err
 
 
 # ------------------------------------------- the two-users-two-setups scenario
@@ -508,11 +501,12 @@ def test_two_users_two_setups_end_to_end(tmp_path, monkeypatch):
 
     scqo_a = ddir / "cd1" / "alpha" / "scqo"
     scqo_b = ddir / "cd1" / "beta" / "scqo"
-    # independent state stores, each history sidecar purely its own setup's
+    # independent state stores, each history database purely its own setup's
     file_a = json.loads((scqo_a / "scqo_state.json").read_text(encoding="utf-8"))
     file_b = json.loads((scqo_b / "scqo_state.json").read_text(encoding="utf-8"))
-    hist_a = read_history(scqo_a / "scqo_state.json")
-    hist_b = read_history(scqo_b / "scqo_state.json")
+    assert (scqo_a / HISTORY_FILE).is_file() and (scqo_b / HISTORY_FILE).is_file()
+    hist_a = _db_rows(scqo_a, "state")
+    hist_b = _db_rows(scqo_b, "state")
     assert "history" not in file_a and "history" not in file_b  # values-only files
     # two knob-writing runs per setup: the resonator sets readout_freq_hz, the
     # T1 sets the drive channel's thermalization_time_s (10 x the fitted T1)
@@ -532,9 +526,10 @@ def test_two_users_two_setups_end_to_end(tmp_path, monkeypatch):
     phys_b = json.loads((scqo_b / "physical.json").read_text(encoding="utf-8"))
     assert isinstance(phys_a["values"]["q0"]["t1_s"], float)
     assert isinstance(phys_b["values"]["q0"]["t1_s"], float)
-    assert {r["run_id"] for r in read_history(scqo_a / "physical.json")} == {res_a["run_id"], t1_a["run_id"]}
-    assert {r["run_id"] for r in read_history(scqo_b / "physical.json")} == {res_b["run_id"], t1_b["run_id"]}
+    assert {r["run_id"] for r in _db_rows(scqo_a, "physical")} == {res_a["run_id"], t1_a["run_id"]}
+    assert {r["run_id"] for r in _db_rows(scqo_b, "physical")} == {res_b["run_id"], t1_b["run_id"]}
     assert not (ddir / "physical.json").exists()  # no device-level ledger
+    assert not (ddir / HISTORY_FILE).exists()     # no device-level database
 
     # the era guard refuses transferring alpha's values into a beta session
     with pytest.raises(Exception, match="alpha"):

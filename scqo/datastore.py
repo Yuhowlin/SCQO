@@ -29,6 +29,8 @@ statistics are rebuildable from the children even if the manifest is lost.
 scratch by scanning for ``record.json`` files (folders without one are incomplete runs
 and are skipped) and then for ``campaign.json`` manifests. Deleting the index is always safe — remove all ``index.sqlite*`` files
 together (the ``-wal``/``-shm`` siblings too) and rerun ``python -m scqo <data_root>``.
+The per-context ``.../scqo/history.sqlite`` files are NOT the index: they are the
+change-history TRUTH (:mod:`scqo.changes`) and must never be deleted.
 
 Concurrency note: on a local disk, WAL mode + the 10 s busy retry + short-lived
 connections make SIMULTANEOUS same-PC sessions safe — two students on two samples,
@@ -68,8 +70,8 @@ INDEX_FILE = "index.sqlite"
 DEVICES_FILE = "devices.toml"  # optional human-edited sample registry (see load_device_registry)
 COOLDOWNS_FILE = "cooldowns.toml"  # per device: <data_root>/<device>/cooldowns.toml (see load_cooldowns)
 STATE_FILE = "scqo_state.json"  # SCQO calibration values, inside the setup's scqo/
-                                # folder; history sits beside it in
-                                # scqo_state.history.jsonl (scqo._state_io)
+                                # folder; the context's change history sits beside
+                                # it in history.sqlite (scqo.changes)
 SCQO_SUBDIR = "scqo"  # per (device, cooldown, setup): <device>/<cooldown>/<setup>/scqo/ (see setup_scqo_dir)
 BACKEND_CONFIG_SUBDIR = "backend_config"  # the vendor-config sibling: <cooldown>/<setup>/backend_config/
 SETUP_BACKENDS = ("qblox", "qm", "simulated")  # legal [<cycle>.setup.<name>] backend values
@@ -547,75 +549,6 @@ class DataStore:
             rows = db.execute("SELECT DISTINCT device FROM runs ORDER BY device").fetchall()
         return [r["device"] for r in rows]
 
-    def fit_trend(self, qubit: str, quantity: str, limit: int = 500, device: str | None = None) -> list[dict]:
-        """One recorded quantity vs time for one qubit (oldest first) — drift at a glance.
-
-        TWO sources, because a value reaches a run record by two different roads and
-        a trend that knows only one is a page full of dead links:
-
-        * ``runs.fit`` — what ``estimate()`` returned (t1_s, t2_star_s, pi_amp, ...).
-        * ``runs.suggestions`` — what ``update()`` proposed and a human ACCEPTED. Every
-          governed knob and every monitor arrives this way and ONLY this way: the
-          session swaps a SuggestionCapture in around ``update()``, so those writes
-          never touch ``fit``. readout_rotation_rad, fidelity_g, pos_* ... all of it.
-
-        A run contributes at most ONE point: the fit value when it has one, else the
-        accepted suggestion (``pi_amp`` is both on a power-Rabi run, and plotting it
-        twice per run would be a lie about how often it was measured). Only
-        ``accepted`` suggestions count — a pending or rejected proposal never became
-        the device's value.
-
-        Suggestions are keyed by channel ENTITY (``q1_ro``) while fits are keyed by
-        TARGET (``q1``), and this module is deliberately roster-free, so the match is
-        by name: the entity itself or a rider the roster minted from it
-        (``<target>_ro`` / ``_xy`` / ``_z``). Field names do not repeat across a
-        target's channels, so this cannot collide in practice.
-
-        The JSON paths are passed as bound parameters, so arbitrary names are safe.
-        ``device`` narrows to one sample — qubit names repeat across samples ("q1"
-        exists on every chip), so multi-device data roots should always pass it.
-        """
-        path = f"$.{qubit}.{quantity}"
-        dev_sql = "AND {col}device = ? " if device is not None else ""
-        dev_args: list[Any] = [device] if device is not None else []
-
-        fit_sql = (
-            "SELECT run_id, started_at, experiment, json_extract(fit, ?) AS value "
-            "FROM runs WHERE json_extract(fit, ?) IS NOT NULL "
-            + dev_sql.format(col="") +
-            "ORDER BY started_at LIMIT ?"
-        )
-        # json_each expands the suggestions ARRAY into one row per suggestion.
-        # ESCAPE: the rider prefix contains a literal '_', which LIKE would
-        # otherwise read as "any character".
-        sug_sql = (
-            "SELECT r.run_id AS run_id, r.started_at AS started_at, "
-            "       r.experiment AS experiment, "
-            "       json_extract(s.value, '$.after') AS value "
-            "FROM runs r, json_each(r.suggestions) s "
-            "WHERE json_extract(s.value, '$.field') = ? "
-            "  AND json_extract(s.value, '$.status') = 'accepted' "
-            "  AND json_extract(s.value, '$.after') IS NOT NULL "
-            "  AND (json_extract(s.value, '$.entity') = ? "
-            "       OR json_extract(s.value, '$.entity') LIKE ? ESCAPE '\\') "
-            + dev_sql.format(col="r.") +
-            "ORDER BY r.started_at LIMIT ?"
-        )
-        with self._connect() as db:
-            fit_rows = db.execute(fit_sql, [path, path, *dev_args, int(limit)]).fetchall()
-            sug_rows = db.execute(
-                sug_sql,
-                [quantity, qubit, f"{qubit}\\_%", *dev_args, int(limit)],
-            ).fetchall()
-
-        # One point per run, fit first: `pi_amp` is both a fit key and an accepted
-        # suggestion on a power-Rabi run, and plotting it twice would misreport how
-        # often it was measured.
-        merged: dict[str, dict] = {r["run_id"]: dict(r) for r in sug_rows}
-        merged.update({r["run_id"]: dict(r) for r in fit_rows})
-        ordered = sorted(merged.values(), key=lambda r: r["started_at"])
-        return ordered[:int(limit)]
-
     def load_run(self, run_id: str) -> dict:
         """Load one run's JSON-able contents (record, parameters, result, figure paths)."""
         run_dir = self._run_dir(run_id)
@@ -704,8 +637,8 @@ class DataStore:
     def read_campaign_repeats(self, campaign_dir: Path) -> list[dict]:
         """Read ``repeats.jsonl``; torn or unparseable lines are skipped with a warning.
 
-        Same tolerance as the state stores' history sidecar: a half-written last line
-        after a hard kill must not make the whole campaign unreadable.
+        A half-written last line after a hard kill must not make the whole
+        campaign unreadable.
         """
         path = Path(campaign_dir) / CAMPAIGN_REPEATS_FILE
         if not path.is_file():
@@ -1360,8 +1293,8 @@ def setup_scqo_dir(data_root: str | Path, device: str, cooldown: str,
     ``<data_root>/<device>/<cooldown>/<setup_name>/scqo/``.
 
     It holds this context's ``scqo_state.json`` (calibration values) and
-    ``physical.json`` (measured physics), each with its ``.history.jsonl``
-    change-history sidecar. It is the FIXED SIBLING of the
+    ``physical.json`` (measured physics), plus their shared ``history.sqlite``
+    change-history database. It is the FIXED SIBLING of the
     setup's vendor-config folder (:func:`setup_backend_config_dir`), never inside
     it: the QM backend's vendor folder IS QUAM's state directory and ``Quam.load()``
     ``rglob("*.json")``-merges everything under it, so SCQO files must live OUTSIDE

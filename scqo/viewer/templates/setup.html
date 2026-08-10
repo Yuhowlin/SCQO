@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}{{ device }} · {{ cooldown }}/{{ setup_name }}{% endblock %}
+
+{% macro provenance(src) -%}
+  {%- if src and src.status == "run" %}<a href="/run/{{ src.run_id }}" title="{{ (src.timestamp or '')[:19] }} · {{ src.operator or '-' }}">{{ src.run_id }}</a>
+  {%- elif src and src.status == "campaign" %}<a href="/campaign/{{ src.campaign_id }}" title="{{ (src.timestamp or '')[:19] }} · {{ src.operator or '-' }}">{{ src.campaign_id }}</a> <span class="muted">(campaign)</span>
+  {%- elif src and src.status == "external" %}<span class="ext">(externally changed)</span>
+  {%- elif src and src.status == "manual" %}<span class="muted">(manual)</span>
+  {%- else %}-{% endif %}
+{%- endmacro %}
+
+{% macro previous(p) -%}
+  {%- if p %}{% set fmt = "%.8g" | format(p.new) if p.new is number else p.new %}
+    {%- if p.run_id %}<a href="/run/{{ p.run_id }}" title="{{ (p.timestamp or '')[:19] }} · {{ p.operator or '-' }}">{{ fmt }}</a>
+    {%- elif p.campaign_id %}<a href="/campaign/{{ p.campaign_id }}" title="{{ (p.timestamp or '')[:19] }}">{{ fmt }}</a> <span class="muted">(campaign)</span>
+    {%- else %}{{ fmt }} <span class="muted">(manual)</span>{% endif %}
+  {%- else %}-{% endif %}
+{%- endmacro %}
+
+{% macro param_table(rows) -%}
+<table>
+  <tr><th>entity</th><th>parameter</th><th>value</th><th>unit</th><th>source</th><th>previous</th></tr>
+  {% for r in rows %}
+  <tr>
+    <td>{{ r.entity }}</td>
+    <td><a href="/trends?device={{ device }}&entity={{ r.entity }}&field={{ r.field }}&cooldown={{ cooldown }}&setup={{ setup_name }}" title="latest 50 changes in this setup">{{ r.field }}</a></td>
+    <td>{{ "%.8g" | format(r.value) if r.value is number else r.value }}</td>
+    <td>{{ r.unit or "" }}</td>
+    <td>{{ provenance(r.source) }}</td>
+    <td>{{ previous(r.previous) }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{%- endmacro %}
+
+{% block content %}
+<h2>Setup: {{ setup_name }} <span class="muted">({{ device }} · {{ cooldown }}{% if is_active %} · active{% endif %})</span></h2>
+<p class="muted"><a href="/device">All samples</a> · <a href="/device?device={{ device }}">{{ device }}</a> ·
+  {{ cooldown }} · <b>{{ setup_name }}</b> ·
+  <a href="/trends?device={{ device }}">trends of {{ device }}</a></p>
+
+{% if cooldown_error %}
+<p><b>cooldowns.toml error:</b> {{ cooldown_error }}</p>
+{% endif %}
+
+<table>
+  {% if cycle %}
+  <tr><th>cycle</th><td>{{ cooldown }}{% if is_active %} <b>(active)</b>{% endif %}</td></tr>
+  <tr><th>start</th><td>{{ cycle.start }}</td></tr>
+  <tr><th>end</th><td>{{ cycle.end or "-" }}</td></tr>
+  {% if cycle.fridge %}<tr><th>fridge</th><td>{{ cycle.fridge }}</td></tr>{% endif %}
+  {% if cycle.packaging %}<tr><th>packaging</th><td>{{ cycle.packaging }}</td></tr>{% endif %}
+  {% endif %}
+  {% if setup_meta %}
+  <tr><th>backend</th><td>{{ setup_meta.backend }}</td></tr>
+  <tr><th>instrument config</th><td>{% if setup_meta.instrument_config %}<code>{{ setup_meta.instrument_config }}</code>{% else %}(built-in){% endif %}</td></tr>
+  {% if setup_meta.note %}<tr><th>note</th><td>{{ setup_meta.note }}</td></tr>{% endif %}
+  {% endif %}
+</table>
+{% if not in_registry and not cooldown_error %}
+<p class="ext">This context is not in cooldowns.toml (removed, renamed, or never registered).</p>
+{% endif %}
+<p class="muted">{% if latest_run %}latest run: <a href="/run/{{ latest_run.run_id }}">{{ latest_run.run_id }}</a> · {% endif %}
+  <a href="/?device={{ device }}&cooldown={{ cooldown }}&setup={{ setup_name }}">runs of this setup</a></p>
+
+<h3>Calibration</h3>
+{% if authority == "state" %}
+<p class="muted">Current calibration — from <code>{{ state_path }}</code> (deferred accepts included).
+A parameter name opens its change trend (latest 50 changes in THIS setup).</p>
+{% elif authority == "snapshot" %}
+<p class="muted">Last observed calibration — from
+  <a href="/run/{{ snapshot_run.run_id }}">{{ snapshot_run.run_id }}</a>
+  (device_after snapshot; no state file yet).</p>
+{% else %}
+<p class="muted">No calibration recorded for this context yet.</p>
+{% endif %}
+{% if state_rows %}{{ param_table(state_rows) }}{% endif %}
+
+<h3>Physical parameters</h3>
+<p class="muted">Measured physics for this (cooldown, setup) — each value is a measurement
+THROUGH this setup; compare across setups/cooldowns via the trends page, never average.</p>
+{% if physical_rows %}{{ param_table(physical_rows) }}{% else %}
+<p class="muted">No physical parameters recorded for this context yet.</p>
+{% endif %}
+
+<p class="muted">source = the run the CURRENT value came from (strict match); previous = the
+value before it, linked to its own run; (externally changed) = the current value matches no
+SCQO record — reseeded by the vendor or written by another tool.</p>
+{% endblock %}

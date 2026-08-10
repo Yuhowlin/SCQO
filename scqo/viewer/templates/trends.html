@@ -1,8 +1,9 @@
 {% extends "base.html" %}
 {% block title %}Trends{% endblock %}
 {% block content %}
-<h2>Trend: {{ quantity }} on {{ target }} <span class="muted">({{ device }})</span></h2>
-<p class="muted"><a href="/device">All samples</a></p>
+{% if mode == "menu" %}
+<h2>Trends <span class="muted">({{ device }})</span></h2>
+<p class="muted"><a href="/device">All samples</a> · <a href="/device?device={{ device }}">{{ device }}</a></p>
 <form class="filters" method="get" action="/trends">
   <select name="device">
     {% for d in devices %}
@@ -11,26 +12,64 @@
     <option value="{{ device }}" selected>{{ device }}</option>
     {% endfor %}
   </select>
-  <input name="target" value="{{ target }}" size="6">
-  <input name="quantity" value="{{ quantity }}" size="14">
   <button>Show</button>
-  {% for q in quantities %}<a href="/trends?device={{ device }}&target={{ target }}&quantity={{ q }}">{{ q }}</a>&nbsp; {% endfor %}
 </form>
+<h3>Physical properties <span class="muted">— across all cooldowns and setups</span></h3>
+{% if fact_keys %}
+<p>{% for e, f in fact_keys %}<a href="/trends?device={{ device }}&entity={{ e }}&field={{ f }}">{{ e }}.{{ f }}</a>&nbsp; {% endfor %}</p>
+{% else %}
+<p class="muted">No recorded physical-property changes yet.</p>
+{% endif %}
+{% for m in state_menu %}
+<h3>State parameters <span class="muted">— {{ m.cooldown }}/</span><a href="/setup/{{ device }}/{{ m.cooldown }}/{{ m.setup }}">{{ m.setup }}</a></h3>
+<p>{% for e, f in m.params %}<a href="/trends?device={{ device }}&entity={{ e }}&field={{ f }}&cooldown={{ m.cooldown }}&setup={{ m.setup }}">{{ e }}.{{ f }}</a>&nbsp; {% endfor %}</p>
+{% endfor %}
+<p class="muted">Only parameters with recorded change history appear here — the trend is the
+accepted lineage (what the device actually used), one point per change.</p>
+
+{% else %}
+<h2>Trend: {{ entity }}.{{ field }}
+  <span class="muted">({{ device }}{% if mode == "setup" %} · {{ cooldown }}/{{ setup }}{% endif %})</span></h2>
+<p class="muted"><a href="/device">All samples</a> ·
+  <a href="/device?device={{ device }}">{{ device }}</a> ·
+  <a href="/trends?device={{ device }}">all trends</a>
+  {%- if mode == "setup" %} · <a href="/setup/{{ device }}/{{ cooldown }}/{{ setup }}">setup {{ setup }}</a>{% endif %}</p>
+{% if mode == "setup" %}
+<p class="muted">Latest 50 changes of this parameter in setup <b>{{ cooldown }}/{{ setup }}</b>.
+{%- if truncated %} <b>Older changes exist</b> — showing the latest 50.{% endif %}</p>
+{% else %}
+<p class="muted">Every recorded change of this physical property, cooldown by cooldown and
+setup by setup (dashed lines mark cooldown boundaries).</p>
+{% endif %}
+{% if legend %}
+<p>{% for l in legend %}<span class="swatch {{ l.cls }}"></span>{% if l.cooldown and l.setup %}<a href="/setup/{{ device }}/{{ l.cooldown }}/{{ l.setup }}">{{ l.cooldown }}/{{ l.setup }}</a>{% else %}(device-level){% endif %}&nbsp;&nbsp;{% endfor %}</p>
+{% endif %}
 {% if svg %}
 {{ svg | safe }}
+{% endif %}
+{% if rows %}
 <table>
-  <tr><th>run</th><th>started</th><th>experiment</th><th>{{ quantity }}</th></tr>
-  {% for r in rows | reverse %}
+  <tr><th>when</th>{% if mode == "device" %}<th>cooldown</th><th>setup</th>{% endif %}<th>old</th><th>new</th><th>experiment</th><th>operator</th><th>run</th></tr>
+  {% for r in rows %}
   <tr>
-    <td><a href="/run/{{ r.run_id }}">{{ r.run_id }}</a></td>
-    <td>{{ r.started_at[:16] }}</td>
-    <td>{{ r.experiment }}</td>
-    <td>{{ "%.6g" | format(r.value) }}</td>
+    <td>{{ r.timestamp[:19] }}</td>
+    {% if mode == "device" %}
+    <td>{{ r.cooldown or "(device)" }}</td>
+    <td>{% if r.cooldown and r.setup %}<a href="/setup/{{ device }}/{{ r.cooldown }}/{{ r.setup }}">{{ r.setup }}</a>{% else %}-{% endif %}</td>
+    {% endif %}
+    <td>{{ "%.8g" | format(r.old) if r.old is number else (r.old if r.old is not none else "-") }}</td>
+    <td>{{ "%.8g" | format(r.new) if r.new is number else r.new }}</td>
+    <td>{{ r.experiment or "-" }}</td>
+    <td>{{ r.operator or "-" }}</td>
+    <td>{% if r.run_id %}<a href="/run/{{ r.run_id }}">{{ r.run_id }}</a>{% elif r.campaign_id %}<a href="/campaign/{{ r.campaign_id }}">{{ r.campaign_id }}</a>{% else %}<span class="muted">(manual)</span>{% endif %}</td>
   </tr>
   {% endfor %}
 </table>
 {% else %}
-<p>No recorded values of <code>{{ quantity }}</code> for <code>{{ target }}</code> yet — run an
-experiment that fits it, or one whose suggestion for it you accepted.</p>
+<p>No recorded changes of <code>{{ entity }}.{{ field }}</code>
+{%- if mode == "setup" %} in setup <code>{{ cooldown }}/{{ setup }}</code> yet.
+{%- else %} in any context of <code>{{ device }}</code> yet — state parameters are
+per-setup, open them from a <a href="/device?device={{ device }}">setup page</a>.{% endif %}</p>
+{% endif %}
 {% endif %}
 {% endblock %}
