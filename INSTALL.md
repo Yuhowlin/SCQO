@@ -59,9 +59,10 @@ powershell -ExecutionPolicy Bypass -Command "irm https://astral.sh/uv/install.ps
 The installer updates the registry PATH, so only **new** terminals see `uv`; in the
 same shell call it by full path — `& "$env:USERPROFILE\.local\bin\uv.exe" venv ...`.
 
-**Server reached via SSH (multi-account)?** Install the Pythons to a shared folder
-and create the venvs with the EXPLICIT patch-directory interpreter, not a bare
-version number:
+**Server reached via SSH (multi-account)?** This form is REQUIRED there — it is
+part of section 5's layout contract, not an optimization. Install the Pythons to a
+shared folder and create the venvs with the EXPLICIT patch-directory interpreter,
+not a bare version number:
 
 ```powershell
 $env:UV_PYTHON_INSTALL_DIR = 'D:\uv\python'   # shared — NOT inside one user's profile
@@ -77,6 +78,16 @@ and SSH logon sessions can fail to traverse those junctions — same error over 
 while the console works. The explicit patch path sidesteps both and pins the Python
 patch level, which is what a tagged-release server wants anyway (section 6 has the
 symptom table).
+
+`scqo doctor` witnesses this trap from the one account it works for: its
+`venv base` row WARNs when the venv's base interpreter (pyvenv.cfg `home`) lives
+inside a user profile, and it also WARNs when the resolved config or `data_root`
+sits in a DIFFERENT account's profile. The acceptance gate stays a doctor run
+from a NON-installer account over SSH. On a lab server, ALSO set `UV_PYTHON_INSTALL_DIR` machine-wide
+(section 5's layout contract) so the NEXT redeploy inherits it: the 2026-08-11
+redeploy recreated a venv without this note and reintroduced the trampoline
+failure for every SSH account — a footnote has to be remembered, machine config
+is inherited.
 
 **Windows (PowerShell)** — on the lab PC all three envs already exist under `D:\github`:
 
@@ -761,7 +772,9 @@ The rules that make this safe:
   v0.1.0` in each); dev machines track `main`. Update the server deliberately, after
   CI is green — never mid-cooldown on a whim. The update procedure:
   `git fetch --tags; git checkout <tag>` in each repo, re-run section 3, restart
-  the viewer (editable installs pick the new code up on restart). **The tag is NOT
+  the viewer (editable installs pick the new code up on restart), and finish with
+  the acceptance gate (the layout contract at the end of this section): `scqo
+  doctor` from a NON-installer account over SSH. **The tag is NOT
   always the same word in every repo** — read the release's row in
   [RELEASES.toml](RELEASES.toml) and check out each repo's own listed tag (a
   release may bump only some of them, and a repo may be deliberately left behind).
@@ -851,6 +864,67 @@ scqo run resonator_spectroscopy --targets q1
 ```
 
 …then views the figures at `http://<server>:8080`.
+
+### The server layout contract — nothing shared under `C:\Users`
+
+Every multi-account failure this server has produced traces to one root cause: a
+**shared** thing living inside **one account's profile** — the per-user config
+trap in the rules above, and twice the uv Pythons in the installer's profile
+(2026-07-06, then again at the 2026-08-11 redeploy, when a venv was recreated
+without the section-1 note). The account model, generalized: **the machine owns
+the wiring; a profile owns only that account's personal selections**
+(`~\.scqo\user.toml`, `~\.scqo\parameters.toml`). The litmus test for anything
+added later: **if a path under `C:\Users\` is read by more than one account, it
+is in the wrong place.**
+
+```
+D:\
+├─ github\            tagged repos + the shared venvs (.venv-view / .venv-qm / .venv-qblox)
+├─ uv\python\         uv-managed CPythons, explicit patch dirs   <- UV_PYTHON_INSTALL_DIR (Machine)
+├─ scqo\config.toml   the one shared lab config                  <- SCQO_CONFIG (Machine)
+└─ qpu_data\          data_root: runs + index + registries       <- named in config.toml; mirrored to the NAS
+```
+
+The two machine-scope variables (admin, once). Unlike a checklist item, machine
+config is INHERITED by the next redeploy — the 2026-08-11 recurrence happened
+precisely because the shared-Pythons rule lived in a footnote someone had to
+remember:
+
+```powershell
+[Environment]::SetEnvironmentVariable('SCQO_CONFIG','D:\scqo\config.toml','Machine')
+[Environment]::SetEnvironmentVariable('UV_PYTHON_INSTALL_DIR','D:\uv\python','Machine')
+```
+
+Machine scope reaches NEW sessions only: the shell that set a variable keeps its
+old snapshot (set `$env:...` there too, or open a fresh one), and already-running
+services (the viewer) pick it up on restart.
+
+The rules that complete the contract:
+
+- **Server venvs are ALWAYS created with the explicit patch-directory
+  interpreter** (the section-1 SSH-server form). The bare `--python 3.12` form is
+  for single-user dev machines only.
+- **One installer account** (the admin/service account) performs every clone,
+  install and tag upgrade — its per-user `uv.exe` and git credentials are then
+  never needed by any other account. Students install nothing.
+- **Long-running processes belong to the service account**: the viewer startup
+  script and the mirror task above run under it, never ad hoc from a personal
+  console — a service launched from a student session inherits that session's
+  environment and dies with its logoff.
+- **Shared venvs, never per-user venvs**: a tagged server wants exactly ONE
+  authoritative runtime per release tag; per-user venvs multiply the
+  stale-editable-install trap (section 6) by the number of accounts.
+- Optional ACL hardening (one `icacls` per tree): `Users` read+execute on
+  `D:\github` and `D:\uv`, admin-only write on `D:\scqo`, and the data_root stays
+  writable by every measuring account (runs are written under the student's own
+  login — that is what stamps `operator`). A fresh data volume's default ACL lets
+  any authenticated user write anywhere — including the tagged checkout.
+
+**The acceptance gate — after EVERY install or tag upgrade, `scqo doctor` from a
+NON-installer account over SSH** (and open the viewer from a LAN laptop). The
+installer's own console passes by construction whatever is broken for everyone
+else; this gate is the only check that catches the entire
+works-for-the-installer-only class, no matter which path regressed.
 
 ### Merging data from another server
 
