@@ -10,10 +10,17 @@ these judge FITNESS — an unreachable mode loads fine and is still a lab
 problem). Vendor witnessing takes the driver's realized inventory and its
 line->port annotation as data; the drivers supply both at the Phase-6
 cutover, and every check degrades to a clear WARN when they are absent.
+
+:func:`profile_residency_checks` is the one ENVIRONMENT witness (the
+multi-account-server trap, INSTALL §1) — kept here so every doctor row
+shares this renderer-free home.
 """
 
 from __future__ import annotations
 
+import os
+import sys
+from pathlib import Path
 from typing import NamedTuple
 
 from .design import Design
@@ -271,4 +278,93 @@ def all_checks(roster: Roster, *, design: Design | None = None,
     out += vendor_checks(roster, inventory)
     out += capability_checks(roster, inventory)
     out += wiring_checks(roster, ports)
+    return out
+
+
+# ------------------------------------------------------------- environment
+
+_SSH_NOTE = ("INSTALL §1 SSH-server note (shared UV_PYTHON_INSTALL_DIR + "
+             "explicit patch-dir interpreter)")
+
+
+def _venv_base() -> tuple[str, str]:
+    """The interpreter this environment actually spawns: the running venv's
+    pyvenv.cfg ``home`` (the path a uv trampoline / venv launcher
+    re-executes), else ``sys._base_executable`` (== ``sys.executable``
+    outside a venv)."""
+    pyvenv = Path(sys.prefix) / "pyvenv.cfg"
+    try:
+        for line in pyvenv.read_text(encoding="utf-8", errors="replace").splitlines():
+            key, sep, value = line.partition("=")
+            if sep and key.strip().lower() == "home" and value.strip():
+                return "pyvenv.cfg home", value.strip()
+    except OSError:
+        pass
+    return "base interpreter", str(getattr(sys, "_base_executable", None) or sys.executable)
+
+
+def _profile_owner(path: str | Path | None, home: Path) -> str | None:
+    """The account whose user profile contains *path* — the path component
+    right after *home*'s parent (``C:\\Users\\<owner>\\...``) — else None.
+    Deriving the profiles directory from *home* keeps it OS-neutral; a home
+    directly under the filesystem root (``/root``-style) witnesses nothing,
+    since every absolute path would then look profile-resident."""
+    if path is None:
+        return None
+    profiles = home.parent
+    if profiles == profiles.parent:
+        return None
+    parts, root = Path(path).parts, profiles.parts
+    norm = os.path.normcase  # case-insensitive on Windows, identity elsewhere
+    if len(parts) <= len(root) or tuple(map(norm, parts[:len(root)])) != tuple(map(norm, root)):
+        return None
+    return parts[len(root)]
+
+
+def profile_residency_checks(*, base: str | Path | None = None,
+                             home: Path | None = None,
+                             config_source: str | Path | None = None,
+                             data_root: str | Path | None = None) -> list[Check]:
+    """The multi-account-server witness (BLUEFORSAS2 incident, 2026-08-11).
+
+    A venv whose base interpreter lives inside a user profile works for the
+    installer and dies for every OTHER account before Python even starts
+    ("uv trampoline failed to spawn Python child process / entity not found
+    (os error 2)"), because foreign profiles are not traversable. Doctor
+    necessarily runs as an account the venv works for, so the resident path
+    itself is the only visible signal: ANY profile-resident base warns.
+    The lab config and data_root warn only under a FOREIGN profile — the
+    same one-account failure class, but a student's own ``~/.scqo`` is the
+    normal dev-machine layout.
+
+    All inputs are injectable for tests; the defaults resolve the running
+    interpreter (:func:`_venv_base`) and ``Path.home()``.
+    """
+    home = Path.home() if home is None else home
+    me = home.name
+    if base is None:
+        src, base = _venv_base()
+    else:
+        src = "base interpreter"
+    out: list[Check] = []
+    owner = _profile_owner(base, home)
+    if owner is None:
+        out.append(Check(OK, "venv base", f"{src}: {base}"))
+    else:
+        who = (f"this account's profile ({owner})"
+               if os.path.normcase(owner) == os.path.normcase(me)
+               else f"{owner}'s profile (you are {me})")
+        out.append(Check(
+            WARN, "venv base",
+            f"{src}: {base} — inside {who}: every account that cannot traverse "
+            f"that profile dies before Python starts ('uv trampoline failed to "
+            f"spawn Python child process'); fix per {_SSH_NOTE}"))
+    for topic, p in (("lab config", config_source), ("data_root", data_root)):
+        owner = _profile_owner(p, home)
+        if owner is not None and os.path.normcase(owner) != os.path.normcase(me):
+            out.append(Check(
+                WARN, topic,
+                f"{p} lives in {owner}'s profile (you are {me}) — one-account "
+                f"wiring: it resolves only while that profile is traversable; "
+                f"move it outside user profiles ({_SSH_NOTE})"))
     return out

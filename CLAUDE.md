@@ -119,8 +119,10 @@ scqo/
                   #   external|unrecorded; strict-match, run outranks campaign)
   lock.py         # the production cut: freeze() writes components.lock, verify()
                   #   enforces superset-by-signature (retire, never delete)
-  checks.py       # doctor witnesses over the model, renderer-free (unreachable modes,
-                  #   design coverage, lock drift, roster-vs-vendor inventory, wiring)
+  checks.py       # doctor witnesses, renderer-free: model (unreachable modes, design
+                  #   coverage, lock drift, roster-vs-vendor inventory, wiring) +
+                  #   environment (profile-resident venv base / foreign-profile
+                  #   config+data_root — the multi-account-server trap, INSTALL §1)
   report.py       # report rows behind `scqo state` / `scqo device` - renderer-free,
                   #   JSON-able (CLI prints, viewer + AI loop consume the same shapes).
                   #   Also the catalog-DERIVED field orders + units (never hand-kept
