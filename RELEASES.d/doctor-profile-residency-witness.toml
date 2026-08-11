@@ -1,0 +1,6 @@
+name = "doctor-profile-residency-witness"
+repos = { scqo = "c6d8138" }
+kind = "additive"
+coupling = ""
+validated = "offline"
+notes = "scqo doctor gains a multi-account-server witness: it WARNs when the venv's base interpreter is profile-resident (pyvenv.cfg home / sys._base_executable under C:\\Users\\<someone>), and when the resolved lab config or data_root lives under a DIFFERENT account's profile — the uv-trampoline trap that passes for the installer and dies for every other SSH account (INSTALL §1). Additive: a new [WARN] row on affected servers, no existing behavior changes; warnings still exit 0."
