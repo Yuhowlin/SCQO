@@ -180,6 +180,7 @@ from .qubit_spectroscopy_flux_pulse import (  # noqa: E402
 )
 from .qubit_spectroscopy_overlap import QubitSpectroscopyOverlap  # noqa: E402
 from .qubit_sqrb import QubitSQRB  # noqa: E402
+from .qubit_stark_phase_echo import QubitStarkPhaseEcho  # noqa: E402
 from .qubit_t1_ade import QubitT1Ade  # noqa: E402
 from .qubit_t1_bayesian import QubitT1Bayesian  # noqa: E402
 from .qubit_thermal_population import QubitThermalPopulation  # noqa: E402
@@ -209,6 +210,7 @@ __all__ = [
     "QubitPiPulseError", "QubitPowerRabi", "QubitRamsey",
     "QubitRelaxation", "QubitRelaxationFluxPulse", "QubitSQRB",
     "QubitSpectroscopy", "QubitSpectroscopyCryoscope", "QubitSpectroscopyFluxPulse", "QubitSpectroscopyOverlap",
+    "QubitStarkPhaseEcho",
     "QubitT1Ade", "QubitT1Bayesian",
     "QubitThermalPopulation", "QubitTomography", "QubitXyzDelay",
     "ReadoutFrequency", "ReadoutPower", "ResonatorSpectroscopy",
