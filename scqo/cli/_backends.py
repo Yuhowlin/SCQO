@@ -36,21 +36,29 @@ SERVED_BY = {
 
 def default_targets(sess: Session, experiment: str | None = None) -> list[str]:
     """Entities for 'run on everything' defaults: every roster entity whose
-    KIND the experiment targets (qubit-like modes for single-qubit
-    experiments, composite kinds for pair ones; qubit-like when no
-    experiment is named). Pass --targets to override."""
+    KIND the experiment targets and that carries all REQUIRED OPERATIONS (qubit-like
+    modes for single-qubit experiments, composite kinds for pair ones; qubit-like
+    when no experiment is named). Pass --targets to override."""
     from scqo.catalog import QUBIT_LIKE
 
     kinds = set(QUBIT_LIKE)
+    req_ops: set[str] = set()
     if experiment is not None:
         from scqo.experiments import get as _get_experiment
 
         try:
-            kinds = set(_get_experiment(experiment).target_kinds)
+            exp_cls = _get_experiment(experiment)
+            kinds = set(exp_cls.target_kinds)
+            req_ops = set(getattr(exp_cls, "required_operations", ()))
         except KeyError:
             pass  # unknown name fails later with the catalog's own message
-    return [name for name, e in sess.roster.entities.items()
-            if e.kind in kinds and not e.retired]
+    return [
+        name
+        for name, e in sess.roster.entities.items()
+        if e.kind in kinds
+        and not e.retired
+        and (not req_ops or req_ops.issubset(set(sess.roster.operations(name))))
+    ]
 
 
 def ensure_demo_experiments() -> None:

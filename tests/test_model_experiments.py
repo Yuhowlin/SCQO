@@ -24,7 +24,8 @@ from scqo.testing import (
 #: zero suggestions is their CORRECT outcome.
 RECORD_ONLY = {"qubit_sqrb", "qubit_tomography", "qubit_echo_flux_pulse",
                "qubit_relaxation_flux_pulse", "pair_swap_chevron", "pair_swap_flux_map",
-               "qc_n_swap_amp", "qc_n_stark_amp", "qubit_t1_ade", "qubit_t1_bayesian"}
+               "qc_n_swap_amp", "qc_n_stark_amp", "qubit_t1_ade", "qubit_t1_bayesian",
+               "broadband_resonator_spectroscopy", "broadband_qubit_spectroscopy"}
 
 
 #: the readout reference an accepted single_shot_readout would have left behind.
@@ -954,3 +955,48 @@ def test_t1_bayesian_recovers_the_planted_t1(session):
     assert fit["t1_lin_s"] == pytest.approx(planted, rel=0.2)
     assert fit["validation_disagrees"] == 0.0
     assert out["outcomes"]["q0"] == "successful"
+
+
+def test_broadband_resonator_spectroscopy_runs_and_marks_dips(session):
+    """Broadband resonator spectroscopy must sweep across multi-LO bands,
+    detect candidate dips, and mark them without producing state suggestions."""
+    out = session.run(
+        "broadband_resonator_spectroscopy",
+        {
+            "targets": ["q0"],
+            "start_freq_hz": 4.0e9,
+            "stop_freq_hz": 8.0e9,
+            "bandwidth_per_lo_hz": 500e6,
+            "num_points_per_lo": 101,
+        },
+        update="none",
+    )
+    assert out.get("error") is None, out.get("error")
+    assert out["outcomes"]["q0"] == "successful"
+    fit = out["fit"]["q0"]
+    assert "dips" in fit
+    assert "resonator_frequencies_hz" in fit
+    assert len(fit["resonator_frequencies_hz"]) > 0
+    # Must be RECORD_ONLY — no suggestions proposed
+    assert len(out.get("suggestions", [])) == 0
+
+
+def test_broadband_resonator_spectroscopy_multi_targets(session):
+    """Broadband resonator spectroscopy must handle multiple targets in a single sweep."""
+    out = session.run(
+        "broadband_resonator_spectroscopy",
+        {
+            "targets": ["q0", "q1"],
+            "start_freq_hz": 4.0e9,
+            "stop_freq_hz": 8.0e9,
+            "bandwidth_per_lo_hz": 500e6,
+            "num_points_per_lo": 101,
+        },
+        update="none",
+    )
+    assert out.get("error") is None, out.get("error")
+    assert out["outcomes"]["q0"] == "successful"
+    assert out["outcomes"]["q1"] == "successful"
+    assert out["fit"]["q0"]["resonator_frequencies_hz"] == out["fit"]["q1"]["resonator_frequencies_hz"]
+
+
