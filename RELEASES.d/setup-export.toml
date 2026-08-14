@@ -1,6 +1,6 @@
 name = "setup-export"
-repos = { scqo = "bf5077f" }
+repos = { scqo = "0e86a8f" }
 kind = "additive"
 coupling = ""   # openpyxl lives in scqo's OWN viewer extra; matplotlib floor unchanged (via scqat)
-validated = "offline (test_viewer.py 52 green + rendered-sample inspection 2026-08-14)"
-notes = "Setup pages export /setup/<dev>/<cd>/<setup>/export.{html,xlsx,pdf}: self-contained offline HTML (embedded run/campaign snapshots, no data-drive needed by recipients), two-sheet xlsx (Calibration + Physical parameters; entity/parameter/value/unit/source), 16:9 PDF slides (one page per section x source kind). UPGRADE REQUIRES: reinstall viewer venv extras — new openpyxl dep — e.g. BLUEFORSAS2 .venv-view: uv pip install -e <SCQO>[viewer]."
+validated = "offline (test_viewer.py 52 green + rendered-sample inspection 2026-08-14; xlsx/html also smoked on the live local 5Q4C viewer)"
+notes = "Setup pages export /setup/<dev>/<cd>/<setup>/export.{html,xlsx,pdf}: self-contained offline HTML (embedded run/campaign snapshots, no data-drive needed by recipients), two-sheet xlsx (Calibration + Physical parameters; entity/parameter/value/unit/source), and a 16:9 PDF document mirroring the offline HTML (tables + referenced-run figures). UPGRADE REQUIRES: reinstall viewer venv extras — new openpyxl dep — e.g. BLUEFORSAS2 .venv-view: uv pip install -e <SCQO>[viewer]."
