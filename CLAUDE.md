@@ -165,7 +165,9 @@ scqo/
                   #   port 2 = one physical fact across all contexts) and the
                   #   device page holds the facts x (cooldown, setup) matrix —
                   #   all read from history.sqlite strictly read-only (never
-                  #   creates one)
+                  #   creates one); per-setup export.{html,xlsx,pdf} (_export.py:
+                  #   self-contained offline HTML with embedded run snapshots /
+                  #   two-sheet xlsx / 16:9 PDF, one page per source kind)
   __main__.py     # `python -m scqo <data_root>` - rebuild the index from the run folders
   cli/            # the `scqo` command (run/campaign/find/accept/suggest/set/tag/state/
                   #   user/device/doctor): ONE engine, any-directory;

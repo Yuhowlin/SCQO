@@ -40,6 +40,7 @@ viewer = [
     "uvicorn>=0.29",
     "jinja2>=3.1",
     "python-multipart>=0.0.9",  # FastAPI Form(...) — the tag-edit POST
+    "openpyxl>=3.1",            # the setup page's .xlsx export (PDF rides matplotlib via scqat; HTML is stdlib)
 ]
 
 [tool.uv.sources]

@@ -1,0 +1,162 @@
+<!doctype html>
+{#- The offline setup export: ONE self-contained file (in-page anchors +
+    base64 data: URIs only — no server routes, no file:// paths), so a
+    recipient with no data drive and no viewer can open it as-is. Standalone
+    on purpose: it must not extend base.html (nav + server links). -#}
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ device }} · {{ cooldown }}/{{ setup_name }} — SCQO setup export</title>
+{% include "_style.html" %}
+</head>
+<body>
+<main>
+
+{% macro provenance(src) -%}
+  {%- if src and src.status == "run" %}<a href="#run-{{ src.run_id }}" title="{{ (src.timestamp or '')[:19] }} · {{ src.operator or '-' }}">{{ src.run_id }}</a>
+  {%- elif src and src.status == "campaign" %}<a href="#campaign-{{ src.campaign_id }}" title="{{ (src.timestamp or '')[:19] }} · {{ src.operator or '-' }}">{{ src.campaign_id }}</a> <span class="muted">(campaign)</span>
+  {%- elif src and src.status == "external" %}<span class="ext">(externally changed)</span>
+  {%- elif src and src.status == "manual" %}<span class="muted">(manual)</span>
+  {%- else %}-{% endif %}
+{%- endmacro %}
+
+{% macro param_table(rows) -%}
+<table>
+  <tr><th>entity</th><th>parameter</th><th>value</th><th>unit</th><th>source</th></tr>
+  {% for r in rows %}
+  <tr>
+    <td>{{ r.entity }}</td>
+    <td>{{ r.field }}</td>
+    <td>{{ "%.8g" | format(r.value) if r.value is number else r.value }}</td>
+    <td>{{ r.unit or "" }}</td>
+    <td>{{ provenance(r.source) }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{%- endmacro %}
+
+<h2 id="top">Setup: {{ setup_name }} <span class="muted">({{ device }} · {{ cooldown }}{% if is_active %} · active{% endif %})</span></h2>
+<p class="muted">Exported {{ exported_at }} from <code>{{ data_root }}</code> — self-contained
+offline copy; source links jump to the embedded run/campaign snapshots below.</p>
+
+{% if cooldown_error %}
+<p><b>cooldowns.toml error:</b> {{ cooldown_error }}</p>
+{% endif %}
+
+<table>
+  {% if cycle %}
+  <tr><th>cycle</th><td>{{ cooldown }}{% if is_active %} <b>(active)</b>{% endif %}</td></tr>
+  <tr><th>start</th><td>{{ cycle.start }}</td></tr>
+  <tr><th>end</th><td>{{ cycle.end or "-" }}</td></tr>
+  {% if cycle.fridge %}<tr><th>fridge</th><td>{{ cycle.fridge }}</td></tr>{% endif %}
+  {% if cycle.packaging %}<tr><th>packaging</th><td>{{ cycle.packaging }}</td></tr>{% endif %}
+  {% endif %}
+  {% if setup_meta %}
+  <tr><th>backend</th><td>{{ setup_meta.backend }}</td></tr>
+  <tr><th>instrument config</th><td>{% if setup_meta.instrument_config %}<code>{{ setup_meta.instrument_config }}</code>{% else %}(built-in){% endif %}</td></tr>
+  {% if setup_meta.note %}<tr><th>note</th><td>{{ setup_meta.note }}</td></tr>{% endif %}
+  {% endif %}
+</table>
+{% if not in_registry and not cooldown_error %}
+<p class="ext">This context is not in cooldowns.toml (removed, renamed, or never registered).</p>
+{% endif %}
+{% if latest_run %}<p class="muted">latest run: <a href="#run-{{ latest_run.run_id }}">{{ latest_run.run_id }}</a></p>{% endif %}
+
+<h3>Calibration</h3>
+{% if authority == "state" %}
+<p class="muted">Current calibration — from <code>{{ state_path }}</code> (deferred accepts included).</p>
+{% elif authority == "snapshot" %}
+<p class="muted">Last observed calibration — from
+  <a href="#run-{{ snapshot_run.run_id }}">{{ snapshot_run.run_id }}</a>
+  (device_after snapshot; no state file yet).</p>
+{% else %}
+<p class="muted">No calibration recorded for this context yet.</p>
+{% endif %}
+{% if state_rows %}{{ param_table(state_rows) }}{% endif %}
+
+<h3>Physical parameters</h3>
+<p class="muted">Measured physics for this (cooldown, setup) — each value is a measurement
+THROUGH this setup; compare across setups/cooldowns in the live viewer, never average.</p>
+{% if physical_rows %}{{ param_table(physical_rows) }}{% else %}
+<p class="muted">No physical parameters recorded for this context yet.</p>
+{% endif %}
+
+<p class="muted">source = the run the CURRENT value came from (strict match); (externally
+changed) = the current value matches no SCQO record — reseeded by the vendor or written by
+another tool.</p>
+
+{% if embedded_runs %}
+<h3>Referenced runs</h3>
+{% for r in embedded_runs %}
+<section id="run-{{ r.run_id }}">
+  <h4>{{ r.run_id }}
+    {%- if r.found %} {% for q, o in r.record.outcomes.items() %}<span class="badge {{ o }}">{{ q }}: {{ o }}</span> {% endfor %}{% endif %}</h4>
+  {% if r.found %}
+  <p class="muted">{{ r.record.experiment }} · {{ r.record.started_at }} · backend {{ r.record.backend }}
+  {%- if r.record.operator %} · operator {{ r.record.operator }}{% endif %}</p>
+  {% if r.fit %}
+  <table>
+    <tr><th>target</th><th>quantity</th><th>value</th></tr>
+    {% for q, fit in r.fit.items() %}{% for k, v in fit.items() %}
+    <tr><td>{{ q }}</td><td>{{ k }}</td><td>{{ "%.6g" | format(v) if v is number else v }}</td></tr>
+    {% endfor %}{% endfor %}
+  </table>
+  {% endif %}
+  {% for fig in r.figures %}
+  <img class="figure" src="{{ fig }}" alt="figure of {{ r.run_id }}">
+  {% endfor %}
+  {% if r.parameters %}
+  <details><summary class="muted">parameters</summary>
+  <table>
+    {% for k, v in r.parameters.items() %}<tr><th>{{ k }}</th><td>{{ v }}</td></tr>{% endfor %}
+  </table>
+  </details>
+  {% endif %}
+  {% else %}
+  <p class="ext">not found in the index — the run data may have moved.</p>
+  {% endif %}
+  <p class="muted"><a href="#top">↑ back to top</a></p>
+</section>
+{% endfor %}
+{% endif %}
+
+{% if embedded_campaigns %}
+<h3>Referenced campaigns</h3>
+{% for c in embedded_campaigns %}
+<section id="campaign-{{ c.campaign_id }}">
+  <h4>{{ c.campaign_id }}{% if c.found %} <span class="muted">({{ c.manifest.status }})</span>{% endif %}</h4>
+  {% if c.found %}
+  {% if c.stats_rows %}
+  <table>
+    <tr><th>experiment</th><th>target</th><th>quantity</th><th>n</th><th>miss</th><th>mean</th><th>std</th><th>sem</th><th>min</th><th>max</th><th>std/err</th></tr>
+    {% for s in c.stats_rows %}
+    {% if s.nonscalar %}
+    <tr><td>{{ s.experiment }}</td><td>{{ s.target }}</td><td>{{ s.quantity }}</td>
+        <td colspan="8" class="muted">array-valued, nothing to average (record-only)</td></tr>
+    {% else %}
+    <tr>
+      <td>{{ s.experiment }}</td><td>{{ s.target }}</td><td>{{ s.quantity }}</td>
+      <td>{{ s.n }}</td><td>{{ s.n_missing }}</td>
+      <td>{{ "%.5g" | format(s.mean) if s.mean is not none else "-" }}</td>
+      <td>{{ "%.5g" | format(s.std) if s.std is not none else "-" }}</td>
+      <td>{{ "%.5g" | format(s.sem) if s.sem is not none else "-" }}</td>
+      <td>{{ "%.5g" | format(s.min) if s.min is not none else "-" }}</td>
+      <td>{{ "%.5g" | format(s.max) if s.max is not none else "-" }}</td>
+      <td>{{ "%.2f" | format(s.scatter_ratio) if s.scatter_ratio is not none else "-" }}</td>
+    </tr>
+    {% endif %}
+    {% endfor %}
+  </table>
+  {% endif %}
+  {% if c.png %}<img class="figure" src="{{ c.png }}" alt="campaign statistics">{% endif %}
+  {% else %}
+  <p class="ext">not found in the index — the campaign data may have moved.</p>
+  {% endif %}
+  <p class="muted"><a href="#top">↑ back to top</a></p>
+</section>
+{% endfor %}
+{% endif %}
+
+</main>
+</body>
+</html>

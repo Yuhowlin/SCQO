@@ -38,6 +38,10 @@
 <p class="muted"><a href="/device">All samples</a> · <a href="/device?device={{ device }}">{{ device }}</a> ·
   {{ cooldown }} · <b>{{ setup_name }}</b> ·
   <a href="/trends?device={{ device }}">trends of {{ device }}</a></p>
+<p class="muted">Export:
+  <a href="/setup/{{ device }}/{{ cooldown }}/{{ setup_name }}/export.html" title="one self-contained file — run links jump to embedded snapshots">offline HTML</a> ·
+  <a href="/setup/{{ device }}/{{ cooldown }}/{{ setup_name }}/export.xlsx" title="two sheets: Calibration + Physical parameters">Excel</a> ·
+  <a href="/setup/{{ device }}/{{ cooldown }}/{{ setup_name }}/export.pdf" title="16:9 slides, one page per source kind">PDF slides</a></p>
 
 {% if cooldown_error %}
 <p><b>cooldowns.toml error:</b> {{ cooldown_error }}</p>

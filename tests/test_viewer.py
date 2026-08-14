@@ -735,3 +735,130 @@ def test_runs_page_campaign_column_and_filter(lab):
     assert lab["ram"]["run_id"] not in page
     # the column cell links the child to its campaign
     assert f'href="/campaign/{cid}"' in page and "r0 s0" in page
+
+
+# ------------------------------------------------------------- setup exports
+
+def _pdf_pages(data: bytes) -> int:
+    """Pages in a matplotlib PDF: /Type /Page objects minus the /Type /Pages
+    tree node, whose text also matches the shorter substring."""
+    return data.count(b"/Type /Page") - data.count(b"/Type /Pages")
+
+
+def test_setup_export_html_is_self_contained(lab):
+    """The offline export is ONE file a recipient opens with no data drive and
+    no viewer: run links are in-page anchors to embedded snapshots, figures are
+    data: URIs, and no href leaves the file."""
+    resp = lab["client"].get("/setup/devV/cdV/sim_main/export.html")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/html")
+    assert resp.headers["content-disposition"] == \
+        'attachment; filename="devV_cdV_sim_main.html"'
+    page = resp.text
+    assert "Calibration" in page and "Physical parameters" in page
+    assert ">previous</th>" not in page          # the column is export-excluded
+    assert "<nav>" not in page
+    # one assertion kills every server route AND every file:// path at once
+    assert 'href="/' not in page and 'href="file:' not in page
+    rid = lab["res2"]["run_id"]                  # the run crediting readout_freq_hz
+    assert f'href="#run-{rid}"' in page          # source link -> in-file anchor...
+    assert f'id="run-{rid}"' in page             # ...whose target section exists
+    assert "data:image/png;base64," in page      # figures ride inside the file
+    assert "Exported" in page and lab["root"].name in page
+
+
+def test_setup_export_html_embeds_run_fit_and_campaign(lab):
+    page = lab["client"].get("/setup/devV/cdV/sim_main/export.html").text
+    cid = lab["campaign"]["campaign_id"]
+    # the campaign-accepted q0.t1_s: anchor + embedded section with statistics
+    assert f'href="#campaign-{cid}"' in page and "(campaign)" in page
+    assert f'id="campaign-{cid}"' in page and "qubit_relaxation" in page
+    assert "(manual)" in page                    # the notebook-written g_hz
+    # the t1 run's embedded snapshot carries its fit table and a way back up
+    section = page.split(f'id="run-{lab["t1"]["run_id"]}"', 1)[1] \
+                  .split("</section>", 1)[0]
+    assert "t1_s" in section and "back to top" in section
+
+
+def test_setup_export_html_flags_external_change(lab):
+    # Re-apply the SAME hand-edit test_setup_page_flags_external_change makes —
+    # idempotent, so this test never depends on the other one having run.
+    state_path = (Path(lab["root"]) / "chipZ" / "cdZ" / "z_main" / "scqo"
+                  / "scqo_state.json")
+    data = json.loads(state_path.read_text(encoding="utf-8"))
+    data["values"]["q0_ro"]["readout_freq_hz"] = 9.9e9
+    state_path.write_text(json.dumps(data), encoding="utf-8")
+
+    page = lab["client"].get("/setup/chipZ/cdZ/z_main/export.html").text
+    assert "externally changed" in page          # drifted value: no credit
+    # the same run's untouched value keeps its anchor to the embedded snapshot
+    assert f'href="#run-{lab["chipz"]["run_id"]}"' in page
+
+
+def test_setup_export_xlsx_round_trip(lab):
+    openpyxl = pytest.importorskip("openpyxl")
+    import io
+
+    from scqo.report import FIELD_UNITS
+    from scqo.viewer._export import XLSX_MEDIA_TYPE
+
+    resp = lab["client"].get("/setup/devV/cdV/sim_main/export.xlsx")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == XLSX_MEDIA_TYPE
+    assert resp.headers["content-disposition"] == \
+        'attachment; filename="devV_cdV_sim_main.xlsx"'
+    assert resp.content[:2] == b"PK"             # a real zip container
+
+    wb = openpyxl.load_workbook(io.BytesIO(resp.content))
+    assert wb.sheetnames == ["Calibration", "Physical parameters"]
+    phys = wb["Physical parameters"]
+    assert next(phys.iter_rows(max_row=1, values_only=True)) == \
+        ("entity", "parameter", "value", "unit", "source")
+    rows = {(r[0], r[1]): r for r in phys.iter_rows(min_row=2, values_only=True)}
+    t1 = rows[("q1", "t1_s")]
+    assert isinstance(t1[2], float)              # values stay native numbers
+    assert t1[3] == FIELD_UNITS["t1_s"]
+    assert t1[4] == f"run:{lab['t1']['run_id']}"
+    assert rows[("q0", "t1_s")][4] == f"campaign:{lab['campaign']['campaign_id']}"
+    assert rows[("q0_res", "g_hz")][4] == "manual"
+
+    # a valid-but-unknown context degrades to an empty workbook (page precedent)
+    resp = lab["client"].get("/setup/devV/cdV/nonexistent/export.xlsx")
+    assert resp.status_code == 200
+    wb = openpyxl.load_workbook(io.BytesIO(resp.content))
+    assert [ws.max_row for ws in wb.worksheets] == [1, 1]  # headers only
+
+
+def test_setup_export_pdf_page_per_section_and_source_kind(lab):
+    resp = lab["client"].get("/setup/devV/cdV/sim_main/export.pdf")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/pdf"
+    assert resp.content[:5] == b"%PDF-"
+    # sim_main's (section, source-kind) groups, each well under one page:
+    #   Calibration — run          (the applied knobs)
+    #   Physical    — run          (res/ram/t1 facts)
+    #   Physical    — campaign     (the accepted q0.t1_s)
+    #   Physical    — manual       (the notebook g_hz)
+    # A fixture change that shifts provenance kinds must fail here loudly.
+    assert _pdf_pages(resp.content) == 4
+
+    resp = lab["client"].get("/setup/devV/cdV/nonexistent/export.pdf")
+    assert resp.status_code == 200
+    assert _pdf_pages(resp.content) == 1         # the explicit empty-state page
+
+
+def test_setup_export_bad_slug_404s_all_three(lab):
+    c = lab["client"]
+    for ext in ("html", "xlsx", "pdf"):
+        assert c.get(f"/setup/devV/cd%20bad/main/export.{ext}").status_code == 404
+
+
+def test_setup_export_xlsx_missing_openpyxl_is_a_clear_503(lab, monkeypatch):
+    """An old viewer venv (extra not reinstalled) must get the reinstall hint,
+    never a 500."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "openpyxl", None)
+    resp = lab["client"].get("/setup/devV/cdV/sim_main/export.xlsx")
+    assert resp.status_code == 503
+    assert "openpyxl" in resp.json()["detail"]
