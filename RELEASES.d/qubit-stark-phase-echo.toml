@@ -1,6 +1,0 @@
-name = "qubit-stark-phase-echo"
-repos = { scqat = "ddea85e", scqo = "01fa7ec", scqo-qm = "b613748" }
-kind = "additive"
-coupling = "scqo needs scqat >= ddea85e: qubit_stark_phase_echo.estimate() hard-imports scqat.estimators.qubit_stark_phase_echo.QubitStarkPhaseEchoEstimator (ImportError at estimate time below that floor — silent-failure)"
-validated = "hardware 5Q4C 2026-08-13 (run 20260813-011304); offline all three suites green"
-notes = "New QM-only experiment qubit_stark_phase_echo: AC-Stark phase echo (Hahn echo with an off-resonant stark tone filling arm 2) with a two-basis phase-tomography estimator; record-only (no writeback, no catalog change)."
