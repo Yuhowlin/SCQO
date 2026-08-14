@@ -466,6 +466,16 @@ def create_app(data_root: str | Path) -> FastAPI:
                         "png": _data_uri(Path(loaded["path"]) / STATISTICS_PNG)})
         return out
 
+    def _embedded(ctx: dict) -> tuple[list[dict], list[dict]]:
+        """(runs, campaigns) referenced by one context's rows — the shared
+        payload of the two self-contained exports (html embeds, pdf redraws)."""
+        rows = ctx["state_rows"] + ctx["physical_rows"]
+        return (_embedded_runs(rows, [ctx["latest_run"], ctx["snapshot_run"]]),
+                _embedded_campaigns(rows))
+
+    def _exported_at() -> str:
+        return datetime.now().astimezone().isoformat(timespec="seconds")
+
     @app.get("/setup/{device}/{cooldown}/{setup_name}/export.html")
     def setup_export_html(device: str, cooldown: str, setup_name: str):
         # A single self-contained file (anchors + data: URIs, no server or
@@ -473,14 +483,10 @@ def create_app(data_root: str | Path) -> FastAPI:
         # viewer. Served as an attachment: the artifact is a file to save and
         # send, not a page to browse.
         ctx = _setup_context(device, cooldown, setup_name)
-        rows = ctx["state_rows"] + ctx["physical_rows"]
+        runs, campaigns = _embedded(ctx)
         html = templates.get_template("setup_export.html").render(
-            **ctx,
-            embedded_runs=_embedded_runs(
-                rows, [ctx["latest_run"], ctx["snapshot_run"]]),
-            embedded_campaigns=_embedded_campaigns(rows),
-            data_root=str(store.data_root),
-            exported_at=datetime.now().astimezone().isoformat(timespec="seconds"))
+            **ctx, embedded_runs=runs, embedded_campaigns=campaigns,
+            data_root=str(store.data_root), exported_at=_exported_at())
         return HTMLResponse(
             html, headers=_attachment(device, cooldown, setup_name, "html"))
 
@@ -498,10 +504,11 @@ def create_app(data_root: str | Path) -> FastAPI:
 
     @app.get("/setup/{device}/{cooldown}/{setup_name}/export.pdf")
     def setup_export_pdf(device: str, cooldown: str, setup_name: str):
+        # The offline html as a 16:9 PDF document — same sections, same
+        # embedded run/campaign payload, rendered by _export.pdf_bytes.
         ctx = _setup_context(device, cooldown, setup_name)
-        data = pdf_bytes(ctx["state_rows"], ctx["physical_rows"],
-                         device=device, cooldown=cooldown,
-                         setup_name=setup_name)
+        runs, campaigns = _embedded(ctx)
+        data = pdf_bytes(ctx, runs, campaigns, exported_at=_exported_at())
         return Response(data, media_type="application/pdf",
                         headers=_attachment(device, cooldown, setup_name, "pdf"))
 

@@ -829,22 +829,23 @@ def test_setup_export_xlsx_round_trip(lab):
     assert [ws.max_row for ws in wb.worksheets] == [1, 1]  # headers only
 
 
-def test_setup_export_pdf_page_per_section_and_source_kind(lab):
+def test_setup_export_pdf_mirrors_the_offline_page(lab):
+    """The pdf is a DOCUMENT twin of the offline html — front matter + the two
+    parameter tables, then the referenced-run appendix with the figures
+    embedded — flowing across pages, not per-source-kind slides."""
     resp = lab["client"].get("/setup/devV/cdV/sim_main/export.pdf")
     assert resp.status_code == 200
     assert resp.headers["content-type"] == "application/pdf"
     assert resp.content[:5] == b"%PDF-"
-    # sim_main's (section, source-kind) groups, each well under one page:
-    #   Calibration — run          (the applied knobs)
-    #   Physical    — run          (res/ram/t1 facts)
-    #   Physical    — campaign     (the accepted q0.t1_s)
-    #   Physical    — manual       (the notebook g_hz)
-    # A fixture change that shifts provenance kinds must fail here loudly.
-    assert _pdf_pages(resp.content) == 4
+    # sim_main embeds 4 runs (res2/ram/t1 credited + pend as latest), each with
+    # figures — the appendix alone spans pages; exact counts float with figure
+    # aspect, the floor does not
+    assert _pdf_pages(resp.content) >= 4
+    assert len(resp.content) > 50_000            # the figures ride inside
 
     resp = lab["client"].get("/setup/devV/cdV/nonexistent/export.pdf")
     assert resp.status_code == 200
-    assert _pdf_pages(resp.content) == 1         # the explicit empty-state page
+    assert _pdf_pages(resp.content) == 1         # title + empty-state captions
 
 
 def test_setup_export_bad_slug_404s_all_three(lab):
