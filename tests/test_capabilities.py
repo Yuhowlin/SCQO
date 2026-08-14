@@ -74,6 +74,11 @@ EXPECTED_TAGS = {
     # is a scalar parameter, not a swept flux window, so it does not subclass the
     # flux mixins; the swept axes are prepared_state and the relative XY/Z timing.
     "qubit_xyz_delay": ["state_readout", "qubit_reset"],
+    # stark phase echo: state_readout + qubit_reset, but NO amplitude tag — the
+    # swept window is a factor of the STARK operation's baked amplitude, not of a
+    # target knob (pi_amp/readout_amp), so it owns min/max_stark_amp instead of
+    # subclassing AmplitudeSweepParameters (same reasoning as qc_n_stark_amp).
+    "qubit_stark_phase_echo": ["state_readout", "qubit_reset"],
     "qubit_relaxation_flux_pulse": ["state_readout", "flux", "qubit_reset", "flux_pulse"],
     "qubit_echo_flux_pulse": ["state_readout", "flux", "qubit_reset", "flux_pulse"],
     # parity monitors: state_readout only — deliberately NO qubit_reset. In the
