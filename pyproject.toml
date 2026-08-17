@@ -1,6 +1,6 @@
 [project]
 name = "scqo"
-version = "2.1.0"
+version = "2.2.0"
 description = "Superconducting Qubit Orchestration — instrument-agnostic experiment API shared by QM and Qblox backends"
 readme = "CLAUDE.md"
 requires-python = ">=3.10,<3.13"
@@ -20,6 +20,10 @@ dependencies = [
                         # so the manifest carries it: see RELEASES.toml [v0-18-0].
                         # qubit_xyz_delay raises the floor to scqat v0.12.0 (the XyzDelayEstimator +
                         # fit_triangle tool it lazy-imports); a missing module is a loud ImportError.
+                        # As of v2.2.0 the floor is scqat v0.18.0: readout_power / readout_frequency
+                        # pass method= to the readout_fidelity estimator (derived from readout_mode),
+                        # which an older scqat refuses by name — loud ValueError at estimate, and only
+                        # for those two experiments. See RELEASES.toml [v2-2-0].
     "netcdf4>=1.6",     # datastore: dataset.nc has a string qubit coord (needs netCDF4, not the scipy netCDF3 fallback)
     "tomli>=2.0; python_version<'3.11'",  # labconfig TOML parsing on py3.10
 ]
