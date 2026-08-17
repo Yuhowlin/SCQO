@@ -1,0 +1,6 @@
+name = "capability-rename-and-browse"
+repos = { scqo = "6c11a4e" }
+kind = "breaking"
+coupling = ""
+validated = "offline"
+notes = "UPGRADE REQUIRES: any catalog() consumer reading entry['tags'] must read entry['capabilities'] (the derived capability markers renamed so run tags own the word 'tag'; no in-tree, driver, contrib or scqat consumer existed). BEHAVIOR CHANGE: bare 'scqo run' now prints compact name columns + a capability-count footer instead of descriptions (details stay in 'scqo run <name> --help'); new 'scqo run --capability NAME' filters the listing (repeatable = AND, 'none' = the zero-capability bucket)."
