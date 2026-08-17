@@ -67,11 +67,29 @@ def test_filtered_listing_none_bucket():
     assert lines[1:] == ["ccc_third"]
 
 
+def _core_entries() -> list[dict]:
+    """Catalog entries for the EXPORTED experiments only.
+
+    Other test modules ``@register`` deliberately-broken fixtures
+    (``broken_contract``, ``partial_success``, ...) into the live registry, and
+    those carry no capabilities — so a whole-registry assertion passes alone and
+    fails in the full suite, on test ORDER, with every fixture piling into the
+    ``none`` bucket. Same selection-by-type guard as
+    ``test_capabilities.test_every_experiment_is_pinned_here``.
+    """
+    from scqo import experiments as registry
+    from scqo.experiment import Experiment
+
+    ensure_demo_experiments()
+    core = {obj.name for obj in (getattr(registry, n) for n in registry.__all__)
+            if isinstance(obj, type) and issubclass(obj, Experiment)}
+    return [entry for entry in catalog() if entry["name"] in core]
+
+
 def test_real_catalog_flux_filter_matches_the_pinned_carriers():
     """Cross-check against the live registry; the authoritative per-experiment
     pins live in test_capabilities.EXPECTED_CAPABILITIES — drift lands there first."""
-    ensure_demo_experiments()
-    lines = _catalog_listing_lines(catalog(), capabilities=["flux"])
+    lines = _catalog_listing_lines(_core_entries(), capabilities=["flux"])
     assert lines[1:] == [
         "qubit_echo_flux_pulse",
         "qubit_relaxation_flux_pulse",
@@ -81,8 +99,7 @@ def test_real_catalog_flux_filter_matches_the_pinned_carriers():
 
 
 def test_real_catalog_none_bucket_is_the_resonator_trio():
-    ensure_demo_experiments()
-    lines = _catalog_listing_lines(catalog(), capabilities=["none"])
+    lines = _catalog_listing_lines(_core_entries(), capabilities=["none"])
     assert lines[1:] == [
         "resonator_spectroscopy",
         "resonator_spectroscopy_power_amp",
