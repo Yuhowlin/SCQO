@@ -79,6 +79,17 @@ def test_catalog_lists_without_any_driver(tmp_path):
     for name in ("resonator_spectroscopy", "qubit_ramsey", "single_shot_readout"):
         assert name in proc.stdout
     assert "# user overlay: none" in proc.stdout
+    assert "# capabilities: " in proc.stdout  # the counts footer
+    assert "--capability" in proc.stdout      # the filter hint
+
+
+def test_catalog_capability_filter(tmp_path):
+    """End-to-end --capability pass; the format logic lives in test_cli_listing."""
+    proc = _run_cli(tmp_path, "run", "--capability", "flux")
+    assert proc.returncode == 0, proc.stderr
+    body = [l for l in proc.stdout.splitlines() if l and not l.startswith("#")]
+    assert body == ["qubit_echo_flux_pulse", "qubit_relaxation_flux_pulse",
+                    "qubit_spectroscopy_flux_pulse", "resonator_spectroscopy_flux"]
 
 
 def test_run_help_shows_schema_epilog(tmp_path):

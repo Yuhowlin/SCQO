@@ -218,7 +218,9 @@ scqo/
                     #   catalog
                     #   `capabilities` are DERIVED from mixin subclassing — never declared
                     #   strings, zero capabilities legitimate (new experiments may be
-                    #   unclassifiable)
+                    #   unclassifiable); CAPABILITY_SUMMARIES = the curated one-liner
+                    #   per capability behind `scqo run --capability` (keys pinned to
+                    #   the derived set by test_capabilities)
     _depletion.py               # the post-readout photon-depletion wait: THE precedence
                                 #   helper depletion_wait_ns + the kappa->wait formula.
                                 #   The readout twin of qubit_reset one level over -

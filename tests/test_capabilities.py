@@ -163,6 +163,22 @@ def test_every_experiment_is_pinned_here():
     )
 
 
+def test_capability_summaries_track_the_derived_set():
+    """CAPABILITY_SUMMARIES feeds the CLI catalog browser (`scqo run
+    --capability`); its keys must be exactly the derivable capabilities, in
+    derivation order, or the browser lies about what exists. 'none' is NOT a
+    key — it is the absence of capabilities, rendered by the CLI itself."""
+    from scqo.experiments._capabilities import CAPABILITY_SUMMARIES
+
+    assert list(CAPABILITY_SUMMARIES) == [
+        "state_readout", "flux", "qubit_reset", "flux_pulse", "amplitude"]
+    assert set(CAPABILITY_SUMMARIES) == {
+        cap for caps in EXPECTED_CAPABILITIES.values() for cap in caps}
+    # one short plain line each: no reST markup, no scraped "Mixin:" prefix
+    for cap, summary in CAPABILITY_SUMMARIES.items():
+        assert summary and "`" not in summary and not summary.startswith("Mixin"), cap
+
+
 def test_capabilities_survive_session_catalog_overlay():
     """Session.catalog() passes capabilities through — both the verbatim path
     (no parameter_defaults) and the deepcopy overlay path."""
