@@ -82,11 +82,12 @@ def get(name: str) -> type[Experiment]:
                        f"Available: {sorted(_REGISTRY)}") from None
 
 
-def _derived_tags(cls: type[Experiment]) -> list[str]:
-    """Capability tags DERIVED from Parameters-mixin subclassing — never a
-    declared string, so a tag cannot lie or rot as the code evolves.
-    Experiments with no tags are legitimate (a new experiment may not be
-    classifiable yet)."""
+def _derived_capabilities(cls: type[Experiment]) -> list[str]:
+    """Capabilities DERIVED from Parameters-mixin subclassing — never a
+    declared string, so a capability cannot lie or rot as the code evolves.
+    Experiments with no capabilities are legitimate (a new experiment may not
+    be classifiable yet). Deliberately NOT called "tags": that word belongs to
+    the datastore's user-attached run tags (``run(..., tags=)`` / ``scqo tag``)."""
     from ._capabilities import (
         AmplitudeSweepParameters,
         FluxPulseSweepParameters,
@@ -99,38 +100,38 @@ def _derived_tags(cls: type[Experiment]) -> list[str]:
     # capabilities first, then each later addition appended at the END so it
     # does not reshuffle every existing entry — qubit_reset, then flux_pulse,
     # then amplitude.
-    tags = []
+    caps = []
     if issubclass(cls.Parameters, StateReadoutParameters):
-        tags.append("state_readout")
+        caps.append("state_readout")
     if issubclass(cls.Parameters, FluxSweepParameters):
-        tags.append("flux")
+        caps.append("flux")
     if issubclass(cls.Parameters, QubitResetParameters):
-        tags.append("qubit_reset")
+        caps.append("qubit_reset")
     # A REFINEMENT of "flux", not a sibling: the window is measured from the
     # channel's idle_flux rather than from the DAC zero. Carriers must also end
     # their name in "_pulse" (test_capabilities pins it).
     if issubclass(cls.Parameters, FluxPulseSweepParameters):
-        tags.append("flux_pulse")
+        caps.append("flux_pulse")
     # the swept amplitude window (a FACTOR of the target's standing amplitude);
     # carriers also attach the absolute `digital_amp` axis
     if issubclass(cls.Parameters, AmplitudeSweepParameters):
-        tags.append("amplitude")
-    return tags
+        caps.append("amplitude")
+    return caps
 
 
 def catalog() -> list[dict]:
-    """``[{name, description, maturity, tags, target_kinds,
+    """``[{name, description, maturity, capabilities, target_kinds,
     required_operations, parameters_schema}, ...]`` for every registered
     experiment. ``maturity`` is ``"core"`` (promoted, governed) or
     ``"contrib"`` (sandbox prototype — an AI loop should avoid these unless
-    told); ``tags`` are derived capability markers."""
+    told); ``capabilities`` are derived from the Parameters mixins."""
     _discover()
     return [
         {
             "name": cls.name,
             "description": cls.description,
             "maturity": _MATURITY.get(cls.name, "core"),
-            "tags": _derived_tags(cls),
+            "capabilities": _derived_capabilities(cls),
             "target_kinds": list(cls.target_kinds),
             "required_operations": list(cls.required_operations),
             "parameters_schema": cls.Parameters.model_json_schema(),

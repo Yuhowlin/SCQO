@@ -1,10 +1,11 @@
-"""Derived capability tags + the ``_capabilities`` package contract.
+"""Derived capabilities + the ``_capabilities`` package contract.
 
-A tag is DERIVED from Parameters-mixin subclassing
-(``scqo.experiments._derived_tags``) —
+A capability is DERIVED from Parameters-mixin subclassing
+(``scqo.experiments._derived_capabilities``) —
 never a declared string — so it cannot lie or rot as the code evolves.
-Experiments with ZERO tags are legitimate: a new experiment may not be
-classifiable yet, and no test may demand tag completeness.
+Experiments with ZERO capabilities are legitimate: a new experiment may not be
+classifiable yet, and no test may demand capability completeness. (Not "tags":
+that word belongs to the datastore's user-attached run tags.)
 """
 
 from __future__ import annotations
@@ -52,29 +53,30 @@ def _catalog_by_name() -> dict[str, dict]:
 
 
 #: derivation order is fixed: state_readout, then flux, then qubit_reset, then
-#: flux_pulse (``scqo.experiments._derived_tags``). ``flux_pulse`` REFINES
-#: ``flux`` — a relative window measured from idle_flux — so it never appears
-#: without it, and its carriers' names all end in ``_pulse``.
-EXPECTED_TAGS = {
+#: flux_pulse (``scqo.experiments._derived_capabilities``). ``flux_pulse``
+#: REFINES ``flux`` — a relative window measured from idle_flux — so it never
+#: appears without it, and its carriers' names all end in ``_pulse``.
+EXPECTED_CAPABILITIES = {
     "qubit_relaxation": ["state_readout", "qubit_reset"],
     "qubit_echo": ["state_readout", "qubit_reset"],
     "qubit_ramsey": ["state_readout", "qubit_reset"],
     "qubit_power_rabi": ["state_readout", "qubit_reset", "amplitude"],
     "qubit_deterministic_benchmarking": ["state_readout", "qubit_reset", "amplitude"],
     "qubit_sqrb": ["state_readout", "qubit_reset"],
-    # ramsey cryoscope: state_readout + qubit_reset, but NO flux tag — the flux-pulse
-    # amplitude is a scalar parameter, not a swept window, so it does not
-    # subclass the flux mixins; the swept axis is the pulse duration.
+    # ramsey cryoscope: state_readout + qubit_reset, but NO flux capability — the
+    # flux-pulse amplitude is a scalar parameter, not a swept window, so it does
+    # not subclass the flux mixins; the swept axis is the pulse duration.
     "qubit_ramsey_cryoscope": ["state_readout", "qubit_reset"],
-    # spectroscopy cryoscope: same tags, same reasoning — the flux amplitude is a
-    # scalar parked excursion, not a swept window; the swept axes are the drive
-    # detuning and the (log-spaced) wait time.
+    # spectroscopy cryoscope: same capabilities, same reasoning — the flux
+    # amplitude is a scalar parked excursion, not a swept window; the swept axes
+    # are the drive detuning and the (log-spaced) wait time.
     "qubit_spectroscopy_cryoscope": ["state_readout", "qubit_reset"],
-    # xyz delay: like cryoscope, NO flux tag — the Z pulse amplitude (z_pulse_amp_v)
-    # is a scalar parameter, not a swept flux window, so it does not subclass the
-    # flux mixins; the swept axes are prepared_state and the relative XY/Z timing.
+    # xyz delay: like cryoscope, NO flux capability — the Z pulse amplitude
+    # (z_pulse_amp_v) is a scalar parameter, not a swept flux window, so it does
+    # not subclass the flux mixins; the swept axes are prepared_state and the
+    # relative XY/Z timing.
     "qubit_xyz_delay": ["state_readout", "qubit_reset"],
-    # stark phase echo: state_readout + qubit_reset, but NO amplitude tag — the
+    # stark phase echo: state_readout + qubit_reset, but NO amplitude capability — the
     # swept window is a factor of the STARK operation's baked amplitude, not of a
     # target knob (pi_amp/readout_amp), so it owns min/max_stark_amp instead of
     # subclassing AmplitudeSweepParameters (same reasoning as qc_n_stark_amp).
@@ -96,10 +98,10 @@ EXPECTED_TAGS = {
     # trio works on raw per-shot IQ by construction).
     "qubit_pi_pulse_error": ["qubit_reset", "amplitude"],
     "pair_zz_coupler": ["qubit_reset"],
-    # the swap maps sweep FLUX but are not "flux"-tagged: that capability is
+    # the swap maps sweep FLUX but do not carry "flux": that capability is
     # the single-qubit z-bias sweep (FluxSweepParameters, contract axis
     # flux_bias_v), and these sweep a pair's pulse amplitudes instead. Their
-    # probes hardcode discrimination, so no state_readout tag either.
+    # probes hardcode discrimination, so no state_readout either.
     "pair_swap_chevron": ["qubit_reset"],
     "pair_swap_flux_map": ["qubit_reset"],
     "qc_n_stark_amp": ["qubit_reset"],
@@ -119,28 +121,30 @@ EXPECTED_TAGS = {
     "qubit_tomography": ["qubit_reset"],
     "qubit_drag_equator": ["qubit_reset"],
     "qubit_drag_alternating": ["qubit_reset"],
-    # explicitly tag-less: no qubit pulse at all, so nothing to reset and no
-    # state to discriminate. Zero tags is a legitimate state, not an error.
+    # explicitly capability-less: no qubit pulse at all, so nothing to reset and
+    # no state to discriminate. Zero capabilities is a legitimate state, not an
+    # error.
     "resonator_spectroscopy": [],
     "resonator_spectroscopy_power_amp": [],
     "resonator_spectroscopy_power_chain": [],
 }
 
 
-def test_tags_derived_from_mixins():
+def test_capabilities_derived_from_mixins():
     entries = _catalog_by_name()
-    for name, tags in EXPECTED_TAGS.items():
-        assert entries[name]["tags"] == tags, f"{name}: {entries[name]['tags']}"
+    for name, caps in EXPECTED_CAPABILITIES.items():
+        assert entries[name]["capabilities"] == caps, (
+            f"{name}: {entries[name]['capabilities']}")
     # every catalog entry carries the key (possibly empty)
-    assert all("tags" in entry for entry in entries.values())
+    assert all("capabilities" in entry for entry in entries.values())
 
 
 def test_every_experiment_is_pinned_here():
     """The map is checked key-by-key, so an experiment MISSING from it has its
-    tags unpinned entirely — which is how qubit_deterministic_benchmarking went
-    unchecked. An entry of ``[]`` is still an entry, so this does not demand tag
-    completeness (zero tags stays legitimate); it demands that the DECISION was
-    written down.
+    capabilities unpinned entirely — which is how qubit_deterministic_benchmarking
+    went unchecked. An entry of ``[]`` is still an entry, so this does not demand
+    capability completeness (zero capabilities stays legitimate); it demands that
+    the DECISION was written down.
 
     Enumerated from the EXPORTED classes, not the live registry: other test
     modules ``@register`` deliberately-broken fixtures (``broken_contract``,
@@ -153,15 +157,15 @@ def test_every_experiment_is_pinned_here():
 
     core = {obj.name for obj in (getattr(registry, n) for n in registry.__all__)
             if isinstance(obj, type) and issubclass(obj, Experiment)}
-    assert core - set(EXPECTED_TAGS) == set(), (
-        "add these to EXPECTED_TAGS (use [] if they carry no capability): "
-        f"{sorted(core - set(EXPECTED_TAGS))}"
+    assert core - set(EXPECTED_CAPABILITIES) == set(), (
+        "add these to EXPECTED_CAPABILITIES (use [] if they carry no capability): "
+        f"{sorted(core - set(EXPECTED_CAPABILITIES))}"
     )
 
 
-def test_tags_survive_session_catalog_overlay():
-    """Session.catalog() passes tags through — both the verbatim path (no
-    parameter_defaults) and the deepcopy overlay path."""
+def test_capabilities_survive_session_catalog_overlay():
+    """Session.catalog() passes capabilities through — both the verbatim path
+    (no parameter_defaults) and the deepcopy overlay path."""
     ensure_demo_experiments()
     roster, design, vendor = demo_device()
     plain = Session(SimulatedBackend(vendor), roster, design=design)
@@ -169,8 +173,9 @@ def test_tags_survive_session_catalog_overlay():
                        parameter_defaults={"qubit_relaxation": {"num_points": 21}})
     for sess in (plain, overlaid):
         entries = {entry["name"]: entry for entry in sess.catalog()}
-        assert entries["qubit_relaxation"]["tags"] == ["state_readout", "qubit_reset"]
-        assert entries["qubit_relaxation_flux_pulse"]["tags"] == [
+        assert entries["qubit_relaxation"]["capabilities"] == [
+            "state_readout", "qubit_reset"]
+        assert entries["qubit_relaxation_flux_pulse"]["capabilities"] == [
             "state_readout", "flux", "qubit_reset", "flux_pulse"]
 
 
@@ -181,18 +186,18 @@ def test_canonical_field_text_never_drifts():
     state_desc = StateReadoutParameters.model_fields["use_state_discrimination"].description
     for name, entry in entries.items():
         props = entry["parameters_schema"]["properties"]
-        if "state_readout" in entry["tags"]:
+        if "state_readout" in entry["capabilities"]:
             assert props["use_state_discrimination"]["description"] == state_desc, name
-        if "flux" in entry["tags"]:
+        if "flux" in entry["capabilities"]:
             # the window text is per-FRAME; num_flux_points carries no frame
             # information and reuses the one constant in both
-            pulse = "flux_pulse" in entry["tags"]
+            pulse = "flux_pulse" in entry["capabilities"]
             assert props["min_flux_v"]["description"] == (
                 MIN_FLUX_PULSE_DESC if pulse else MIN_FLUX_DESC), name
             assert props["max_flux_v"]["description"] == (
                 MAX_FLUX_PULSE_DESC if pulse else MAX_FLUX_DESC), name
             assert props["num_flux_points"]["description"].startswith(NUM_FLUX_DESC), name
-        if "amplitude" in entry["tags"]:
+        if "amplitude" in entry["capabilities"]:
             # every carrier re-declares the window (each has its own defaults), so
             # the TEXT is the only thing stopping four descriptions drifting apart
             assert props["min_amp_factor"]["description"] == MIN_AMP_FACTOR_DESC, name
@@ -200,7 +205,7 @@ def test_canonical_field_text_never_drifts():
             # deterministic_benchmarking allows a single point and says so
             assert props["num_amp_points"]["description"] in (
                 NUM_AMP_POINTS_DESC, NUM_AMP_POINTS_OPTIONAL_DESC), name
-        if "qubit_reset" in entry["tags"]:
+        if "qubit_reset" in entry["capabilities"]:
             assert props["reset_method"]["description"] == RESET_METHOD_DESC, name
             assert (props["thermalization_time_ns"]["description"]
                     == THERMALIZATION_TIME_DESC), name
@@ -209,7 +214,7 @@ def test_canonical_field_text_never_drifts():
 
 
 def test_flux_axis_is_the_contract_axis():
-    """Every flux-tagged experiment sweeps FLUX_AXIS as its first contract axis —
+    """Every flux-capable experiment sweeps FLUX_AXIS as its first contract axis —
     the probe-boundary name LCHQB/LCHQM emit and read.
 
     Note this is now true of BOTH frames: the frame is an origin, not a
@@ -219,9 +224,9 @@ def test_flux_axis_is_the_contract_axis():
     decorative — it is the only check that a relative carrier announced itself.
     """
     entries = _catalog_by_name()
-    flux_tagged = [n for n, e in entries.items() if "flux" in e["tags"]]
-    assert flux_tagged  # the tag exists
-    for name in flux_tagged:
+    flux_carriers = [n for n, e in entries.items() if "flux" in e["capabilities"]]
+    assert flux_carriers  # the capability exists
+    for name in flux_carriers:
         assert get(name).Contract.sweeps[0] == FLUX_AXIS, name
 
 
@@ -250,14 +255,14 @@ def test_flux_pulse_names_carry_the_suffix():
     relative one without it.
     """
     entries = _catalog_by_name()
-    flux_tagged = {n: e for n, e in entries.items() if "flux" in e["tags"]}
-    assert flux_tagged
-    for name, entry in flux_tagged.items():
-        assert name.endswith("_pulse") == ("flux_pulse" in entry["tags"]), name
+    flux_carriers = {n: e for n, e in entries.items() if "flux" in e["capabilities"]}
+    assert flux_carriers
+    for name, entry in flux_carriers.items():
+        assert name.endswith("_pulse") == ("flux_pulse" in entry["capabilities"]), name
     # and the refinement never floats free of the capability it refines
     for name, entry in entries.items():
-        if "flux_pulse" in entry["tags"]:
-            assert "flux" in entry["tags"], name
+        if "flux_pulse" in entry["capabilities"]:
+            assert "flux" in entry["capabilities"], name
 
 
 def test_reset_wait_precedence():
@@ -503,8 +508,8 @@ def test_every_amplitude_carrier_declares_its_reference_knob():
         assert issubclass(cls.Parameters, AmplitudeSweepParameters), name
 
 
-def test_the_amplitude_tag_is_derived_from_the_mixin():
-    """Every carrier of the window Parameters is tagged, and nothing else is."""
+def test_the_amplitude_capability_is_derived_from_the_mixin():
+    """Every carrier of the window Parameters carries it, and nothing else does."""
     entries = _catalog_by_name()
-    tagged = {n for n, e in entries.items() if "amplitude" in e["tags"]}
-    assert tagged == {name for name, _p, _k in AMPLITUDE_CARRIERS}
+    carriers = {n for n, e in entries.items() if "amplitude" in e["capabilities"]}
+    assert carriers == {name for name, _p, _k in AMPLITUDE_CARRIERS}

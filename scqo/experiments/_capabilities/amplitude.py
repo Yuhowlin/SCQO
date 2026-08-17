@@ -36,8 +36,8 @@ the punchout attaches inside ``estimate()`` onto its local prepared dataset, so
 they reach only the figure.
 
 An experiment HAS this capability exactly when its Parameters subclass
-:class:`AmplitudeSweepParameters`; the catalog derives the ``"amplitude"`` tag
-from that subclass relation (never from a declared string). The capability owns
+:class:`AmplitudeSweepParameters`; the catalog derives the ``"amplitude"``
+capability from that subclass relation (never from a declared string). The capability owns
 the window Parameters (canonical names + texts), the canonical sweep-axis name
 (:data:`AMP_AXIS` — the probe boundary both drivers emit and read), and the
 absolute-axis attach.

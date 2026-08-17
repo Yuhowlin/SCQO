@@ -96,9 +96,11 @@ resonator_spectroscopy_power_chain        Careful punchout (steps the output cha
 single_shot_readout              IQ blobs ... stores fidelity_g/fidelity_e (monitors) + proposes the discriminator knobs.
 ```
 
-(The `[state_readout]`/`[flux]` markers are capability tags, derived from each
+(The `[state_readout]`/`[flux]` markers are capabilities, derived from each
 experiment's parameters — the menu prints them so you can see at a glance which
-experiments take `use_state_discrimination` or sweep a flux window.)
+experiments take `use_state_discrimination` or sweep a flux window. They are
+not "tags": a tag is the searchable label YOU attach to a saved run, as in the
+next command.)
 
 Start with **resonator spectroscopy** — always the first measurement on a device: you
 have to find the readout resonance before any qubit experiment means anything. Tag it

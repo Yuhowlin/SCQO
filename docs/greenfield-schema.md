@@ -560,5 +560,6 @@ Beyond the amendments folded into §2–§7 above, the build settled these (each
   cross-drive study) — reserve `<target>_<suffix><n>`?
 - Whether doctor warns when a `design.toml` value is edited after measurements exist for that field
   (lightweight provenance for the one hand-edited file that has none).
-- Derived capability tags, the `maturity` field, and the contrib entry-point merge return to the
-  registry at the namespace cutover (tracked in `scqo/model/experiments/__init__.py`).
+- Derived capabilities (catalog key `capabilities`), the `maturity` field, and the contrib
+  entry-point merge return to the registry at the namespace cutover (tracked in
+  `scqo/model/experiments/__init__.py`).

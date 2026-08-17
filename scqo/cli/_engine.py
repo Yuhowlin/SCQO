@@ -117,8 +117,8 @@ def _schema_epilog(experiment: str, config_path: str | None) -> str:
     schema = entry["parameters_schema"]
     required = set(schema.get("required", []))
     lines = [entry["description"]]
-    if entry.get("tags"):
-        lines.append("tags: " + ", ".join(entry["tags"]))
+    if entry.get("capabilities"):
+        lines.append("capabilities: " + ", ".join(entry["capabilities"]))
     lines += ["", "parameters (set with --set KEY=VALUE):"]
     for key, spec in schema.get("properties", {}).items():
         if key in file_defaults:
@@ -223,10 +223,10 @@ def run_experiment_cli(
         print(f"# parameter defaults: {cfg.parameters_source or 'none (code defaults)'}")
         print(f"# user overlay: {cfg.user_source or 'none'}")
         for entry in sess.catalog():
-            tag = " [contrib]" if entry.get("maturity") == "contrib" else ""
-            if entry.get("tags"):
-                tag += " [" + ",".join(entry["tags"]) + "]"
-            print(f"{entry['name'] + tag:32s} {entry['description']}")
+            suffix = " [contrib]" if entry.get("maturity") == "contrib" else ""
+            if entry.get("capabilities"):
+                suffix += " [" + ",".join(entry["capabilities"]) + "]"
+            print(f"{entry['name'] + suffix:32s} {entry['description']}")
         return 0
 
     params: dict = {}

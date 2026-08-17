@@ -1,8 +1,8 @@
 """State-readout capability: the digital (FPGA-discriminated) acquisition modes.
 
 An experiment HAS this capability exactly when its Parameters subclass
-:class:`StateReadoutParameters`; the catalog derives the ``"state_readout"`` tag
-from that subclass relation (never from a declared string). The capability owns
+:class:`StateReadoutParameters`; the catalog derives the ``"state_readout"``
+capability from that subclass relation (never from a declared string). The capability owns
 the Parameters fields (one canonical text), the contract fragments
 (``POPULATION_ALT`` / ``SHOT_STATE_ALT``), the simulate-side draws and packers,
 the estimate-side rename (:func:`signal_rename`), and the joint-population

@@ -177,7 +177,8 @@ scqo/
                   #   CHANNEL ENTITY and resolves names through the roster, never by
                   #   parsing them; simulated is built in
   experiments/    # the registry lives in __init__.py: @register / get / catalog (the
-                  #   AI's menu; maturity core|contrib + DERIVED capability tags)
+                  #   AI's menu; maturity core|contrib + DERIVED capabilities —
+                  #   never "tags", that word is the datastore's run tags)
     _capabilities/  # one module per capability: the canonical Parameters mixin + contract
                     #   fragment + sim/estimate helpers (state_readout.py,
                     #   flux.py = the swept flux window in TWO FRAMES sharing one axis
@@ -215,8 +216,9 @@ scqo/
                     #   the real limit is factor x stored <= 1 and each driver refuses it
                     #   BY NAME (scqo-qm + scqo-qblox, each experiments/_amp_limits));
                     #   catalog
-                    #   `tags` are DERIVED from mixin subclassing — never declared strings,
-                    #   zero tags legitimate (new experiments may be unclassifiable)
+                    #   `capabilities` are DERIVED from mixin subclassing — never declared
+                    #   strings, zero capabilities legitimate (new experiments may be
+                    #   unclassifiable)
     _depletion.py               # the post-readout photon-depletion wait: THE precedence
                                 #   helper depletion_wait_ns + the kappa->wait formula.
                                 #   The readout twin of qubit_reset one level over -

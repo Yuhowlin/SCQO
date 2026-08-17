@@ -1,8 +1,8 @@
 """Qubit-reset capability: how a target returns to |g> between shots.
 
 An experiment HAS this capability exactly when its Parameters subclass
-:class:`QubitResetParameters`; the catalog derives the ``"qubit_reset"`` tag
-from that subclass relation (never from a declared string). Every experiment
+:class:`QubitResetParameters`; the catalog derives the ``"qubit_reset"``
+capability from that subclass relation (never from a declared string). Every experiment
 that pulses a qubit and reads it out needs one, because shot-to-shot
 independence is the assumption its averaging rests on.
 

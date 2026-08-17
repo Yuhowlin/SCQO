@@ -1,10 +1,12 @@
-"""Capability modules: shared Parameters mixins + helpers behind the derived catalog tags.
+"""Capability modules: shared Parameters mixins + helpers behind the catalog's capabilities.
 
 One capability = one module: the canonical Parameters mixin, the contract
 fragment, and the simulate/estimate helpers that every carrier uses instead of
-copy-pasting. The registry derives an experiment's ``tags`` from which mixins its
-Parameters subclass — a tag can therefore never lie or rot, and experiments with
-no tags are legitimate (a new experiment may not be classifiable yet).
+copy-pasting. The registry derives an experiment's ``capabilities`` from which
+mixins its Parameters subclass — a capability can therefore never lie or rot,
+and experiments with no capabilities are legitimate (a new experiment may not be
+classifiable yet). Not "tags": that word is the datastore's (user-attached run
+tags), and the two must never share a name.
 """
 
 from .amplitude import (

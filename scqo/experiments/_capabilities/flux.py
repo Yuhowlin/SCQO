@@ -1,8 +1,8 @@
 """Flux-sweep capability: a swept flux-bias window on a z line.
 
 An experiment HAS this capability exactly when its Parameters subclass
-:class:`FluxSweepParameters`; the catalog derives the ``"flux"`` tag from that
-subclass relation (never from a declared string). The capability owns the window
+:class:`FluxSweepParameters`; the catalog derives the ``"flux"`` capability from
+that subclass relation (never from a declared string). The capability owns the window
 Parameters (canonical names; NOT a rail bound — see :class:`FluxSweepParameters`,
 the limit is the backend's, per port), the canonical
 sweep-axis name (``FLUX_AXIS`` — the probe boundary: LCHQB/LCHQM probes emit and
@@ -112,8 +112,9 @@ class FluxPulseSweepParameters(FluxSweepParameters):
     """Mixin: the swept flux-PULSE window, RELATIVE to the channel's ``idle_flux``.
 
     Subclasses the absolute mixin rather than forking it, so the derived
-    ``"flux"`` tag and the ``FLUX_AXIS`` contract rule keep covering both frames;
-    the extra ``"flux_pulse"`` tag is what distinguishes them in the catalog.
+    ``"flux"`` capability and the ``FLUX_AXIS`` contract rule keep covering both
+    frames; the extra ``"flux_pulse"`` capability is what distinguishes them in
+    the catalog.
     Only the two window texts are re-declared — ``num_flux_points`` carries no
     frame information and reuses ``NUM_FLUX_DESC``.
     """
@@ -156,7 +157,7 @@ def foreign_flux_source(params) -> bool:
 
 def flux_frame(params: FluxSweepParameters) -> str:
     """Which origin this experiment's window is measured from — derived from the
-    Parameters mixin, exactly as the catalog tag is, never declared."""
+    Parameters mixin, exactly as the catalog capability is, never declared."""
     return (FLUX_FRAME_RELATIVE if isinstance(params, FluxPulseSweepParameters)
             else FLUX_FRAME_ABSOLUTE)
 
