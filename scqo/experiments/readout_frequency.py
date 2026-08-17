@@ -9,7 +9,7 @@ written via ``self.device.channel(target, "readout")``.
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 import numpy as np
 from pydantic import Field
@@ -17,6 +17,7 @@ from pydantic import Field
 from .._scqat import per_qubit_results
 from ..contract import DatasetContract
 from ._capabilities.qubit_reset import QubitResetParameters
+from ._capabilities.state_readout import ReadoutModeParameters, discrimination_method
 from ._sim import stable_seed
 from ..parameters import TargetSelection
 from ..result import Outcome, Result
@@ -24,35 +25,57 @@ from ..experiment import Experiment
 from . import register
 
 
-class ReadoutFrequencyParameters(TargetSelection, QubitResetParameters):
+class ReadoutFrequencyParameters(TargetSelection, QubitResetParameters,
+                                 ReadoutModeParameters):
     """Inputs for fidelity-vs-readout-frequency optimization."""
 
     frequency_span_hz: float = Field(5e6, gt=0, description="Total detuning span around the current readout_freq (chi-scale).")
-    num_freq_points: int = Field(21, gt=2, description="Frequency points (one Gaussian-mixture fit per point).")
-    num_shots: int = Field(1000, gt=99, description="Shots per prepared state per frequency.")
+    num_freq_points: int = Field(21, gt=2, description="Frequency points (one Gaussian-mixture fit per point in shot mode).")
+    num_shots: int = Field(
+        1000, gt=99,
+        description="Measurements per prepared state per frequency — kept per "
+        "shot in shot mode, averaged on the FPGA in average mode.")
+    # re-declared: the mixin defaults to "average", but this is a per-shot
+    # FIDELITY calibration by construction and its default must not flip.
+    readout_mode: Literal["average", "shot"] = Field(
+        "shot",
+        description="'shot' keeps every shot's I/Q and fits a Gaussian mixture "
+        "per frequency, so the optimum is the FIDELITY maximum. 'average' "
+        "returns one FPGA-averaged I/Q point per prepared state: no fit, no "
+        "fidelity, and the optimum is the largest blob SEPARATION — a faster "
+        "scan that peaks at the same detuning but says nothing about how well "
+        "the states can actually be told apart.")
 
 
 class ReadoutFrequencyResult(Result):
     """``fit[target]``: ``readout_freq_hz`` (new), ``frequency_shift_hz``,
-    ``best_fidelity``, ``old_readout_freq_hz``."""
+    ``best_fidelity`` (NaN in average mode), ``best_separation``,
+    ``old_readout_freq_hz``."""
 
 
 @register
 class ReadoutFrequency(Experiment):
-    """Backend-agnostic per-shot readout-frequency scan. Probes must not average."""
+    """Backend-agnostic readout-frequency scan, per shot or FPGA-averaged."""
 
     name: ClassVar[str] = "readout_frequency"
     description: ClassVar[str] = (
-        "Sweep the readout detuning recording every shot's I/Q for |g> and |e>; picks "
-        "the fidelity-optimal frequency and updates the readout channel's "
-        "readout_freq_hz."
+        "Sweep the readout detuning reading |g> and |e>; picks the best frequency and "
+        "updates the readout channel's readout_freq_hz. readout_mode='shot' records "
+        "every shot's I/Q and optimizes single-shot FIDELITY; readout_mode='average' "
+        "takes one FPGA-averaged I/Q point per prepared state and optimizes blob "
+        "SEPARATION instead — faster, and it peaks at the same detuning."
     )
     Parameters: ClassVar[type] = ReadoutFrequencyParameters
     Result: ClassVar[type] = ReadoutFrequencyResult
     Contract: ClassVar[DatasetContract] = DatasetContract(
-        sweeps=("detuning_hz", "prepared_state", "shot_idx"),
-        sweep_units=("Hz", "state", "shot"),
-        variables=("I", "Q"),
+        sweeps=("detuning_hz", "prepared_state"),
+        sweep_units=("Hz", "state"),
+        # readout_mode="shot": every shot's I/Q on a trailing shot axis...
+        variables=("I", "Q"), readout_dims=("shot_idx",),
+        # ...readout_mode="average": the same variables, FPGA-averaged, so the
+        # shot axis is gone entirely.
+        alt_variables=(("I", "Q"),),
+        alt_readout_dims=((),),
     )
     required_operations: ClassVar[tuple[str, ...]] = ("readout",)
 
@@ -63,12 +86,16 @@ class ReadoutFrequency(Experiment):
         return {
             "detuning_hz": np.linspace(-span / 2, span / 2, self.params.num_freq_points),
             "prepared_state": np.array([0, 1]),
-            "shot_idx": np.arange(self.params.num_shots),
         }
+
+    def readout_coords(self) -> dict:
+        if self.params.readout_mode == "shot":
+            return {"shot_idx": np.arange(self.params.num_shots)}
+        return {}
 
     def simulate(self, coords: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         detuning = coords["detuning_hz"]
-        n_shots = coords["shot_idx"].size
+        n_shots = int(self.params.num_shots)
         targets = self.params.targets
         rng = np.random.default_rng(stable_seed("readout_frequency", *targets))
         span = float(detuning[-1] - detuning[0])
@@ -85,7 +112,11 @@ class ReadoutFrequency(Experiment):
                     actual = np.where(rng.random(n_shots) < flip, 1 - state, state)
                     i_data[k, j, state] = actual * sep + rng.normal(0, 1.0, n_shots)
                     q_data[k, j, state] = rng.normal(0, 1.0, n_shots)
-        return {"I": i_data, "Q": q_data}
+        if self.params.readout_mode == "average":
+            # the FPGA averages the same shots away; nothing but the mean survives
+            return {"I": i_data.mean(axis=-1), "Q": q_data.mean(axis=-1)}
+        dims = ("target", "detuning_hz", "prepared_state", "shot_idx")
+        return {"I": (dims, i_data), "Q": (dims, q_data)}
 
     def estimate(self) -> ReadoutFrequencyResult:
         assert self.dataset is not None, "run() populates self.dataset before estimate()"
@@ -94,27 +125,35 @@ class ReadoutFrequency(Experiment):
         # scqat's sweep coord is named `frequency`; values stay DETUNING (Hz) — the
         # absolute frequency differs per qubit, so the shift is applied per qubit below.
         prepared = self.dataset.rename({"detuning_hz": "frequency"})
-        prepared = prepared.transpose("target", "frequency", "prepared_state", "shot_idx")
+        axes = ["target", "frequency", "prepared_state"]
+        if "shot_idx" in prepared.dims:  # shot mode only
+            axes.append("shot_idx")
+        prepared = prepared.transpose(*axes)
         old_freqs = {
             q: float(self.device.channel(q, "readout").readout_freq_hz)
             for q in self.params.targets
         }
 
         results = per_qubit_results(
-            prepared, ReadoutFreqFidelityEstimator(), artifact_dir=self.artifact_dir
+            prepared, ReadoutFreqFidelityEstimator(), artifact_dir=self.artifact_dir,
+            # DERIVED from the acquisition, never a second knob: averaged data
+            # has one point per prepared state, which no mixture can be fitted to
+            method=discrimination_method(self.params.readout_mode),
         )
 
         result = ReadoutFrequencyResult()
         for qubit in self.params.targets:
             r = results[qubit]
             best = r.get("best_sweep_value")  # best DETUNING (Hz)
-            fidelity = r.get("best_fidelity")
+            fidelity = r.get("best_fidelity")  # None in average mode: nothing was fitted
+            separation = r.get("best_separation")
             old_freq = old_freqs[qubit]
             ok = bool(r.get("success")) and best is not None and np.isfinite(best)
             result.fit[qubit] = {
                 "readout_freq_hz": old_freq + float(best) if ok else float("nan"),
                 "frequency_shift_hz": float(best) if best is not None else float("nan"),
                 "best_fidelity": float(fidelity) if fidelity is not None else float("nan"),
+                "best_separation": float(separation) if separation is not None else float("nan"),
                 "old_readout_freq_hz": old_freq,
             }
             result.outcomes[qubit] = Outcome.SUCCESSFUL if ok else Outcome.FAILED

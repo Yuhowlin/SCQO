@@ -287,8 +287,12 @@ scqo/
     resonator_spectroscopy_flux.py   # 2D resonator flux map -> idle_flux + readout_freq_hz
                                 #   at the sweet spot; flux_offset/flux_per_phi0 (flux-channel
                                 #   facts) + f_r0_hz/g_hz (resonator facts)
-    readout_power.py            # per-shot fidelity vs amp prefactor -> readout_amp
-    readout_frequency.py        # per-shot fidelity vs readout detuning -> readout_freq_hz
+    readout_power.py            # vs amp prefactor -> readout_amp. TWO readout modes:
+                                #   'shot' = per-shot IQ + mixture fit -> max FIDELITY;
+                                #   'average' = one FPGA-averaged point per prepared
+                                #   state, no fit -> max blob SEPARATION (fast, but
+                                #   blind to measurement-induced transitions)
+    readout_frequency.py        # the same two modes vs readout detuning -> readout_freq_hz
     resonator_spectroscopy_power_amp.py  # FAST punchout: set-top -> one-program FPGA amplitude
                                 #   sweep down -> revert; absolute-dBm window -> readout_power_dbm + readout_freq_hz
     resonator_spectroscopy_power_chain.py  # CAREFUL punchout: steps the output chain per point

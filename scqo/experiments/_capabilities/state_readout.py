@@ -93,6 +93,21 @@ class ReadoutModeParameters(Parameters):
     )
 
 
+def discrimination_method(readout_mode: str) -> str:
+    """The scqat ``readout_fidelity`` method that fits data acquired in this
+    readout mode — ``"gmm"`` for ``"shot"``, ``"average"`` for ``"average"``.
+
+    DERIVED, never a second knob: an FPGA-averaged acquisition returns ONE I/Q
+    point per prepared state, and no Gaussian mixture can be trained on that, so
+    letting an operator pair ``readout_mode="average"`` with a mixture fit would
+    only make an unrepresentable request representable.
+    """
+    if readout_mode not in ("average", "shot"):
+        raise ValueError(
+            f"unknown readout_mode {readout_mode!r}; expected 'average' or 'shot'")
+    return "average" if readout_mode == "average" else "gmm"
+
+
 def population_row(
     population: np.ndarray, rng: np.random.Generator, *, noise: float = 0.02
 ) -> np.ndarray:
