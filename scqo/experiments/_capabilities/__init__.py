@@ -23,6 +23,14 @@ from .amplitude import (
     amp_sweep,
     attach_absolute_amp,
 )
+from .detuning import (
+    DETUNING_AXIS,
+    END_DETUNING_DESC,
+    NUM_FREQ_POINTS_DESC,
+    START_DETUNING_DESC,
+    DriveDetuningSweepParameters,
+    detuning_sweep,
+)
 from .flux import (
     FLUX_AXIS,
     FLUX_FRAME_ABSOLUTE,
@@ -75,6 +83,7 @@ CAPABILITY_SUMMARIES = {
     "qubit_reset": "resets the qubit between shots (thermal wait or active)",
     "flux_pulse": "the flux window is a pulse relative to idle_flux",
     "amplitude": "sweeps amplitude as a factor of the standing amplitude",
+    "drive_detuning": "sweeps the drive detuning relative to the current drive frequency",
 }
 
 __all__ = [
@@ -83,6 +92,8 @@ __all__ = [
     "ACTIVE_RESET_ROUNDS_DESC",
     "AMP_AXIS",
     "CAPABILITY_SUMMARIES",
+    "DETUNING_AXIS",
+    "END_DETUNING_DESC",
     "FLUX_AXIS",
     "MAX_AMP_FACTOR_DESC",
     "MIN_AMP_FACTOR_DESC",
@@ -95,10 +106,13 @@ __all__ = [
     "MIN_FLUX_DESC",
     "MIN_FLUX_PULSE_DESC",
     "NUM_FLUX_DESC",
+    "NUM_FREQ_POINTS_DESC",
     "POPULATION_ALT",
     "RESET_METHOD_DESC",
     "SHOT_STATE_ALT",
+    "START_DETUNING_DESC",
     "THERMALIZATION_TIME_DESC",
+    "DriveDetuningSweepParameters",
     "FluxComponentParameters",
     "FluxPulseSweepParameters",
     "FluxSweepParameters",
@@ -110,6 +124,7 @@ __all__ = [
     "amp_anchor",
     "amp_sweep",
     "attach_absolute_amp",
+    "detuning_sweep",
     "discrimination_method",
     "flux_anchor_v",
     "flux_frame",

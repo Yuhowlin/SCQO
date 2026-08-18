@@ -15,10 +15,11 @@ BAND-LIMITED v1: the drive is centered on the arch-predicted parked detuning
 (``resolved_center_offset_hz``, derived from the catalogued arch facts, or a
 nominal fallback), NOT by shifting the LO. It therefore reaches only excursions
 whose detuning stays in the analog band; a gate-sized excursion needs an LO
-shift, which is deferred. The detuning window is an explicit ``[min, max]`` range
-relative to that center (ASYMMETRIC allowed — when the centering is imperfect the
-parked line sits systematically to one side, so a one-sided window spends every
-point on signal instead of half on empty detuning).
+shift, which is deferred. The detuning window is the drive_detuning capability's
+explicit ``[start_detuning_hz, end_detuning_hz]`` range relative to that center
+(ASYMMETRIC allowed — when the centering is imperfect the parked line sits
+systematically to one side, so a one-sided window spends every point on signal
+instead of half on empty detuning).
 
 SPECTROSCOPY DRIVE: the probe plays a long, weak ``saturation`` (square) tone of
 duration ``drive_len_ns`` whose amplitude is auto-scaled to hold the calibrated
@@ -55,6 +56,14 @@ from ..contract import DatasetContract
 from ..experiment import Experiment
 from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
+from ._capabilities.detuning import (
+    DETUNING_AXIS,
+    END_DETUNING_DESC,
+    NUM_FREQ_POINTS_DESC,
+    START_DETUNING_DESC,
+    DriveDetuningSweepParameters,
+    detuning_sweep,
+)
 from ._capabilities.qubit_reset import QubitResetParameters
 from ._capabilities.state_readout import (
     POPULATION_ALT,
@@ -66,8 +75,8 @@ from ._capabilities.state_readout import (
 from ._sim import iq_from_population, stable_seed
 from . import register
 
-#: axis names crossing the probe <-> estimator boundary.
-DETUNING_AXIS = "detuning_hz"
+#: the wait axis crossing the probe <-> estimator boundary (the detuning axis
+#: is the drive_detuning capability's DETUNING_AXIS, imported above).
 WAIT_AXIS = "wait_time_ns"
 
 
@@ -88,7 +97,8 @@ def _log_time_ns(min_ns: int, max_ns: int, num_points: int, *, grid_ns: int = 4)
 
 
 class QubitSpectroscopyCryoscopeParameters(
-    TargetSelection, AveragingParameters, StateReadoutParameters, QubitResetParameters
+    TargetSelection, AveragingParameters, DriveDetuningSweepParameters,
+    StateReadoutParameters, QubitResetParameters
 ):
     """Parameters for the long-time (spectroscopy) cryoscope."""
 
@@ -100,21 +110,22 @@ class QubitSpectroscopyCryoscopeParameters(
         "the resulting detuning. Band-limited v1: keep it small enough that the "
         "detuning stays in the analog band (no LO shift).",
     )
-    min_detuning_hz: float = Field(
+    # capability window re-declared: THIS experiment's origin is the
+    # ARCH-PREDICTED PARKED drive (drive_freq_hz + center_offset_hz), not the
+    # bare knob — the appended text is the frame refinement.
+    start_detuning_hz: float = Field(
         -100e6,
-        description="LOW edge of the drive-detuning window swept around the "
-        "arch-predicted parked frequency, i.e. relative to the parked drive — the "
-        "spectrogram's y-axis. The window may be ASYMMETRIC: when the centering is "
-        "only nominal (arch facts unset) the parked line is systematically to one "
-        "side, so put the whole window there (e.g. min=-70e6, max=0) instead of "
-        "wasting half the points on empty detuning.",
+        description=START_DETUNING_DESC + " HERE the origin is the arch-predicted "
+        "PARKED drive (drive_freq_hz + center_offset_hz) — when the centering is "
+        "only nominal (arch facts unset) the parked line sits systematically to "
+        "one side, so put the whole window there (e.g. start=-70e6, end=0).",
     )
-    max_detuning_hz: float = Field(
+    end_detuning_hz: float = Field(
         100e6,
-        description="HIGH edge of the drive-detuning window (must exceed "
-        "min_detuning_hz). Relative to the arch-predicted parked drive.",
+        description=END_DETUNING_DESC + " Relative to the arch-predicted parked "
+        "drive, like start_detuning_hz.",
     )
-    num_freq_points: int = Field(101, gt=1, description="Number of detuning points.")
+    num_freq_points: int = Field(101, gt=1, description=NUM_FREQ_POINTS_DESC)
     drive_len_ns: float = Field(
         400.0, ge=16, multiple_of=4,
         description="Duration of the spectroscopy drive pulse, ns (on the 4 ns "
@@ -147,7 +158,7 @@ class QubitSpectroscopyCryoscopeParameters(
         description="Nominal flux-frequency curvature (Hz per V^2) used to center "
         "the drive when the arch facts (f_q_max_hz, flux_per_phi0) are unset. Only "
         "a rough centering; measure the arch (qubit_spectroscopy_flux_pulse) for an "
-        "accurate one, or widen the [min_detuning_hz, max_detuning_hz] window.",
+        "accurate one, or widen the [start_detuning_hz, end_detuning_hz] window.",
     )
     num_averages: int = Field(
         100, gt=0, description="Number of shots to average per sweep point."
@@ -191,15 +202,11 @@ class QubitSpectroscopyCryoscopeParameters(
 
     @model_validator(mode="after")
     def _windows_order(self) -> "QubitSpectroscopyCryoscopeParameters":
+        # the detuning-window ordering lives on the drive_detuning mixin
         if self.max_wait_ns <= self.min_wait_ns:
             raise ValueError(
                 f"max_wait_ns ({self.max_wait_ns}) must exceed min_wait_ns "
                 f"({self.min_wait_ns})"
-            )
-        if self.max_detuning_hz <= self.min_detuning_hz:
-            raise ValueError(
-                f"max_detuning_hz ({self.max_detuning_hz}) must exceed "
-                f"min_detuning_hz ({self.min_detuning_hz})"
             )
         return self
 
@@ -280,15 +287,11 @@ class QubitSpectroscopyCryoscope(Experiment):
         return float(quad * self.params.flux_pulse_amp_v ** 2)
 
     def define_sweep(self) -> dict[str, np.ndarray]:
-        # ascending window (min -> max); peak_fit's gamma bound assumes ascending.
-        detuning = np.linspace(
-            self.params.min_detuning_hz, self.params.max_detuning_hz,
-            self.params.num_freq_points,
-        )
+        # ascending window (mixin-validated); peak_fit's gamma bound assumes ascending.
         wait = _log_time_ns(
             self.params.min_wait_ns, self.params.max_wait_ns, self.params.num_wait_points
         )
-        return {DETUNING_AXIS: detuning, WAIT_AXIS: wait}
+        return {**detuning_sweep(self.params), WAIT_AXIS: wait}
 
     def attach_acquisition_coords(self) -> None:
         """Snapshot the per-target parked detuning onto the dataset so the estimator

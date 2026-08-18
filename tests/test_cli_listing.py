@@ -34,7 +34,8 @@ def test_bare_listing_names_and_footer():
     assert "ccc_third" in body
     # counts computed from the entries, every capability + the none bucket
     assert lines[-2] == ("# capabilities: state_readout(0) flux(2) "
-                         "qubit_reset(1) flux_pulse(0) amplitude(0) none(1)")
+                         "qubit_reset(1) flux_pulse(0) amplitude(0) "
+                         "drive_detuning(0) none(1)")
     assert lines[-1] == ("# filter: scqo run --capability <name>    "
                          "detail: scqo run <name> --help")
     # the NAME columns respect the width (the two meta footer lines may wrap;
