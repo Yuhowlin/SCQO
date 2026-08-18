@@ -1,0 +1,12 @@
+name = "punchout-bare-dressed-branches"
+repos = { scqo = "833643d", scqat = "be7277b" }
+kind = "additive"
+coupling = "scqo needs scqat >= be7277b: both punchout carriers read the new branch keys (f_bare/f_dress0/lamb_shift/branch_success) out of the power estimator's results. An older scqat raises KeyError at estimate time — LOUD, not silent, but a hard floor."
+validated = "offline (scqat 610 green incl. 21 power-estimator tests; scqo 167 green over the unfiltered experiment sweep + capabilities + contract). Planted 8.000 MHz Lamb shift recovered as 7.986 (amp) / 8.014 (chain); the punchout -> flux pin loop is covered by test_punchout_feeds_the_flux_map_a_measured_bare_frequency. HARDWARE VALIDATION OWED on both backends."
+notes = """
+Both punchouts (resonator_spectroscopy_power_amp / _chain) now extract the punchout's TWO BRANCHES and propose them as resonator-mode facts: the low-power dip is the DRESSED resonator (f_dress0_hz, qubit in |0>) and the high-power one, where the qubit saturates, is the BARE resonator (f_bare_hz). Their gap is the Lamb shift g^2/Delta, recorded as lamb_shift_hz (derivable from the two facts, so deliberately NOT a catalog field), alongside old_idle_flux — the flux the dressed frequency was measured at.
+This closes the loop with resonator_spectroscopy_flux, which pins a stored f_bare_hz to make its fitted coupling g quantitative: until now that pin traced back to the flux map's own earlier free fit, and a punchout is the only DIRECT measurement of f_bare_hz. The operator loop runs both ways — power_amp -> flux -> power_amp — with the second punchout measuring f_dress0_hz at the sweet spot the flux map re-parked to.
+NO catalog change and NO upgrade action: f_bare_hz/f_dress0_hz already exist on the resonator mode, and f_bare_hz's doc already named a high-power punchout as its source.
+BEHAVIOR CHANGE: both punchouts now propose four values instead of two, so an operator who accepts blindly will also write the two resonator facts. A window that never reaches saturation reports f_dress0_hz only and withholds f_bare_hz (branch_success false) rather than guessing.
+Also in scqat: the power estimator's generate_figures moved onto render_figures thunks (fixing a pre-existing per-figure-isolation violation) and gained the missing figures-render-on-a-failed-fit test.
+"""
