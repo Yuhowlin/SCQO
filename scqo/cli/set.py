@@ -14,7 +14,7 @@ FIRST, every change lands in the history stamped with your OS login (shown as
 Values are plain numbers (5.912e9, 2.5e-05) in the field's OWN unit — the
 confirmation table names it (`scqo state --fields` for the full catalog). Fields
 may be calibration knobs (q1.readout_freq_hz, ...) or physical parameters
-(q1.t1_s, q1_res.f_r_hz, ...) — the owning store is routed by the field's role. In scripts (no
+(q1.t1_s, q1_res.f_dress0_hz, ...) — the owning store is routed by the field's role. In scripts (no
 terminal) the prompt cannot be asked: pass --yes to apply.
 """
 

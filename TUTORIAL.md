@@ -117,14 +117,14 @@ You get the structured result as JSON — extracted physics, not raw traces:
   "fit": { "q1": { "readout_freq_hz": 5907471431.6,     // dip position (suggested update)
                     "dip_detuning_hz": -1795822.3,       // how far the dip sat from the old value
                     "old_readout_freq_hz": 5909267253.9,
-                    "f_r_hz": 5907471431.6,              // the dip IS the dressed resonator freq
+                    "f_dress0_hz": 5907471431.6,              // the dip IS the dressed resonator freq
                     "kappa_tot_hz": 1327410.5 } },       // fitted FWHM = total resonator linewidth
   "error": null,
   "run_id": "20260704-225450-SQ_demo-resonator_spectroscopy-01",
   "data_path": "D:\\qpu_data\\SQ_demo\\2026-07-04\\...-01",
   "suggestions": [ { "entity": "q1_ro", "field": "readout_freq_hz", "role": "knob",
                      "before": 5909267253.9, "after": 5907471431.6, "status": "pending" },
-                   { "entity": "q1_res", "field": "f_r_hz", "role": "fact", "..." : "..." },
+                   { "entity": "q1_res", "field": "f_dress0_hz", "role": "fact", "..." : "..." },
                    { "entity": "q1_res", "field": "kappa_tot_hz", "role": "fact", "..." : "..." } ]
 }
 ```
@@ -140,7 +140,7 @@ update*: after the JSON, `scqo run` shows the suggestion table and asks you —
 suggested updates (3 pending):
     # entity     field              role              current         suggested   status
     1 q1_ro      readout_freq_hz    knob          5.90927e+09 ->    5.90747e+09 Hz   pending
-    2 q1_res     f_r_hz             fact         (unmeasured) ->    5.90747e+09 Hz   pending
+    2 q1_res     f_dress0_hz             fact         (unmeasured) ->    5.90747e+09 Hz   pending
     3 q1_res     kappa_tot_hz       fact         (unmeasured) ->    1.32741e+06 Hz   pending
 apply which updates? [a]ll / [n]one (default) / rows, component, field or component.field:
 ```
@@ -192,11 +192,11 @@ the device by hand (that loses the link to the data); attach it to the run inste
 
 ```bash
 scqo suggest <run_id> q1.readout_freq_hz=5.912e9 --comment "read off the dip, fit missed it"
-scqo suggest <run_id> q1_res.f_r_hz=5.912e9 q1_res.kappa_tot_hz=1.1e6   # several at once; either store
+scqo suggest <run_id> q1_res.f_dress0_hz=5.912e9 q1_res.kappa_tot_hz=1.1e6   # several at once; either store
 ```
 
 (Assignments are `entity.field`; the qubit name works as sugar —
-`q1.readout_freq_hz` routes to `q1_ro`, `q1.f_r_hz` to `q1_res` — see section 9.)
+`q1.readout_freq_hz` routes to `q1_ro`, `q1.f_dress0_hz` to `q1_res` — see section 9.)
 
 Your value lands on that run as a pending suggestion marked `[operator: <you>]`
 (the viewer shows the same badge), and from there everything above applies
@@ -249,7 +249,7 @@ Calibration knobs (`readout_freq_hz`, `pi_amp`, ... — they live on the CHANNEL
 entities `q1_ro`/`q1_xy`/`q1_z`; `role: knob`) are pushed to the instrument on
 accept and recorded in `scqo_state.json`. Measured physics — facts (`role: fact`):
 T1, T2*, T2echo on the qubit mode, the flux maps' `flux_offset`/`flux_per_phi0`
-on the z channel, `ej_sum_hz`/`f_r0_hz`/`g_hz` — lands in `physical.json` beside
+on the z channel, `ej_sum_hz`/`f_bare_hz`/`g_hz` — lands in `physical.json` beside
 it (same accept flow). A third role, `monitor` (`fidelity_g`/`fidelity_e`, the
 blob positions), records measured performance OF the current knobs: stored in
 `scqo_state.json` but never pushed anywhere. The context's full change history
@@ -898,16 +898,16 @@ You never declare `q1_res`, `q1_ro`, `q1_xy` or `q1_z` — the riders MINT them
 `flux` → `<t>_z`), and single-mode operations (`rx`, `readout`, `flux_bias`)
 are DERIVED from the wiring, never declared. Every value then lives on the
 entity that owns it: knobs on CHANNELS (`q1_ro.readout_freq_hz`, `q1_xy.pi_amp`,
-`q1_z.idle_flux`), facts on MODES (`q1.t1_s`, `q1.f_01_hz`, `q1_res.f_r_hz`),
+`q1_z.idle_flux`), facts on MODES (`q1.t1_s`, `q1.f_01_hz`, `q1_res.f_dress0_hz`),
 monitors on channels too (`q1_ro.fidelity_g`).
 
 Addressing is `entity.field` — `scqo set q1_z.idle_flux=0.12`,
 `scqo set q1_res.kappa_tot_hz=...` — with QUBIT sugar: `q1.pi_amp` routes to
-`q1_xy`, `q1.readout_freq_hz` to `q1_ro`, `q1.f_r_hz` to `q1_res` (first hit
+`q1_xy`, `q1.readout_freq_hz` to `q1_ro`, `q1.f_dress0_hz` to `q1_res` (first hit
 in the qubit's closure). A wrong home answers with the right one
 ("`q1_ro.pi_amp`: no entity in `q1_ro`'s closure carries this field — did you
 mean `q1_xy.pi_amp`?"). One fit may legally write a knob AND a fact: resonator
-spectroscopy proposes `q1_ro.readout_freq_hz` (the setting) and `q1_res.f_r_hz`
+spectroscopy proposes `q1_ro.readout_freq_hz` (the setting) and `q1_res.f_dress0_hz`
 (the measurement) from the same dip.
 
 **Design targets** live in the sibling `design.toml` (the DATASHEET), never in
@@ -919,7 +919,7 @@ schema = 1
 f_q_max_hz = 4.73e9                # flux-tunables design the sweet-spot freq;
 anharmonicity_hz = -2.0e8          # a FIXED transmon designs f_01_hz instead
 [q1_res]                           # design on a MINTED entity is fine —
-f_r_hz = 5.93e9                    # validation runs after roster expansion
+f_dress0_hz = 5.93e9                    # validation runs after roster expansion
 ```
 
 Bring-up sweeps anchor on these when nothing is measured yet — such runs are
@@ -991,7 +991,7 @@ store. When you don't know where a value belongs — or why `scqo set` refuses a
 name — apply this checklist **in order; first match wins**. Bench form:
 `scqo state --rule`. Classify each *use* of a quantity, not each name: one fit
 may legally write a knob AND a fact (`resonator_spectroscopy` writes the
-`q1_ro.readout_freq_hz` setting and the `q1_res.f_r_hz` measurement from the
+`q1_ro.readout_freq_hz` setting and the `q1_res.f_dress0_hz` measurement from the
 same dip — two roles, two homes, on purpose).
 
 1. **Gone when the run ends?** Sweep windows, shot counts, analysis assumptions,
@@ -1314,7 +1314,7 @@ the GUI you read about in section 4 (viewer + datasette) is shipped. Still ahead
 
 - **Device-level inference** (Phase 3): combining runs into EJ/EC, anharmonicity,
   flux response via scqat + SCQ.jl — the physical-parameter ledger (`physical.json`:
-  T1/T2, the flux transfer function, `ej_sum_hz`, `f_r0_hz`, `g_hz`) is its input.
+  T1/T2, the flux transfer function, `ej_sum_hz`, `f_bare_hz`, `g_hz`) is its input.
 - **Running measurements — and accepting updates — from the viewer**, plus a
   per-instrument run lock — until then, measuring and deciding stay on the CLI and
   one-measurement-per-instrument stays a social rule.

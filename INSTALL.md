@@ -549,7 +549,7 @@ folder and prints every remaining step paste-ready (it never edits shared files)
    what lets SCQO address them correctly. Entity names must match the vendor config
    exactly. See TUTORIAL §9 for the full walkthrough and a worked example.
 3. **Recommended**: the sample's DATASHEET, `<data_root>\<name>\design.toml` —
-   as-designed targets per entity (`f_01_hz`, `f_r_hz`, ...). Bring-up sweeps centre
+   as-designed targets per entity (`f_01_hz`, `f_dress0_hz`, ...). Bring-up sweeps centre
    on these before anything is measured; without them the first run of a fresh chip
    refuses for want of an anchor. Declarations only — never back-fill it from
    measurements.

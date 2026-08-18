@@ -63,7 +63,7 @@ def test_qubit_closure_addressing(session):
     r = session.roster
     assert r.resolve_field("q0", "pi_amp")[0] == "q0_xy"
     assert r.resolve_field("q0", "readout_freq_hz")[0] == "q0_ro"
-    assert r.resolve_field("q0", "f_r_hz")[0] == "q0_res"
+    assert r.resolve_field("q0", "f_dress0_hz")[0] == "q0_res"
     assert r.resolve_field("q0", "n_th")[0] == "q0"          # self wins
     assert r.resolve_field("q0_xy", "pi_amp")[0] == "q0_xy"  # explicit
     assert r.resolve_field("q0_q1", "iswap_coupler_flux")[0] == "q0_q1"
@@ -74,12 +74,12 @@ def test_qubit_closure_addressing(session):
 # ---------------------------------------------------------------- set_values
 
 def test_set_values_routes_both_stores(session):
-    out = session.set_values({"q0.pi_amp": 0.22, "q0.f_r_hz": 5.951e9})
+    out = session.set_values({"q0.pi_amp": 0.22, "q0.f_dress0_hz": 5.951e9})
     assert not out["errors"]
     assert {(a["entity"], a["field"]) for a in out["applied"]} == {
-        ("q0_xy", "pi_amp"), ("q0_res", "f_r_hz")}
+        ("q0_xy", "pi_amp"), ("q0_res", "f_dress0_hz")}
     assert session.device_state()["q0_xy"]["pi_amp"] == 0.22
-    assert session.physical_state()["q0_res"]["f_r_hz"] == 5.951e9
+    assert session.physical_state()["q0_res"]["f_dress0_hz"] == 5.951e9
     rows = session.history()
     assert rows[-1]["entity"] == "q0_xy" and rows[-1]["experiment"] is None
 
@@ -130,7 +130,7 @@ def _pending(session):
     capture = SuggestionCapture(session.device, session.physical,
                                 session.roster)
     capture.component("q0_xy").pi_amp = 0.24
-    capture.component("q0_res").f_r_hz = 5.952e9
+    capture.component("q0_res").f_dress0_hz = 5.952e9
     return [s.model_dump(mode="json") for s in capture.suggestions]
 
 
@@ -139,9 +139,9 @@ def test_accept_applies_both_stores_and_persists_decisions(session):
     out = session.accept("r1")
     assert not out["errors"] and out["pending_left"] == 0
     assert {(a["entity"], a["field"]) for a in out["applied"]} == {
-        ("q0_xy", "pi_amp"), ("q0_res", "f_r_hz")}
+        ("q0_xy", "pi_amp"), ("q0_res", "f_dress0_hz")}
     assert session.device_state()["q0_xy"]["pi_amp"] == 0.24
-    assert session.physical_state()["q0_res"]["f_r_hz"] == 5.952e9
+    assert session.physical_state()["q0_res"]["f_dress0_hz"] == 5.952e9
     assert store.record["suggestions"][0]["status"] == "accepted"
     assert store.record["updated_device"] is True
     # the applying run is credited on the change record
@@ -162,7 +162,7 @@ def test_accept_staleness_guard_skips_moved_values(session):
     session.set_values({"q0.pi_amp": 0.19})             # moved since capture
     out = session.accept("r1")
     assert [s["field"] for s in out["stale"]] == ["pi_amp"]
-    assert [a["field"] for a in out["applied"]] == ["f_r_hz"]
+    assert [a["field"] for a in out["applied"]] == ["f_dress0_hz"]
     assert session.device_state()["q0_xy"]["pi_amp"] == 0.19
 
 
@@ -205,15 +205,15 @@ def test_operator_suggest_appends_with_sugar_keys(session):
 # --------------------------------------------------------------------- views
 
 def test_qubit_state_assembles_the_closure(session):
-    session.set_values({"q0.f_r_hz": 5.951e9})
+    session.set_values({"q0.f_dress0_hz": 5.951e9})
     view = session.qubit_state("q0")
     assert view["q0_xy"]["pi_amp"] == 0.1
-    assert view["q0_res"]["f_r_hz"] == 5.951e9
+    assert view["q0_res"]["f_dress0_hz"] == 5.951e9
     assert "q0_ro" in view and "q1_xy" not in view
 
 
 def test_history_store_routing(session):
-    session.set_values({"q0.pi_amp": 0.3, "q0.f_r_hz": 5.95e9})
+    session.set_values({"q0.pi_amp": 0.3, "q0.f_dress0_hz": 5.95e9})
     assert [r["entity"] for r in session.history()] == ["q0_xy"]
     assert [r["entity"] for r in session.history("physical")] == ["q0_res"]
     with pytest.raises(ValueError, match="state"):

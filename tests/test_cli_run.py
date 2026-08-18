@@ -7,7 +7,7 @@ in LCHQBDriver/tests/test_cli_parameters.py.
 Greenfield: the temp lab now writes a schema-3 components.toml (modes + lines; the
 readout rider mints q0_res/q0_ro, the drive rider q0_xy) plus the design.toml the
 simulated vendor seeds its knobs from, and the neutral field names moved with the
-model (readout_freq -> readout_freq_hz on <q>_ro, f_r_hz/kappa_tot_hz on <q>_res,
+model (readout_freq -> readout_freq_hz on <q>_ro, f_dress0_hz/kappa_tot_hz on <q>_res,
 t1_s on the qubit mode).
 """
 
@@ -47,7 +47,7 @@ def _run_cli(tmp_path: Path, *args: str, parameters_toml: str | None = None) -> 
         blocks = ["schema = 1"]
         for i, q in enumerate(("q0", "q1")):
             blocks.append(f"[{q}]\nf_01_hz = {_F01[i]:.6g}")
-            blocks.append(f"[{q}_res]\nf_r_hz = {_FR[i]:.6g}")
+            blocks.append(f"[{q}_res]\nf_dress0_hz = {_FR[i]:.6g}")
         design.write_text("\n".join(blocks) + "\n", encoding="utf-8")
     lines = ["[lab]", 'device = "simdev"', f"data_root = '{data_root.as_posix()}'"]
     # Always pin parameters_file (empty when the test supplies none): without it the
@@ -135,7 +135,7 @@ def test_default_run_suggests_then_accept_by_run_id(tmp_path):
     result = _result(proc)  # stdout parses despite the extra stderr output
     # the knob lands on the readout CHANNEL, the two facts on the resonator MODE
     assert [s["field"] for s in result["suggestions"]] == [
-        "readout_freq_hz", "f_r_hz", "kappa_tot_hz", "readout_depletion_s"]
+        "readout_freq_hz", "f_dress0_hz", "kappa_tot_hz", "readout_depletion_s"]
     assert [s["entity"] for s in result["suggestions"]] == [
         "q0_ro", "q0_res", "q0_res", "q0_ro"]
     assert {s["status"] for s in result["suggestions"]} == {"pending"}
@@ -158,7 +158,7 @@ def test_default_run_suggests_then_accept_by_run_id(tmp_path):
     # order the record's suggestions list keeps — so readout_depletion_s lands
     # next to the other readout-channel knob rather than last.
     assert [a["field"] for a in summary["applied"]] == [
-        "readout_freq_hz", "readout_depletion_s", "f_r_hz", "kappa_tot_hz"]
+        "readout_freq_hz", "readout_depletion_s", "f_dress0_hz", "kappa_tot_hz"]
     assert summary["pending_left"] == 0
 
     # the change history carries the ORIGINATING run id
@@ -214,12 +214,12 @@ def test_suggest_attaches_operator_value_then_accept(tmp_path):
 
     # q0.readout_freq_hz routes through the qubit closure to the q0_ro channel
     suggest = _run_cli(tmp_path, "suggest", run_id,
-                       "q0.readout_freq_hz=5.912e9", "q0_res.f_r_hz=5.912e9",
+                       "q0.readout_freq_hz=5.912e9", "q0_res.f_dress0_hz=5.912e9",
                        "--comment", "read off the dip")
     assert suggest.returncode == 0, suggest.stderr
     summary = json.loads(suggest.stdout)  # stdout stays parseable JSON
     assert summary["pending_total"] == 2
-    assert [a["field"] for a in summary["added"]] == ["readout_freq_hz", "f_r_hz"]
+    assert [a["field"] for a in summary["added"]] == ["readout_freq_hz", "f_dress0_hz"]
     assert [a["entity"] for a in summary["added"]] == ["q0_ro", "q0_res"]
     # non-TTY: table + operator marker + decide-later hint on stderr, nothing applied
     assert "[operator:" in suggest.stderr and "read off the dip" in suggest.stderr
@@ -232,7 +232,7 @@ def test_suggest_attaches_operator_value_then_accept(tmp_path):
     accept = _run_cli(tmp_path, "accept", run_id)
     assert accept.returncode == 0, accept.stderr
     assert [a["field"] for a in json.loads(accept.stdout)["applied"]] == [
-        "readout_freq_hz", "f_r_hz"]
+        "readout_freq_hz", "f_dress0_hz"]
     history = _run_cli(tmp_path, "state", "--history")
     assert run_id in history.stdout  # credited to the run whose figure justified it
 
@@ -279,7 +279,7 @@ def test_reapply_rolls_back_from_the_cli(tmp_path):
     # order the record's suggestions list keeps — so readout_depletion_s lands
     # next to the other readout-channel knob rather than last.
     assert [a["field"] for a in summary["applied"]] == [
-        "readout_freq_hz", "readout_depletion_s", "f_r_hz", "kappa_tot_hz"]
+        "readout_freq_hz", "readout_depletion_s", "f_dress0_hz", "kappa_tot_hz"]
     assert summary["applied"][0]["after"] == value_a
 
     history = _run_cli(tmp_path, "state", "--history")

@@ -72,7 +72,7 @@ def _components(tmp_path: Path) -> None:
         '[q0]\n'
         'f_01_hz = 4.8e9\n'
         '[q0_res]\n'
-        'f_r_hz = 7.1e9\n',
+        'f_dress0_hz = 7.1e9\n',
         encoding="utf-8",
     )
 

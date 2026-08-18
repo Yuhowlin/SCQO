@@ -32,6 +32,13 @@ from .result import Result
 from .catalog import QUBIT_LIKE
 from .design import Design, seed_source
 
+#: Which tier answered an :meth:`Experiment.fact_sourced` read. Only
+#: ``FACT_MEASURED`` is a measurement of THIS chip; the other two are nominal, so
+#: a caller may pin the first as a fit constant and must not pin the others.
+FACT_MEASURED = "measured"   # stored in physical.json
+FACT_DESIGN = "design"       # declared in design.toml (also tags the run "seeded:")
+FACT_DEFAULT = "default"     # nothing known — the caller's code default
+
 
 class Experiment(ABC):
     """Base class for every experiment (greenfield surface)."""
@@ -126,7 +133,15 @@ class Experiment(ABC):
 
     def fact(self, name: str, field: str, default: float | None = None) -> float | None:
         """Read a physical FACT with the precedence stored value (physical.json)
-        -> design.toml -> ``default``.
+        -> design.toml -> ``default``. See :meth:`fact_sourced` for where the
+        value came from, which callers need whenever a MEASURED value may be
+        trusted further than a nominal one."""
+        return self.fact_sourced(name, field, default)[0]
+
+    def fact_sourced(self, name: str, field: str,
+                     default: float | None = None) -> tuple[float | None, str]:
+        """:meth:`fact`, plus WHICH tier answered: ``FACT_MEASURED`` /
+        ``FACT_DESIGN`` / ``FACT_DEFAULT``.
 
         The fact-side twin of :meth:`anchor` (which serves channel KNOBS and
         raises on facts): a MODE fact — a resonator's ``g_hz``, a transmon's
@@ -136,17 +151,29 @@ class Experiment(ABC):
         (``fact("q1", "g_hz")`` resolves to the attached resonator ``q1_res``;
         ``fact("q1", "ec_hz")`` to the qubit mode). Unlike ``anchor`` it never
         raises on a missing value — it degrades to ``default`` — because its
-        callers have a physical code default to fall back on."""
+        callers have a physical code default to fall back on.
+
+        The TIER matters, not just the number: a measured value may be pinned as
+        a fit constant, while a datasheet value of the same field may only be
+        seeded (see ``resonator_spectroscopy_flux``'s bare-frequency handling).
+
+        A DESIGN-sourced value tags the run ``"seeded:<entity>.<field>"``, exactly
+        as ``anchor`` does: the datasheet is a nominal number, not a measurement,
+        and a fit that leaned on one must stay findable
+        (``find_runs(tag="seeded:q1_res.f_bare_hz")``)."""
         roster = self.device.roster
         entity, _spec = roster.resolve_field(name, field)
         if self.physical is not None:
             stored = self.physical.get(entity, field)
             if stored is not None:
-                return float(stored)
+                return float(stored), FACT_MEASURED
         seed = self.design.get(entity, field)
         if seed is not None:
-            return float(seed)
-        return default
+            tag = f"seeded:{entity}.{field}"
+            if tag not in self.seed_tags:
+                self.seed_tags.append(tag)
+            return float(seed), FACT_DESIGN
+        return default, FACT_DEFAULT
 
     # ------------------------------------------------------------------ backend
     @abstractmethod

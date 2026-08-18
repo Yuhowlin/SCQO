@@ -1,7 +1,7 @@
 """Attach YOUR manually-read value to a saved run — when the fit failed but the figure didn't.
 
     scqo suggest RUN_ID q1.readout_freq_hz=5.912e9
-    scqo suggest RUN_ID q1_res.f_r_hz=5.912e9 q1_res.kappa_tot_hz=1.1e6 --comment "read off the dip"
+    scqo suggest RUN_ID q1_res.f_dress0_hz=5.912e9 q1_res.kappa_tot_hz=1.1e6 --comment "read off the dip"
 
 An estimator sometimes fails on data whose figure shows the answer plainly (a
 clearly visible dip the fit chased past). Read the value off the run's saved
@@ -15,7 +15,7 @@ scqo accept RUN_ID.
 
 Values are plain numbers (5.912e9, 2.5e-05). Fields may be calibration knobs
 (q1.readout_freq_hz, q1.pi_amp, ...) or physical parameters (q1.t1_s,
-q1_res.f_r_hz, ...) — the owning store is routed by the field's role. Needs a persisted run: a run that failed
+q1_res.f_dress0_hz, ...) — the owning store is routed by the field's role. Needs a persisted run: a run that failed
 before it was saved has no run_id to attach to. A value with NO run behind it
 (experience, not a figure) is `scqo set` instead — it writes immediately,
 recorded as (manual).

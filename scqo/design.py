@@ -15,7 +15,7 @@ empty datasheet, not an error — design is optional per entity and per field.
 
 The bring-up seed lives here too: :func:`seed_value` resolves a channel
 knob's ``design_source`` hop (``drive_freq_hz <- target.f_01_hz``,
-``readout_freq_hz <- via.f_r_hz``). The anchor order stays standing state,
+``readout_freq_hz <- via.f_dress0_hz``). The anchor order stays standing state,
 else design (this module), else code default — callers try in that order.
 """
 

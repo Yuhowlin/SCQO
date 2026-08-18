@@ -63,7 +63,7 @@ def _lab(tmp_path: Path) -> Path:
     design = ["schema = 1"]
     for i, q in enumerate(("q0", "q1")):
         design.append(f"[{q}]\nf_01_hz = {_F01[i]:.6g}")
-        design.append(f"[{q}_res]\nf_r_hz = {_FR[i]:.6g}")
+        design.append(f"[{q}_res]\nf_dress0_hz = {_FR[i]:.6g}")
     (data_root / "simdev" / "design.toml").write_text(
         "\n".join(design) + "\n", encoding="utf-8")
     params = tmp_path / "parameters.toml"

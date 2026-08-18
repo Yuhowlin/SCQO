@@ -72,7 +72,7 @@ def demo_design(roster: Roster,
         field = ("f_q_max_hz" if roster.entities[q].kind == "flux_transmon"
                  else "f_01_hz")
         blocks.append(f"[{q}]\n{field} = {_F01 + i * _F01_STEP:.6g}")
-        blocks.append(f"[{q}_res]\nf_r_hz = {_FR + i * _FR_STEP:.6g}")
+        blocks.append(f"[{q}_res]\nf_dress0_hz = {_FR + i * _FR_STEP:.6g}")
     return parse_design("\n".join(blocks), roster)
 
 

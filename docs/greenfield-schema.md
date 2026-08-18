@@ -204,7 +204,7 @@ combinations are enforced at catalog registration; `portable`'s consumer is cros
 carry-forward per the placement rule. `paired_with` declares the equal-length partner of a paired
 array (on multi-target channels the compiled `__<target>` instances re-point it per target).
 `design_source` on a channel knob names the (ref-role hop, fact field) that seeds bring-up
-(`drive_freq_hz ← target.f_01_hz`, `readout_freq_hz ← via.f_r_hz`); the anchor order stays
+(`drive_freq_hz ← target.f_01_hz`, `readout_freq_hz ← via.f_dress0_hz`); the anchor order stays
 standing state, else design value, else code default.
 
 ### Naming rules (lint-enforced at catalog registration)
@@ -233,9 +233,15 @@ standing state, else design value, else code default.
 |---|---|
 | `transmon` | `f_01_hz` ✎, `anharmonicity_hz` ✎, `t1_s`, `t2_star_s`, `t2_echo_s`, `n_th` |
 | `flux_transmon` | transmon set **minus** f_01 designability (`f_01_hz` is bias-dependent → not design-legal) **plus** `ej_sum_hz` ✎, `ej_diff_hz` ✎, `f_q_max_hz` ✎ |
+
+The transmon base also carries `ec_hz` ✎, `junction_resistance_ohm` and `gap_delta_hz` ✎ —
+the fab's normal-state junction resistance and the effective gap that turns it into
+`E_JSigma` (Ambegaokar–Baratoff), so `f_q_max` can be predicted before the qubit answers.
+`junction_resistance_ohm` is deliberately NOT design-legal: it is the as-FABRICATED value,
+and a designed one would merely restate the designed `f_q_max_hz`.
 | `fluxonium` | `e_c_hz` ✎, `e_l_hz` ✎, `e_j_hz` ✎, `f_01_hz`, `anharmonicity_hz`, `t1_s`, `t2_star_s`, `t2_echo_s`, `n_th` (`n_jj` is design.toml-only) |
 | `cavity` | `f_r_hz` ✎, `kappa_tot_hz` ✎, `n_th` |
-| `resonator` | `f_r_hz` ✎, `f_r0_hz`, `kappa_tot_hz` ✎, `g_hz` ✎, `chi_hz`, `n_th`; ref `qubit` |
+| `resonator` | `f_bare_hz` ✎, `f_dress0_hz` ✎, `f_dress1_hz`, `kappa_tot_hz` ✎, `g_hz` ✎, `chi_hz`, `n_th`; ref `qubit` |
 
 **Composites**:
 
@@ -441,14 +447,14 @@ anharmonicity_hz = -2.1e8
 f_q_max_hz = 7.5e9
 
 [q1_res]                       # design on DERIVED entities is fine —
-f_r_hz = 5.93e9                # validation runs after roster expansion
+f_dress0_hz = 5.93e9                # validation runs after roster expansion
 g_hz   = 8.0e7
 
 [q2_res]
-f_r_hz = 6.02e9
+f_dress0_hz = 6.02e9
 
 [q3_res]
-f_r_hz = 6.10e9
+f_dress0_hz = 6.10e9
 
 [q1_q2]
 j_hz = 1.0e7
@@ -460,7 +466,7 @@ j_hz = 1.0e7
 // physical.json — measured
 { "schema": 3, "values": {
     "q1":     { "f_01_hz": 5.136e9, "ej_sum_hz": 1.78e10, "f_q_max_hz": 5.139e9 },
-    "q1_res": { "f_r_hz": 5.9359e9, "kappa_tot_hz": 3.24e6 },
+    "q1_res": { "f_dress0_hz": 5.9359e9, "kappa_tot_hz": 3.24e6 },
     "q1_z":   { "flux_offset": 0.0134, "flux_per_phi0": 0.969 },
     "q1_q2":  { "zz_hz": -1.2e4 } } }
 
@@ -480,7 +486,7 @@ j_hz = 1.0e7
 | store | keys | fields |
 |---|---|---|
 | physical.json | q1, q2, q3, q1_q2_c | transmon facts (+ ej/f_q_max on flux_transmons) |
-| | q1_res, q2_res, q3_res | f_r_hz, f_r0_hz, kappa_tot_hz, g_hz, chi_hz |
+| | q1_res, q2_res, q3_res | f_bare_hz, f_dress0_hz, f_dress1_hz, kappa_tot_hz, g_hz, chi_hz |
 | | q1_z, q2_z, q1_q2_c_z | flux_offset, flux_per_phi0 |
 | | q1_q2 | zz_hz, j_hz |
 | scqo_state.json | q1_xy, q2_xy, q3_xy | drive knobs |

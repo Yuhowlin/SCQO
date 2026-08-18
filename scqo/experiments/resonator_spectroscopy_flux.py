@@ -6,7 +6,7 @@ spellings: the flux-transfer facts land on the target's FLUX CHANNEL
 under their new names (``v_offset_v`` -> ``flux_offset``,
 ``v_per_phi0_v`` -> ``flux_per_phi0``), the sweet-spot operating point is
 two channel knobs (``idle_flux`` on the flux channel, ``readout_freq_hz``
-on the readout channel), and the dispersive physics (``f_r0_hz``,
+on the readout channel), and the dispersive physics (``f_bare_hz``,
 ``g_hz``) goes on the attached RESONATOR mode.
 
 FRAME (no ``_pulse`` in the name, plain ``FluxSweepParameters``): the probe
@@ -18,6 +18,7 @@ plane the ``_pulse`` experiments re-reference themselves onto. See
 
 from __future__ import annotations
 
+import warnings
 from typing import ClassVar, Literal
 
 import numpy as np
@@ -25,6 +26,8 @@ from pydantic import Field
 
 from .._scqat import per_qubit_results
 from ..contract import DatasetContract
+from ..experiment import FACT_MEASURED
+from ._transmon_estimate import DEFAULT_GAP_DELTA_HZ, f_q_max_hz_from_resistance
 from ._capabilities.flux import (
     NUM_FLUX_DESC,
     FluxSweepParameters,
@@ -49,20 +52,6 @@ class ResonatorSpectroscopyFluxParameters(
     num_freq_points: int = Field(101, gt=1, description="Number of frequency points.")
     # capability default narrowed: the dispersive fit needs >= 5 good slices
     num_flux_points: int = Field(21, gt=4, description=NUM_FLUX_DESC + " (the dispersive fit needs >= 5 good slices).")
-    f_q_max_hz: float | None = Field(
-        None,
-        description=(
-            "Qubit maximum frequency (Hz) to hold fixed in the dispersive fit. "
-            "None (the normal case) AUTO-SOURCES it per target from the drive "
-            "channel's standing drive_freq_hz — the arch-top proxy, exact while the "
-            "qubit is parked at its sweet spot, and itself design-seeded at bring-up. "
-            "Only when that is unavailable too (true bring-up, or a foreign flux "
-            "source) does the estimator fall back to its placeholder heuristic, which "
-            "assumes a fixed 1.5 GHz sweet-spot detuning and therefore yields a g that "
-            "is NOT physics. Set this explicitly to override both. Ignored by the "
-            "'sine' method."
-        ),
-    )
     analysis_method: Literal["dispersive", "sine"] = Field(
         "dispersive",
         description=(
@@ -70,7 +59,7 @@ class ResonatorSpectroscopyFluxParameters(
             "f_r = f_r0 + g^2/(f_r0 - f_q(flux)) — yields bare f_r0 and (conditional) "
             "coupling g on top of the sweet-spot flux + period. 'sine' = a bare "
             "cosine of the flux — model-light and robust when only ~one arch is "
-            "visible or the trace is noisy, but yields no f_r0/g (so f_r0_hz/g_hz are "
+            "visible or the trace is noisy, but yields no f_r0/g (so f_bare_hz/g_hz are "
             "never proposed)."
         ),
     )
@@ -97,15 +86,31 @@ class ResonatorSpectroscopyFluxParameters(
 
 #: where the dispersive fit's f_q_max came from, recorded per target in ``fit``.
 #: Only a MEASURED origin makes the fitted f_r0/g physics — see :func:`_f_q_max_hz`.
-F_Q_MAX_PARAM = "param"        # the caller supplied f_q_max_hz outright
 F_Q_MAX_DRIVE = "drive_freq"   # the target's standing drive_freq_hz (arch-top proxy)
+F_Q_MAX_RESISTANCE = "junction_resistance"  # predicted from the fab's R_n
+F_Q_MAX_DESIGN = "design"      # the datasheet's f_q_max_hz
 F_Q_MAX_ASSUMED = "assumed"    # nothing known — the estimator's placeholder heuristic
 
-#: code-default terminals of the fact -> design -> default precedence for the two
+#: where the fit's BARE resonator frequency came from, recorded per target in
+#: ``fit``. Only a MEASURED one is PINNED — see :func:`_f_bare_hz`.
+F_BARE_MEASURED = "measured"   # stored fact -> pinned as a fit constant
+F_BARE_DESIGN = "design"       # datasheet -> seed only, f_r0 stays free
+F_BARE_FREE = "free"           # nothing known -> seeded from the trace, free
+
+#: code-default terminals of the fact -> design -> default precedence for the
 #: fixed/seed inputs of the dispersive arch (the estimator carries the same
 #: numbers as its own backstop; kept equal on purpose).
 _DEFAULT_EC_HZ = 0.2e9         # typical transmon charging energy E_C
 _DEFAULT_G_INIT_HZ = 50e6      # physical seed for the fitted coupling g
+
+_F_BARE_WARNING = (
+    "{target}: the dispersive fit's bare resonator frequency came from design.toml "
+    "({value:.6g} Hz), not a measurement, so it was used only as a SEED and f_r0 was "
+    "fitted free. The trace constrains only the pull g^2/(f_r0 - f_q), so f_r0 and g "
+    "trade off: the reported g is CONDITIONAL and is not proposed as a fact. Measure "
+    "the bare resonator (high-power punchout, where the qubit saturates) and store it "
+    "as {entity}.f_bare_hz to pin it."
+)
 
 
 def _f_q_max_hz(experiment, target: str) -> tuple[float | None, str]:
@@ -120,45 +125,94 @@ def _f_q_max_hz(experiment, target: str) -> tuple[float | None, str]:
     top:bottom pull ratio; that is what makes the fitted curve dive under the data at
     the LOW sweet spot. Sourcing a measured value fixes both at once.
 
-    Precedence: the explicit ``f_q_max_hz`` parameter, else the target's standing
-    ``drive_freq_hz``, else ``None`` (the estimator applies its own placeholder).
-    ``drive_freq_hz`` is the arch top exactly while the qubit is parked at its sweet
-    spot, and its catalog ``design_source`` already hops to the mode's designed
-    ``f_q_max_hz``, so :meth:`~scqo.experiment.Experiment.anchor` seeds it from
-    design.toml at bring-up — the same proxy, and the same reason,
-    ``qubit_spectroscopy_cryoscope`` uses for its arch curvature. A FOREIGN flux
-    source is excluded: the arch being swept is then not the target's own, so the
-    target's drive frequency says nothing about it.
+    Precedence, best first:
+
+    1. the target's standing ``drive_freq_hz`` — the arch top exactly while the qubit
+       is parked at its sweet spot; the same proxy, and the same reason,
+       ``qubit_spectroscopy_cryoscope`` uses for its arch curvature;
+    2. the fab's ``junction_resistance_ohm`` through Ambegaokar-Baratoff
+       (:mod:`._transmon_estimate`) — as-FABRICATED, so it beats the datasheet
+       whenever the qubit has not answered yet;
+    3. the datasheet's ``f_q_max_hz``;
+    4. ``None`` — the estimator applies its own placeholder, and f_r0/g are withheld.
+
+    A FOREIGN flux source is excluded from 1: the arch being swept is then not the
+    target's own, so the target's drive frequency says nothing about it. (2 and 3
+    still apply — they describe the target's own junction either way.)
 
     The auto-source is also declined for a qubit sitting ABOVE its resonator: the
     model pulls the resonator UP (``g^2 / (f_r0 - f_q)`` with ``f_r0 > f_q``, a bound
     the estimator enforces), so such a device is outside the dispersive method
     altogether and 'assumed' — which withholds f_r0/g rather than reporting a
-    clamped fit as physics — is the honest answer. An EXPLICIT f_q_max_hz is never
-    second-guessed.
+    clamped fit as physics — is the honest answer.
     """
-    if experiment.params.f_q_max_hz is not None:
-        return float(experiment.params.f_q_max_hz), F_Q_MAX_PARAM
-    if foreign_flux_source(experiment.params):
-        return None, F_Q_MAX_ASSUMED
-    try:
-        value = float(experiment.anchor(target, "drive_freq_hz"))
-    except (ValueError, KeyError, AttributeError):
-        return None, F_Q_MAX_ASSUMED
-    if not np.isfinite(value) or value <= 0.0:
+    value, source = None, F_Q_MAX_ASSUMED
+    if not foreign_flux_source(experiment.params):
+        try:
+            candidate = float(experiment.anchor(target, "drive_freq_hz"))
+        except (ValueError, KeyError, AttributeError):
+            candidate = float("nan")
+        if np.isfinite(candidate) and candidate > 0.0:
+            value, source = candidate, F_Q_MAX_DRIVE
+    if value is None:
+        value, source = _f_q_max_from_fabrication(experiment, target)
+    if value is None:
         return None, F_Q_MAX_ASSUMED
     try:  # best-effort sanity gate; a missing readout frequency does not block
         resonator = float(experiment.anchor(target, "readout_freq_hz"))
     except (ValueError, KeyError, AttributeError):
-        return value, F_Q_MAX_DRIVE
+        return value, source
     if np.isfinite(resonator) and value >= resonator:
         return None, F_Q_MAX_ASSUMED
-    return value, F_Q_MAX_DRIVE
+    return value, source
+
+
+def _f_q_max_from_fabrication(experiment, target: str) -> tuple[float | None, str]:
+    """f_q_max from the fab's junction resistance, else the datasheet.
+
+    The resistance route outranks the datasheet because it is as-FABRICATED: it
+    already contains the scatter that moved the qubit off its design frequency.
+    """
+    ec = experiment.fact(target, "ec_hz", _DEFAULT_EC_HZ)
+    r_n = experiment.fact(target, "junction_resistance_ohm", None)
+    if r_n is not None:
+        gap = experiment.fact(target, "gap_delta_hz", DEFAULT_GAP_DELTA_HZ)
+        try:
+            return f_q_max_hz_from_resistance(r_n, ec, gap), F_Q_MAX_RESISTANCE
+        except ValueError:
+            pass  # a nonsensical stored resistance must not kill the run
+    designed = experiment.fact(target, "f_q_max_hz", None)
+    if designed is not None and np.isfinite(designed) and designed > 0.0:
+        return float(designed), F_Q_MAX_DESIGN
+    return None, F_Q_MAX_ASSUMED
+
+
+def _f_bare_hz(experiment, target: str) -> tuple[float | None, bool, str]:
+    """The BARE resonator frequency for the fit: ``(value, pin?, source)``.
+
+    A MEASURED value is PINNED, which breaks the second degeneracy of this model
+    (``f_r0`` against ``g``) and is what makes ``g`` quantitative. A DESIGN value is
+    NOT pinned, only seeded: the whole flux-dependent signal is the few-MHz pull, so
+    a datasheet frequency carrying the usual 10-50 MHz of resonator fab scatter would
+    inject more error into ``g`` than the pin removes — measured on real data, a
+    5 MHz error moves ``g`` by ~30% and a 20 MHz error makes the pull negative and
+    the model undefined. With neither, the estimator keeps its historical behaviour
+    (seed from the trace, fit free).
+
+    Never refuses: ``sweet_spot_flux`` / ``flux_per_phi0`` are robust to this
+    degeneracy and are the bring-up deliverable.
+    """
+    value, tier = experiment.fact_sourced(target, "f_bare_hz", None)
+    if value is None or not np.isfinite(value) or value <= 0.0:
+        return None, False, F_BARE_FREE
+    if tier == FACT_MEASURED:
+        return float(value), True, F_BARE_MEASURED
+    return float(value), False, F_BARE_DESIGN
 
 
 def _arch_anchored(experiment, target: str, fit: dict) -> bool:
     """True when this target's dispersive fit was pinned to a MEASURED arch top —
-    the gate on proposing ``f_r0_hz``/``g_hz``.
+    the gate on proposing ``f_bare_hz``/``g_hz``.
 
     Normally reads the ``f_q_max_source`` tag ``estimate()`` recorded. A CAMPAIGN
     finalize replays ``update()`` over the aggregated fit, which keeps only numeric
@@ -182,12 +236,12 @@ class ResonatorSpectroscopyFluxResult(Result):
     (resonator centre freq there), ``sweet_spot_low_flux_v``/``sweet_spot_low_res_hz``
     (the LOWER sweet spot — record-only, derivable as flux_offset ± flux_per_phi0/2),
     ``flux_per_phi0`` (flux period), plus
-    ``f_r0_hz``/``g_hz``/``f_q_max_hz`` and the ``f_q_max_source`` provenance tag
+    ``f_bare_hz``/``g_hz``/``f_q_max_hz`` and the ``f_q_max_source`` provenance tag
     (``param``/``drive_freq``/``assumed``) for the dispersive method only —
-    ``assumed`` means f_r0_hz/g_hz are conditional on a placeholder detuning and are
+    ``assumed`` means f_bare_hz/g_hz are conditional on a placeholder detuning and are
     NOT proposed. ``update()`` proposes the
     physical facts on the qubit's flux channel (flux_offset/flux_per_phi0) and
-    resonator mode (f_r0_hz/g_hz), and two operating-point channel knobs:
+    resonator mode (f_bare_hz/g_hz), and two operating-point channel knobs:
     ``idle_flux`` on the flux channel (= flux_offset; park at the sweet spot) and
     ``readout_freq_hz`` on the readout channel (= sweet_spot_res_hz; read out at
     the resonator dip there)."""
@@ -210,12 +264,14 @@ class ResonatorSpectroscopyFlux(Experiment):
         "resonator dip there). This is the BRING-UP seed for idle_flux, found "
         "without needing a prior operating point; once the qubit answers, "
         "qubit_spectroscopy_flux_pulse is the authority for that knob. "
-        "Plus bare f_r0_hz and coupling g_hz on the "
-        "attached resonator mode "
-        "when the dispersive method ran against a MEASURED arch top — f_q_max_hz "
-        "supplied, or auto-sourced from the target's standing drive_freq_hz. With "
-        "neither the fit only ASSUMES f_q_max, and assumptions are not recorded as "
-        "physics."
+        "Plus bare f_bare_hz and coupling g_hz on the attached resonator mode "
+        "when the dispersive method ran against a MEASURED arch top, auto-sourced "
+        "per target from the standing drive_freq_hz, else the fab's "
+        "junction_resistance_ohm (Ambegaokar-Baratoff), else the datasheet. With "
+        "none of those the fit only ASSUMES f_q_max, and assumptions are not "
+        "recorded as physics. The bare resonator is PINNED when f_bare_hz is a "
+        "stored measurement (which is what makes g quantitative) and only seeded "
+        "when it is merely designed."
     )
     Parameters: ClassVar[type] = ResonatorSpectroscopyFluxParameters
     Result: ClassVar[type] = ResonatorSpectroscopyFluxResult
@@ -288,6 +344,7 @@ class ResonatorSpectroscopyFlux(Experiment):
         # (Experiment.fact): a stored ec_hz/g_hz wins, else design.toml, else the
         # code default. g_hz is re-seeded from what THIS experiment last wrote.
         sources: dict[str, str] = {}
+        bare_sources: dict[str, str] = {}
         per_target: dict[str, dict] = {}
         for qubit in targets:
             q = str(qubit)
@@ -299,6 +356,20 @@ class ResonatorSpectroscopyFlux(Experiment):
             }
             if value is not None:
                 ptk["f_q_max"] = value
+            # The bare resonator: PINNED when measured (breaks the f_r0/g
+            # degeneracy), merely seeded when only designed — and then said out
+            # loud, because the resulting g is conditional.
+            bare, pin, bare_source = _f_bare_hz(self, q)
+            bare_sources[q] = bare_source
+            if bare is not None:
+                ptk["f_r0"] = bare
+                ptk["fit_f_r0"] = not pin
+                if not pin:
+                    warnings.warn(
+                        _F_BARE_WARNING.format(
+                            target=q, value=bare,
+                            entity=self.device.resonator_of(q)),
+                        stacklevel=2)
             per_target[q] = ptk
         results = per_qubit_results(
             prepared, ResonatorSpectroscopyFluxEstimator(), artifact_dir=self.artifact_dir,
@@ -327,14 +398,15 @@ class ResonatorSpectroscopyFlux(Experiment):
             # Dispersive-only physics — the sine method produces no f_r0/g/f_q_max.
             # ec_hz is the sourced FIXED input (record-only provenance, never
             # proposed — an assumed/derived input is not measured physics).
-            for src, dst in (("f_r0", "f_r0_hz"), ("g", "g_hz"),
+            for src, dst in (("f_r0", "f_bare_hz"), ("g", "g_hz"),
                              ("f_q_max", "f_q_max_hz"), ("ec", "ec_hz")):
                 if src in disp:
                     fit[dst] = float(disp[src])
             if "f_q_max_hz" in fit:
-                # provenance of the fit's FIXED input: only a measured origin makes
-                # the fitted f_r0_hz/g_hz physics (see update()).
+                # provenance of the fit's FIXED inputs: only a measured origin makes
+                # the fitted f_bare_hz/g_hz physics (see update()).
                 fit["f_q_max_source"] = sources.get(qubit, F_Q_MAX_ASSUMED)
+                fit["f_bare_source"] = bare_sources.get(qubit, F_BARE_FREE)
             result.fit[qubit] = fit
             result.outcomes[qubit] = Outcome.SUCCESSFUL if bool(disp["success"]) else Outcome.FAILED
         return result
@@ -349,10 +421,11 @@ class ResonatorSpectroscopyFlux(Experiment):
         ``flux_offset`` (park at the upper sweet spot) and the readout channel's
         ``readout_freq_hz`` = ``sweet_spot_res_hz`` (read out at the resonator dip
         there — a later readout_frequency run refines it for fidelity).
-        ``f_r0_hz`` / ``g_hz`` (both on the attached resonator mode) are proposed
+        ``f_bare_hz`` / ``g_hz`` (both on the attached resonator mode) are proposed
         only when the DISPERSIVE method ran AND its ``f_q_max`` came from a MEASURED
-        origin — the explicit ``f_q_max_hz`` parameter or the target's standing
-        ``drive_freq_hz`` (``fit["f_q_max_source"]``, see :func:`_f_q_max_hz`). The
+        origin — the target's standing ``drive_freq_hz``, the fab's junction
+        resistance, or the datasheet (``fit["f_q_max_source"]``, see
+        :func:`_f_q_max_hz`). The
         sine method yields no such physics, and when nothing was known the estimator
         holds f_q_max at a placeholder guess that the trace cannot correct, so g is
         conditional on that assumption — an assumed value must never enter the
@@ -389,8 +462,12 @@ class ResonatorSpectroscopyFlux(Experiment):
                     fit["sweet_spot_res_hz"])
             if dispersive and _arch_anchored(self, qubit, fit):
                 res_view = self.device.component(self.device.resonator_of(qubit))
-                if "f_r0_hz" in fit:
-                    res_view.f_r0_hz = fit["f_r0_hz"]
+                # f_bare_hz is proposed only when the fit MEASURED it (f_r0 free).
+                # A pinned f_r0 was an INPUT — echoing it back would launder a
+                # stored value into a fresh measurement of itself.
+                if ("f_bare_hz" in fit
+                        and fit.get("f_bare_source", F_BARE_FREE) != F_BARE_MEASURED):
+                    res_view.f_bare_hz = fit["f_bare_hz"]
                 if "g_hz" in fit:
                     res_view.g_hz = fit["g_hz"]
 

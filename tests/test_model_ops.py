@@ -139,11 +139,11 @@ def test_roster_checks_flag_an_unbiasable_coupler():
 
 def test_design_checks_report_coverage_and_gross_mismatch(session):
     checks = design_checks(session.roster, session.design,
-                           {"q0_res": {"f_r_hz": 5.95e9}})
+                           {"q0_res": {"f_dress0_hz": 5.95e9}})
     assert any("1/" in c.message and "measured" in c.message
                for c in checks)
     off = design_checks(session.roster, session.design,
-                        {"q0_res": {"f_r_hz": 1.0e9}})
+                        {"q0_res": {"f_dress0_hz": 1.0e9}})
     assert any(c.status == WARN and ">50% off" in c.message for c in off)
 
 
@@ -215,12 +215,12 @@ def test_field_rows_carry_routing_and_seed_story(roster):
     rows = {(r["entity"], r["field"]): r for r in field_rows(roster)}
     ro = rows[("q1_ro", "readout_freq_hz")]
     assert ro["store"] == "scqo_state.json" and ro["pushed"] is True
-    assert ro["seed"] == "q1_res.f_r_hz"
+    assert ro["seed"] == "q1_res.f_dress0_hz"
     # the drive seed lists BOTH candidate facts (kind decides which applies)
     assert rows[("q1_xy", "drive_freq_hz")]["seed"] == (
         "q1.f_01_hz | q1.f_q_max_hz")
     assert rows[("q1_xy", "pi_amp")]["seed"] is None
-    fact = rows[("q1_res", "f_r_hz")]
+    fact = rows[("q1_res", "f_dress0_hz")]
     assert fact["store"] == "physical.json" and fact["pushed"] is False
     flux = rows[("q1_z", "idle_flux")]
     assert flux["unit"] == "source-native" and flux["portable"] is False
@@ -229,14 +229,14 @@ def test_field_rows_carry_routing_and_seed_story(roster):
 
 
 def test_state_rows_merge_both_stores_with_sources(session):
-    session.set_values({"q0.pi_amp": 0.22, "q0.f_r_hz": 5.951e9})
+    session.set_values({"q0.pi_amp": 0.22, "q0.f_dress0_hz": 5.951e9})
     sources = live_sources(session.device_state(), session.history())
     rows = {(r["entity"], r["field"]): r
             for r in state_rows(session.roster, session.device_state(),
                                 session.physical_state(), sources=sources)}
     assert rows[("q0_xy", "pi_amp")]["store"] == "scqo_state.json"
     assert rows[("q0_xy", "pi_amp")]["source"]["status"] == "manual"
-    assert rows[("q0_res", "f_r_hz")]["store"] == "physical.json"
+    assert rows[("q0_res", "f_dress0_hz")]["store"] == "physical.json"
 
 
 def test_state_rows_surface_orphaned_store_entities(session):
@@ -245,7 +245,7 @@ def test_state_rows_surface_orphaned_store_entities(session):
 
 
 def test_qubit_rows_tag_the_closure_role(session):
-    session.set_values({"q0.pi_amp": 0.22, "q0.f_r_hz": 5.95e9})
+    session.set_values({"q0.pi_amp": 0.22, "q0.f_dress0_hz": 5.95e9})
     rows = qubit_rows(session.roster, "q0", session.device_state(),
                       session.physical_state())
     by_member = {r["member"] for r in rows}
@@ -254,11 +254,11 @@ def test_qubit_rows_tag_the_closure_role(session):
 
 
 def test_design_rows_are_the_comparison_column(session):
-    session.set_values({"q0.f_r_hz": 5.96e9})
+    session.set_values({"q0.f_dress0_hz": 5.96e9})
     rows = {(r["entity"], r["field"]): r
             for r in design_rows(session.roster, session.design,
                                  session.physical_state())}
-    row = rows[("q0_res", "f_r_hz")]
+    row = rows[("q0_res", "f_dress0_hz")]
     assert row["designed"] == 5.95e9 and row["measured"] == 5.96e9
     assert row["delta"] == pytest.approx(1e7)
-    assert rows[("q1_res", "f_r_hz")]["measured"] is None
+    assert rows[("q1_res", "f_dress0_hz")]["measured"] is None

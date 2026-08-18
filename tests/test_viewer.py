@@ -243,7 +243,7 @@ def test_port2_trend_crosses_cooldowns_with_context(lab):
     """Port 2: one fact across every context — cdU then cdV, a dashed cooldown
     separator, context-colored points, a legend, and setup-page links."""
     page = lab["client"].get("/trends", params={
-        "device": "devV", "entity": "q0_res", "field": "f_r_hz"}).text
+        "device": "devV", "entity": "q0_res", "field": "f_dress0_hz"}).text
     assert lab["old"]["run_id"] in page and lab["res2"]["run_id"] in page
     assert 'class="ctxsep"' in page                # a cooldown boundary
     assert "ctx-0" in page and "ctx-1" in page     # two colored contexts
@@ -266,16 +266,16 @@ def test_bare_trends_redirects_to_sample_overview(lab):
 
 def test_trends_never_mix_samples(lab):
     c = lab["client"]
-    # q0_res.f_r_hz exists on BOTH samples ("q1 exists on every chip" problem):
+    # q0_res.f_dress0_hz exists on BOTH samples ("q1 exists on every chip" problem):
     # there is NO silent default sample — device-less /trends bounces to the
     # sample overview, and a chart is always explicitly device-scoped.
     bare = c.get("/trends").text  # redirect followed → the /device overview
     assert "<svg" not in bare and "<circle" not in bare
     assert "/trends?device=devV" in bare and "/trends?device=chipZ" in bare
-    dev = c.get("/trends", params={"entity": "q0_res", "field": "f_r_hz", "device": "devV"}).text
+    dev = c.get("/trends", params={"entity": "q0_res", "field": "f_dress0_hz", "device": "devV"}).text
     assert lab["res"]["run_id"] in dev
     assert lab["chipz"]["run_id"] not in dev
-    z = c.get("/trends", params={"entity": "q0_res", "field": "f_r_hz", "device": "chipZ"}).text
+    z = c.get("/trends", params={"entity": "q0_res", "field": "f_dress0_hz", "device": "chipZ"}).text
     assert lab["chipz"]["run_id"] in z and lab["res"]["run_id"] not in z
 
 
@@ -433,8 +433,8 @@ def test_device_page_matrix_facts_by_context(lab):
     matrix = page.split("Physical properties", 1)[1].split("</table>", 1)[0]
     assert "cdU/sim_old" in matrix and "cdV/sim_main" in matrix
     assert "(device-level)" in matrix              # the ghost run's physics
-    assert ("/trends?device=devV&entity=q0_res&field=f_r_hz") in matrix
-    row = next(r for r in matrix.split("<tr") if "q0_res.f_r_hz" in r)
+    assert ("/trends?device=devV&entity=q0_res&field=f_dress0_hz") in matrix
+    row = next(r for r in matrix.split("<tr") if "q0_res.f_dress0_hz" in r)
     assert row.count("<td") == 5                   # parameter + 4 context cells
     assert ">-</td>" in row                        # sim_alt never measured q0
 

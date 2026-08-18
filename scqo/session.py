@@ -18,7 +18,7 @@ manual notebook and an LLM tool-use loop::
 
 Addressing is the QUBIT-CLOSURE sugar (:meth:`Roster.resolve_field`):
 ``q0.pi_amp`` routes to ``q0_xy``, ``q0.readout_freq_hz`` to ``q0_ro``,
-``q0.f_r_hz`` to ``q0_res`` — explicit entity names always work. Suggestions
+``q0.f_dress0_hz`` to ``q0_res`` — explicit entity names always work. Suggestions
 carry the field's ROLE; applying routes facts to the physical store and
 knobs/monitors through the recording device (vendor-push-first).
 """
@@ -1491,7 +1491,7 @@ class Session:
             if not name or not field:
                 raise ValueError(
                     f"assignment key {key!r} must be 'entity.field' "
-                    f"(e.g. q1.pi_amp, q1_res.f_r_hz)")
+                    f"(e.g. q1.pi_amp, q1_res.f_dress0_hz)")
             try:
                 entity, spec = self.roster.resolve_field(name, field)
             except Exception as err:

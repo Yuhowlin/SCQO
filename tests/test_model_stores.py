@@ -30,11 +30,11 @@ def stores(tmp_path, roster):
 
 def test_role_routes_to_exactly_one_store(stores):
     physical, state = stores
-    physical.record("q1_res", "f_r_hz", 5.9359e9)      # fact -> physical
+    physical.record("q1_res", "f_dress0_hz", 5.9359e9)      # fact -> physical
     state.record("q1_xy", "drive_freq_hz", 5.136e9)    # knob -> state
     state.record("q1_ro", "fidelity_g", 0.96)          # monitor -> state
     with pytest.raises(StoreError, match="belongs in physical.json"):
-        state.record("q1_res", "f_r_hz", 5.9e9)
+        state.record("q1_res", "f_dress0_hz", 5.9e9)
     with pytest.raises(StoreError, match="belongs in scqo_state.json"):
         physical.record("q1_xy", "drive_freq_hz", 5.1e9)
 

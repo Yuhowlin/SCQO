@@ -34,14 +34,14 @@ anharmonicity_hz = -2.1e8
 f_q_max_hz = 7.5e9
 
 [q1_res]
-f_r_hz = 5.93e9
+f_dress0_hz = 5.93e9
 g_hz   = 8.0e7
 
 [q2_res]
-f_r_hz = 6.02e9
+f_dress0_hz = 6.02e9
 
 [q3_res]
-f_r_hz = 6.10e9
+f_dress0_hz = 6.10e9
 
 [q1_q2]
 j_hz = 1.0e7
@@ -72,14 +72,14 @@ def test_worked_example_datasheet_loads(design):
 
 
 def test_design_on_derived_entities_validates_post_expansion(design):
-    assert design.get("q3_res", "f_r_hz") == 6.10e9  # q3_res is rider-minted
+    assert design.get("q3_res", "f_dress0_hz") == 6.10e9  # q3_res is rider-minted
 
 
 def test_compare_is_the_key_for_key_join(design):
-    measured = {"q1_res": {"f_r_hz": 5.9359e9}}      # a physical.json values block
+    measured = {"q1_res": {"f_dress0_hz": 5.9359e9}}      # a physical.json values block
     rows = {(e, f): (d, m) for e, f, d, m in design.compare(measured)}
-    assert rows[("q1_res", "f_r_hz")] == (5.93e9, 5.9359e9)
-    assert rows[("q2_res", "f_r_hz")] == (6.02e9, None)   # not yet measured
+    assert rows[("q1_res", "f_dress0_hz")] == (5.93e9, 5.9359e9)
+    assert rows[("q2_res", "f_dress0_hz")] == (6.02e9, None)   # not yet measured
 
 
 # ------------------------------------------------------------------- refusals

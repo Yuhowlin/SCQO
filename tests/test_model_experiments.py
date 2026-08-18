@@ -167,15 +167,25 @@ def test_flux_map_writes_the_sweet_spot_on_the_flux_channel(session):
     assert _suggest(session, "resonator_spectroscopy_flux") == {
         ("q0_z", "idle_flux"), ("q0_z", "flux_offset"),
         ("q0_z", "flux_per_phi0"), ("q0_ro", "readout_freq_hz"),
-        ("q0_res", "f_r0_hz"), ("q0_res", "g_hz")}
+        ("q0_res", "f_bare_hz"), ("q0_res", "g_hz")}
 
 
-def test_flux_map_withholds_dispersive_physics_without_an_arch_anchor(session, monkeypatch):
+def test_flux_map_withholds_dispersive_physics_without_an_arch_anchor(tmp_path, monkeypatch):
     """f_r0/g are conditional on an f_q_max the trace CANNOT fit (it fixes only the
-    product g^2*f_q_max), so they are proposed only against a measured arch top.
-    Take the drive frequency away — true bring-up, before the qubit has answered —
-    and they must disappear while the flux-periodicity proposals survive."""
+    product g^2*f_q_max), so they are proposed only against a known arch top. Take
+    away EVERY tier — no standing drive frequency (true bring-up), no fab junction
+    resistance, no datasheet — and they must disappear while the flux-periodicity
+    proposals, which are robust to the degeneracy, survive."""
+    from scqo.design import Design
     from scqo.experiments.resonator_spectroscopy_flux import ResonatorSpectroscopyFlux
+
+    roster = demo_components(tunable=True)
+    # vendor knobs still seeded from the datasheet (the instrument is configured),
+    # but the SESSION carries no datasheet, so the design tier cannot answer.
+    vendor = InMemoryDevice(roster, demo_vendor_state(roster, demo_design(roster)))
+    s = Session(SimulatedBackend(vendor), roster, design=Design({}),
+                scqo_dir=tmp_path / "scqo", data_root=tmp_path / "data",
+                device_name="chipT", setup_name="sim", cooldown_id="cd1")
 
     real_anchor = ResonatorSpectroscopyFlux.anchor
 
@@ -185,24 +195,43 @@ def test_flux_map_withholds_dispersive_physics_without_an_arch_anchor(session, m
         return real_anchor(self, name, field)
 
     monkeypatch.setattr(ResonatorSpectroscopyFlux, "anchor", no_drive_freq)
-    out = session.run("resonator_spectroscopy_flux", {"targets": ["q0"]})
+    out = s.run("resonator_spectroscopy_flux", {"targets": ["q0"]})
     assert out.get("error") is None, out.get("error")
     assert out["fit"]["q0"]["f_q_max_source"] == "assumed"
-    assert {(s["entity"], s["field"]) for s in out["suggestions"]} == {
+    assert {(sg["entity"], sg["field"]) for sg in out["suggestions"]} == {
         ("q0_z", "idle_flux"), ("q0_z", "flux_offset"),
         ("q0_z", "flux_per_phi0"), ("q0_ro", "readout_freq_hz")}
 
 
-def test_flux_map_explicit_f_q_max_overrides_the_drive_anchor(session):
-    """An explicitly supplied arch top wins over the drive-channel proxy, is the
-    value the fit was pinned to, and still counts as measured physics."""
-    out = session.run("resonator_spectroscopy_flux",
-                      {"targets": ["q0"], "f_q_max_hz": 4.2e9})
+def test_flux_map_f_q_max_falls_back_to_the_fab_resistance(tmp_path, monkeypatch):
+    """With no standing drive frequency, the fab's junction resistance predicts the
+    arch top (Ambegaokar-Baratoff) and OUTRANKS the datasheet — it carries the
+    fabrication scatter the datasheet cannot know. That is enough to make the
+    dispersive physics proposable again."""
+    from scqo.experiments.resonator_spectroscopy_flux import ResonatorSpectroscopyFlux
+
+    roster = demo_components(tunable=True)
+    design = demo_design(roster)
+    vendor = InMemoryDevice(roster, demo_vendor_state(roster, design))
+    s = Session(SimulatedBackend(vendor), roster, design=design,
+                scqo_dir=tmp_path / "scqo", data_root=tmp_path / "data",
+                device_name="chipT", setup_name="sim", cooldown_id="cd1")
+    s.set_values({"q0.junction_resistance_ohm": 9.0e3, "q0.ec_hz": 0.2e9})
+
+    real_anchor = ResonatorSpectroscopyFlux.anchor
+
+    def no_drive_freq(self, name, field):
+        if field == "drive_freq_hz":
+            raise ValueError(f"{name}.drive_freq_hz has no standing value")
+        return real_anchor(self, name, field)
+
+    monkeypatch.setattr(ResonatorSpectroscopyFlux, "anchor", no_drive_freq)
+    out = s.run("resonator_spectroscopy_flux", {"targets": ["q0"]})
     assert out.get("error") is None, out.get("error")
     fit = out["fit"]["q0"]
-    assert fit["f_q_max_source"] == "param"
-    assert fit["f_q_max_hz"] == pytest.approx(4.2e9)
-    assert ("q0_res", "g_hz") in {(s["entity"], s["field"]) for s in out["suggestions"]}
+    assert fit["f_q_max_source"] == "junction_resistance"
+    # 9 kOhm at Delta=43.5 GHz, E_c=0.2 GHz -> ~4.80 GHz (see _transmon_estimate)
+    assert fit["f_q_max_hz"] == pytest.approx(4.797e9, rel=1e-3)
 
 
 def test_flux_map_proposes_dispersive_physics_when_provenance_tag_is_stripped(session):
@@ -222,13 +251,62 @@ def test_flux_map_proposes_dispersive_physics_when_provenance_tag_is_stripped(se
         outcomes={"q0": Outcome.SUCCESSFUL},
         fit={"q0": {  # a numeric-only aggregated fit — no f_q_max_source tag
             "flux_offset": 0.1, "sweet_spot_res_hz": 5.93e9,
-            "flux_per_phi0": 0.58, "f_r0_hz": 5.921e9, "g_hz": 90e6,
+            "flux_per_phi0": 0.58, "f_bare_hz": 5.921e9, "g_hz": 90e6,
             "f_q_max_hz": 5.14e9}})
     capture = SuggestionCapture(session.device, session.physical, session.roster)
     exp.device = capture
     exp.update()
     fields = {(s.entity, s.field) for s in capture.suggestions}
-    assert ("q0_res", "f_r0_hz") in fields and ("q0_res", "g_hz") in fields
+    assert ("q0_res", "f_bare_hz") in fields and ("q0_res", "g_hz") in fields
+
+
+def test_flux_map_pins_a_measured_bare_frequency(tmp_path):
+    """A STORED f_bare_hz is pinned as a fit constant — that is what breaks the
+    f_r0/g degeneracy — and is therefore NOT proposed back: it was an input, not a
+    fresh measurement of itself."""
+    roster = demo_components(tunable=True)
+    design = demo_design(roster)
+    vendor = InMemoryDevice(roster, demo_vendor_state(roster, design))
+    s = Session(SimulatedBackend(vendor), roster, design=design,
+                scqo_dir=tmp_path / "scqo", data_root=tmp_path / "data",
+                device_name="chipT", setup_name="sim", cooldown_id="cd1")
+    measured_bare = 7.0985e9
+    s.set_values({"q0_res.f_bare_hz": measured_bare})
+
+    out = s.run("resonator_spectroscopy_flux", {"targets": ["q0"]})
+    assert out.get("error") is None, out.get("error")
+    fit = out["fit"]["q0"]
+    assert fit["f_bare_source"] == "measured"
+    assert fit["f_bare_hz"] == pytest.approx(measured_bare)   # held, not fitted
+    fields = {(sg["entity"], sg["field"]) for sg in out["suggestions"]}
+    assert ("q0_res", "f_bare_hz") not in fields              # never echoed back
+    assert ("q0_res", "g_hz") in fields                       # but g still lands
+
+
+def test_flux_map_only_seeds_a_designed_bare_frequency_and_warns(tmp_path):
+    """A DESIGNED f_bare_hz is a nominal number carrying resonator fab scatter, and
+    the whole flux signal is only the few-MHz pull — so it seeds the fit rather than
+    pinning it, says so out loud, and tags the run as design-seeded."""
+    from scqo.design import parse_design
+
+    roster = demo_components(tunable=True)
+    design = demo_design(roster)
+    vendor = InMemoryDevice(roster, demo_vendor_state(roster, design))
+    # same datasheet, plus a designed bare frequency for q0's resonator
+    seeded = parse_design(
+        "\n".join(["schema = 1", "[q0]", "f_q_max_hz = 3.8e9",
+                   "[q0_res]", "f_dress0_hz = 7.1e9", "f_bare_hz = 7.09e9"]), roster)
+    s = Session(SimulatedBackend(vendor), roster, design=seeded,
+                scqo_dir=tmp_path / "scqo", data_root=tmp_path / "data",
+                device_name="chipT", setup_name="sim", cooldown_id="cd1")
+
+    with pytest.warns(UserWarning, match="design.toml"):
+        out = s.run("resonator_spectroscopy_flux", {"targets": ["q0"]})
+    assert out.get("error") is None, out.get("error")
+    assert out["fit"]["q0"]["f_bare_source"] == "design"
+    # a design-sourced fact tags the run, exactly as a design-seeded anchor does
+    record = s.load_run(out["run_id"])["record"]
+    assert "seeded:q0_res.f_bare_hz" in record["tags"]
 
 
 def test_flux_map_ec_defaults_when_unsourced(session):

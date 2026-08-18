@@ -155,13 +155,13 @@ def test_context_facts_and_fact_series_are_physical_only(tmp_path):
         ChangeDB.insert(con, [
             _rec("t1", "q1", "t1_s", 3.0e-5),
             _rec("t2", "q1", "t1_s", 3.1e-5, old=3.0e-5),
-            _rec("t3", "q1_res", "f_r_hz", 5.9e9),
+            _rec("t3", "q1_res", "f_dress0_hz", 5.9e9),
         ], store="physical")
         ChangeDB.insert(con, [_rec("t4", "q1_xy", "pi_amp", 0.2)],
                         store="state")
     facts = db.context_facts()
     assert {(r["entity"], r["field"]): r["new"] for r in facts} == {
-        ("q1", "t1_s"): 3.1e-5, ("q1_res", "f_r_hz"): 5.9e9}
+        ("q1", "t1_s"): 3.1e-5, ("q1_res", "f_dress0_hz"): 5.9e9}
     series = db.fact_series("q1", "t1_s")
     assert [r["new"] for r in series] == [3.0e-5, 3.1e-5]
     assert db.fact_series("q1_xy", "pi_amp") == []       # knob: not a fact

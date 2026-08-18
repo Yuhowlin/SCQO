@@ -149,6 +149,22 @@ _TRANSMON_BASE: dict[str, FieldSpec] = {
         "Hz", "Charging energy E_C/h (E_C ~ -anharmonicity). Held fixed in the "
               "resonator flux arch f_q = (f_q_max + E_C) sqrt(|cos|) - E_C.",
         role="fact", design_ok=True),
+    "junction_resistance_ohm": FieldSpec(
+        "Ohm", "Normal-state junction resistance from the fab probe station. A "
+               "SQUID's two junctions measure in PARALLEL, so this yields the "
+               "total E_JSigma directly (Ambegaokar-Baratoff), which with ec_hz "
+               "predicts f_q_max before the qubit has ever answered. Measured, "
+               "not designed — that is the whole point, since fabrication "
+               "scatter is what moves the qubit off its design frequency.",
+        role="fact"),
+    "gap_delta_hz": FieldSpec(
+        "Hz", "Effective superconducting gap Delta/h used with "
+              "junction_resistance_ohm (E_J = Delta / (8 e^2 R_n)). EFFECTIVE "
+              "because it also absorbs the room-temperature-to-cold R_n "
+              "correction: the two are exactly degenerate, so one calibrated "
+              "number covers both. ~43.5 GHz (180 ueV) for Al; fit it per chip "
+              "once a few qubits are measured.",
+        role="fact", design_ok=True),
     "t1_s": FieldSpec("s", "Energy-relaxation time T1.", role="fact"),
     "t2_star_s": FieldSpec("s", "Ramsey dephasing time T2*.", role="fact"),
     "t2_echo_s": FieldSpec("s", "Hahn-echo coherence time T2_echo.", role="fact"),
@@ -219,6 +235,8 @@ MODES: dict[str, ModeKind] = {
         doc="Linear cavity mode declared in its own right (cat-qubit memory, "
             "buffer). Drives on it derive displace, never rx.",
         fields={
+            # NOT part of the resonator's bare/dressed family: a linear cavity
+            # carries no qubit, so there is nothing dressing it.
             "f_r_hz": FieldSpec("Hz", "Mode frequency.", role="fact",
                                 design_ok=True),
             "kappa_tot_hz": FieldSpec(
@@ -234,11 +252,26 @@ MODES: dict[str, ModeKind] = {
             "qubit ref is the single record of the dispersive attachment and "
             "what makes g_hz/chi_hz unambiguous.",
         fields={
-            "f_r_hz": FieldSpec(
-                "Hz", "Dressed resonator frequency (spectroscopy dip).",
+            # The frequency family. The DIGIT is the QUBIT STATE the resonator
+            # is dressed by, never a zero-index: f_bare (no qubit) ->
+            # f_dress0 (qubit |0>) -> f_dress1 (qubit |1>).
+            "f_bare_hz": FieldSpec(
+                "Hz", "Bare (uncoupled) resonator frequency — the resonator with "
+                      "the qubit decoupled. From the dispersive flux fit, or "
+                      "directly from a high-power punchout. Design-legal: a "
+                      "datasheet designs the BARE resonator.",
                 role="fact", design_ok=True),
-            "f_r0_hz": FieldSpec(
-                "Hz", "Bare resonator frequency (dispersive fit).", role="fact"),
+            "f_dress0_hz": FieldSpec(
+                "Hz", "Dressed resonator frequency with the qubit in |0> — the "
+                      "spectroscopy dip at the operating point (flux + qubit "
+                      "state). This is what the readout tone is parked on, so "
+                      "readout_freq_hz seeds from it.",
+                role="fact", design_ok=True),
+            "f_dress1_hz": FieldSpec(
+                "Hz", "Dressed resonator frequency with the qubit in |1>. No "
+                      "writer yet — a prepared-state readout-frequency sweep "
+                      "measures it; with f_dress0_hz it gives chi.",
+                role="fact"),
             "kappa_tot_hz": FieldSpec(
                 "Hz", "Total linewidth (power-Lorentzian FWHM); the "
                       "coupling/intrinsic split waits for a complex-S21 "
@@ -247,7 +280,8 @@ MODES: dict[str, ModeKind] = {
                 "Hz", "Qubit-resonator coupling from the dispersive fit.",
                 role="fact", design_ok=True),
             "chi_hz": FieldSpec(
-                "Hz", "Dispersive shift per excitation.", role="fact"),
+                "Hz", "Dispersive shift per excitation; "
+                      "chi = (f_dress0_hz - f_dress1_hz) / 2.", role="fact"),
             "n_th": FieldSpec("", "Thermal occupation at idle (0..1).",
                               role="fact"),
         },
@@ -398,8 +432,9 @@ CHANNELS: dict[str, ChannelKind] = {
         fields={
             "readout_freq_hz": FieldSpec(
                 "Hz", "Readout tone / demodulation frequency (operating "
-                      "CHOICE; the fact is the resonator's f_r_hz).",
-                role="knob", design_source=("via", "f_r_hz")),
+                      "CHOICE; the fact is the resonator's f_dress0_hz — the "
+                      "dip with the qubit in |0>, where the tone is parked).",
+                role="knob", design_source=("via", "f_dress0_hz")),
             "readout_amp": FieldSpec(
                 "", "Readout pulse amplitude (zero for emission-collection "
                     "readout).", role="knob", portable=False),

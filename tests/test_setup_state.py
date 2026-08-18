@@ -57,14 +57,14 @@ drive = ["q0"]
 """
 
 #: The datasheet that gives the bring-up anchors (readout_freq_hz hops to
-#: the resonator's design f_r_hz).
+#: the resonator's design f_dress0_hz).
 _DESIGN_TOML = """\
 schema = 1
 
 [q0]
 f_01_hz = 3.87e9
 [q0_res]
-f_r_hz = 5.95e9
+f_dress0_hz = 5.95e9
 """
 
 

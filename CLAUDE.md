@@ -68,7 +68,7 @@ of one kind riding a line); a line's rider lists mint the channels. Field routin
 per-field by ROLE: fact -> physical.json, knob -> scqo_state.json + pushed to the vendor,
 monitor -> scqo_state.json never pushed. Knobs live on CHANNELS (`q1_ro.readout_freq_hz`,
 `q1_xy.pi_amp`, `q1_xy.thermalization_time_s`, `q1_z.idle_flux`); facts live on modes and composites (`q1.f_01_hz`,
-`q1_res.f_r_hz`, `q1_q2.zz_hz`); composite per-operation knobs are full names
+`q1_res.f_dress0_hz`, `q1_q2.zz_hz`); composite per-operation knobs are full names
 (`iswap_coupler_flux`). As-designed targets live in the sibling `design.toml`.
 
 ```
@@ -231,7 +231,7 @@ scqo/
     _flux_component.py          # kind-agnostic foreign flux source mixin (record-only guard)
     _sim.py                     # shared helpers for the offline simulators
     resonator_spectroscopy.py   # frequency sweep, Lorentzian/circle fit -> readout_freq_hz
-                                #   (readout channel) + f_r_hz/kappa_tot_hz (resonator facts)
+                                #   (readout channel) + f_dress0_hz/kappa_tot_hz (resonator facts)
     qubit_spectroscopy.py       # two-tone peak search -> coarse drive_freq_hz (drive channel)
                                 #   + f_01_hz (mode fact) (bring-up step 2)
     qubit_ramsey.py             # time sweep, decaying-cosine fit -> drive_freq_hz (drive
@@ -290,7 +290,7 @@ scqo/
                                 #   parity_rate_hz
     resonator_spectroscopy_flux.py   # 2D resonator flux map -> idle_flux + readout_freq_hz
                                 #   at the sweet spot; flux_offset/flux_per_phi0 (flux-channel
-                                #   facts) + f_r0_hz/g_hz (resonator facts)
+                                #   facts) + f_bare_hz/g_hz (resonator facts)
     readout_power.py            # vs amp prefactor -> readout_amp. TWO readout modes:
                                 #   'shot' = per-shot IQ + mixture fit -> max FIDELITY;
                                 #   'average' = one FPGA-averaged point per prepared

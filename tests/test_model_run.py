@@ -45,9 +45,9 @@ def test_run_suggest_accept_roundtrip(session):
     # the linewidth and dip position are resonator FACTS (never pushed).
     assert proposed == {
         ("q0_ro", "readout_freq_hz", "knob"), ("q0_ro", "readout_depletion_s", "knob"),
-        ("q0_res", "f_r_hz", "fact"), ("q0_res", "kappa_tot_hz", "fact"),
+        ("q0_res", "f_dress0_hz", "fact"), ("q0_res", "kappa_tot_hz", "fact"),
         ("q1_ro", "readout_freq_hz", "knob"), ("q1_ro", "readout_depletion_s", "knob"),
-        ("q1_res", "f_r_hz", "fact"), ("q1_res", "kappa_tot_hz", "fact"),
+        ("q1_res", "f_dress0_hz", "fact"), ("q1_res", "kappa_tot_hz", "fact"),
     }
     # nothing applied yet
     assert session.physical_state() == {}
@@ -63,7 +63,7 @@ def test_run_apply_mode_is_immediate(session):
     out = session.run("resonator_spectroscopy", {"targets": ["q0"]},
                       update="apply")
     assert out.get("error") is None
-    assert session.physical_state()["q0_res"]["f_r_hz"] == pytest.approx(
+    assert session.physical_state()["q0_res"]["f_dress0_hz"] == pytest.approx(
         session.device_state()["q0_ro"]["readout_freq_hz"])
     record = session.load_run(out["run_id"])["record"]
     assert record["updated_device"] is True
@@ -101,7 +101,7 @@ def test_run_campaign_repeats_and_summarizes(session):
         "steps": [{"experiment": "resonator_spectroscopy", "params": {"num_points": 61}}],
     })
     assert out["status"] == "complete" and out["repeat_done"] == 3
-    assert out["statistics"]["resonator_spectroscopy"]["q0"]["f_r_hz"]["n"] == 3
+    assert out["statistics"]["resonator_spectroscopy"]["q0"]["f_dress0_hz"]["n"] == 3
     children = session.campaign_runs(out["campaign_id"])
     assert [c["repeat_idx"] for c in children] == [0, 1, 2]
     # update defaults to "none" for a campaign: no pending suggestions to go stale
@@ -122,7 +122,7 @@ def test_design_seeded_anchor_tags_the_run(tmp_path):
     out = session.run("resonator_spectroscopy", {"targets": ["q0"]})
     assert out.get("error") is None
     record = session.load_run(out["run_id"])["record"]
-    assert "seeded:q0_res.f_r_hz" in record["tags"]
+    assert "seeded:q0_res.f_dress0_hz" in record["tags"]
 
 
 def test_runs_are_findable(session):
