@@ -76,18 +76,20 @@ class QubitSpectroscopyOverlap(QubitSpectroscopy):
         The shift and the extra width scale with ``acq_start_ns`` only through
         the hidden per-qubit truth, not physically — this is an offline
         placeholder, so it just has to be deterministic, distinguishable from
-        the parent's data, and land inside ``frequency_span_hz`` (``estimate()``
-        rejects a peak outside it).
+        the parent's data, and land inside the ``[start_detuning_hz,
+        end_detuning_hz]`` window (``estimate()`` rejects a peak outside it).
         """
         detuning = coords["detuning_hz"]
         targets = self.params.targets
         rng = np.random.default_rng(stable_seed("qubit_spectroscopy_overlap", *targets))
+        width = self.params.end_detuning_hz - self.params.start_detuning_hz
+        window_mid = (self.params.start_detuning_hz + self.params.end_detuning_hz) / 2
         i_data = np.empty((len(targets), detuning.size))
         q_data = np.empty_like(i_data)
         for k in range(len(targets)):
-            err = rng.uniform(-0.2, 0.2) * self.params.frequency_span_hz  # hidden truth
+            err = window_mid + rng.uniform(-0.2, 0.2) * width  # hidden truth, in-window
             # measuring while driving: the line sits low and is dephasing-broadened
-            stark = -rng.uniform(0.02, 0.08) * self.params.frequency_span_hz
+            stark = -rng.uniform(0.02, 0.08) * width
             fwhm = rng.uniform(2e6, 5e6) * rng.uniform(1.5, 2.5)
             centre = err + stark
             peak = 0.5 * (fwhm / 2) ** 2 / ((detuning - centre) ** 2 + (fwhm / 2) ** 2)

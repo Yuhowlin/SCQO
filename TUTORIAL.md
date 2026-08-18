@@ -88,7 +88,7 @@ qubit_ramsey_cryoscope              resonator_spectroscopy_power_chain
 qubit_relaxation                    single_shot_readout
 qubit_relaxation_flux_pulse         single_shot_readout_gef
 qubit_spectroscopy
-# capabilities: state_readout(14) flux(4) qubit_reset(30) flux_pulse(3) amplitude(4) none(3)
+# capabilities: state_readout(14) flux(4) qubit_reset(30) flux_pulse(3) amplitude(4) drive_detuning(4) none(3)
 # filter: scqo run --capability <name>    detail: scqo run <name> --help
 ```
 

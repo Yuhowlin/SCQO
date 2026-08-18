@@ -214,7 +214,16 @@ scqo/
                     #   estimate() reads its `old_<knob>` through the same amp_anchor.
                     #   The neutral bound is lt=2.0 (the widest ANY backend expresses);
                     #   the real limit is factor x stored <= 1 and each driver refuses it
-                    #   BY NAME (scqo-qm + scqo-qblox, each experiments/_amp_limits));
+                    #   BY NAME (scqo-qm + scqo-qblox, each experiments/_amp_limits),
+                    #   detuning.py = the swept drive-frequency window:
+                    #   start/end_detuning_hz + num_freq_points, Hz RELATIVE to the
+                    #   current drive_freq_hz (explicit [start, end] so an asymmetric
+                    #   window is expressible; ascending enforced — scqat's peak fitters
+                    #   assume it), DETUNING_AXIS = `detuning_hz`. The four
+                    #   qubit_spectroscopy* experiments carry it; the readout-side
+                    #   detuning sweeps (resonator_spectroscopy*, readout_frequency)
+                    #   share the axis NAME but are readout_freq_hz-relative and are
+                    #   NOT carriers);
                     #   catalog
                     #   `capabilities` are DERIVED from mixin subclassing — never declared
                     #   strings, zero capabilities legitimate (new experiments may be

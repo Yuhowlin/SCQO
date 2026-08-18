@@ -26,6 +26,13 @@ from pydantic import Field
 
 from .._scqat import per_qubit_results
 from ..contract import DatasetContract
+from ._capabilities.detuning import (
+    END_DETUNING_DESC,
+    NUM_FREQ_POINTS_DESC,
+    START_DETUNING_DESC,
+    DriveDetuningSweepParameters,
+    detuning_sweep,
+)
 from ._capabilities.flux import (
     NUM_FLUX_DESC,
     FluxPulseSweepParameters,
@@ -43,7 +50,8 @@ from ._flux_component import FluxComponentParameters
 
 
 class QubitSpectroscopyFluxPulseParameters(
-    TargetSelection, AveragingParameters, FluxPulseSweepParameters, FluxComponentParameters
+    TargetSelection, AveragingParameters, FluxPulseSweepParameters,
+    DriveDetuningSweepParameters, FluxComponentParameters
 ):
     """Inputs for the qubit-frequency-vs-flux map.
 
@@ -51,8 +59,10 @@ class QubitSpectroscopyFluxPulseParameters(
     plays a z pulse on top of the standing bias), so 0 means "stay parked".
     """
 
-    frequency_span_hz: float = Field(400e6, gt=0, description="Total drive-detuning span around the current drive_freq.")
-    num_freq_points: int = Field(101, gt=1, description="Number of frequency points.")
+    # capability defaults widened: the arch spans hundreds of MHz across a flux map
+    start_detuning_hz: float = Field(-200e6, description=START_DETUNING_DESC)
+    end_detuning_hz: float = Field(200e6, description=END_DETUNING_DESC)
+    num_freq_points: int = Field(101, gt=1, description=NUM_FREQ_POINTS_DESC)
     # capability default narrowed: the arch fit needs >= 5 good slices
     num_flux_points: int = Field(21, gt=4, description=NUM_FLUX_DESC + " (the arch fit needs >= 5 good slices).")
     ec_ghz: float = Field(0.2, gt=0, description="Charging energy (GHz) held fixed in the arch model.")
@@ -115,11 +125,7 @@ class QubitSpectroscopyFluxPulse(Experiment):
     params: QubitSpectroscopyFluxPulseParameters
 
     def define_sweep(self) -> dict[str, np.ndarray]:
-        span = self.params.frequency_span_hz
-        return {
-            **flux_sweep(self.params),
-            "detuning_hz": np.linspace(-span / 2, span / 2, self.params.num_freq_points),
-        }
+        return {**flux_sweep(self.params), **detuning_sweep(self.params)}
 
     def run(self) -> Result:
         """Boundary-recorded drive-chain set -> acquire -> revert (shared helper).

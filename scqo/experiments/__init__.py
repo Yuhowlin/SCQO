@@ -90,6 +90,7 @@ def _derived_capabilities(cls: type[Experiment]) -> list[str]:
     the datastore's user-attached run tags (``run(..., tags=)`` / ``scqo tag``)."""
     from ._capabilities import (
         AmplitudeSweepParameters,
+        DriveDetuningSweepParameters,
         FluxPulseSweepParameters,
         FluxSweepParameters,
         QubitResetParameters,
@@ -99,7 +100,7 @@ def _derived_capabilities(cls: type[Experiment]) -> list[str]:
     # Derivation order is fixed (tests pin the exact lists): the two original
     # capabilities first, then each later addition appended at the END so it
     # does not reshuffle every existing entry — qubit_reset, then flux_pulse,
-    # then amplitude.
+    # then amplitude, then drive_detuning.
     caps = []
     if issubclass(cls.Parameters, StateReadoutParameters):
         caps.append("state_readout")
@@ -116,6 +117,11 @@ def _derived_capabilities(cls: type[Experiment]) -> list[str]:
     # carriers also attach the absolute `digital_amp` axis
     if issubclass(cls.Parameters, AmplitudeSweepParameters):
         caps.append("amplitude")
+    # the swept drive-frequency window, Hz relative to the current drive
+    # frequency (the readout-side detuning sweeps are NOT carriers — their
+    # window is relative to readout_freq_hz)
+    if issubclass(cls.Parameters, DriveDetuningSweepParameters):
+        caps.append("drive_detuning")
     return caps
 
 
