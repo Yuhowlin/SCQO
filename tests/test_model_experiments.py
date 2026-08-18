@@ -234,6 +234,57 @@ def test_flux_map_f_q_max_falls_back_to_the_fab_resistance(tmp_path, monkeypatch
     assert fit["f_q_max_hz"] == pytest.approx(4.797e9, rel=1e-3)
 
 
+def test_flux_map_design_g_seed_rescales_to_the_chip_frequencies(tmp_path):
+    """g ∝ sqrt(f_q·f_r) with a geometry-constant coefficient, so a DESIGN g is
+    valid only at the DESIGN frequencies. The fit seed rescales it to the
+    chip's actual ones; a MEASURED g rides through untouched (it is the chip's
+    own coupling); a missing input degrades to the unscaled design value."""
+    from scqo.design import parse_design
+    from scqo.experiments.resonator_spectroscopy_flux import (
+        _DEFAULT_G_INIT_HZ,
+        ResonatorSpectroscopyFlux,
+        _g_init_hz,
+    )
+
+    roster = demo_components(tunable=True)
+    design = parse_design(
+        "schema = 1\n"
+        "[q0]\nf_q_max_hz = 4.5e9\n"
+        "[q0_res]\nf_dress0_hz = 5.9e9\ng_hz = 60e6\n",
+        roster,
+    )
+    vendor = InMemoryDevice(roster, demo_vendor_state(roster, demo_design(roster)))
+    s = Session(SimulatedBackend(vendor), roster, design=design,
+                scqo_dir=tmp_path / "scqo", data_root=tmp_path / "data",
+                device_name="chipT", setup_name="sim", cooldown_id="cd1")
+    exp = ResonatorSpectroscopyFlux(
+        s.backend, ResonatorSpectroscopyFlux.Parameters(targets=["q0"]))
+    exp.device = s.device
+    exp.design = s.design
+    exp.physical = s.physical
+
+    # a measured bare resonator makes the actual f_r deterministic
+    s.set_values({"q0_res.f_bare_hz": 5.93e9})
+
+    # design tier -> rescaled by sqrt((f_q·f_r)/(f_q_design·f_r_design))
+    seed = _g_init_hz(exp, "q0", 5.15e9)
+    assert seed == pytest.approx(
+        60e6 * np.sqrt((5.15e9 * 5.93e9) / (4.5e9 * 5.9e9)))
+    # missing actual f_q_max -> the unscaled design value (quiet degrade)
+    assert _g_init_hz(exp, "q0", None) == pytest.approx(60e6)
+    # measured tier -> untouched, whatever the frequencies say
+    s.set_values({"q0_res.g_hz": 88e6})
+    assert _g_init_hz(exp, "q0", 5.15e9) == pytest.approx(88e6)
+
+    # no g on any tier -> the code default
+    bare = ResonatorSpectroscopyFlux(
+        s.backend, ResonatorSpectroscopyFlux.Parameters(targets=["q1"]))
+    bare.device = s.device
+    bare.design = s.design  # the custom design has no q1 entries at all
+    bare.physical = s.physical
+    assert _g_init_hz(bare, "q1", 5.15e9) == pytest.approx(_DEFAULT_G_INIT_HZ)
+
+
 def test_flux_map_proposes_dispersive_physics_when_provenance_tag_is_stripped(session):
     """Campaign finalize replays update() over an AGGREGATED fit that keeps only
     numeric quantities, so the f_q_max_source tag is gone. update() must then

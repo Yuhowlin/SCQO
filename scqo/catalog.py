@@ -277,7 +277,11 @@ MODES: dict[str, ModeKind] = {
                       "coupling/intrinsic split waits for a complex-S21 "
                       "estimator.", role="fact", design_ok=True),
             "g_hz": FieldSpec(
-                "Hz", "Qubit-resonator coupling from the dispersive fit.",
+                "Hz", "Qubit-resonator coupling from the dispersive fit. "
+                      "g ∝ sqrt(f_q·f_r) with a geometry-constant coefficient, "
+                      "so a DESIGN value is only valid at the design "
+                      "frequencies — the flux fit rescales its seed to the "
+                      "chip's actual ones.",
                 role="fact", design_ok=True),
             "chi_hz": FieldSpec(
                 "Hz", "Dispersive shift per excitation; "

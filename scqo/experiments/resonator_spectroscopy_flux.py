@@ -26,7 +26,7 @@ from pydantic import Field
 
 from .._scqat import per_qubit_results
 from ..contract import DatasetContract
-from ..experiment import FACT_MEASURED
+from ..experiment import FACT_DESIGN, FACT_MEASURED
 from ._transmon_estimate import DEFAULT_GAP_DELTA_HZ, f_q_max_hz_from_resistance
 from ._capabilities.detuning import (
     ReadoutDetuningSweepParameters,
@@ -198,6 +198,58 @@ def _f_q_max_from_fabrication(experiment, target: str) -> tuple[float | None, st
     return None, F_Q_MAX_ASSUMED
 
 
+def _g_init_hz(experiment, target: str, f_q_max_hz: float | None) -> float:
+    """Seed for the fitted coupling g: fact -> design-RESCALED -> code default.
+
+    Physically ``g ∝ sqrt(f_q · f_r)`` — the proportionality coefficient is the
+    geometry constant (capacitance ratios), the frequencies are wherever the
+    modes actually sit. A ``design.toml`` g is therefore only valid at the
+    DESIGN frequencies: when the fabricated chip landed elsewhere (junction
+    scatter moves f_q_max by hundreds of MHz), the design value is rescaled by
+    ``sqrt((f_q · f_r) / (f_q_design · f_r_design))`` before seeding. A
+    MEASURED g needs no rescale (it is the chip's own coupling at its own
+    frequencies), and any missing number degrades to the unscaled design value
+    — this seeds a FITTED parameter, so degrading quietly is correct here.
+
+    ``f_q_max_hz`` is the arch top ``estimate()`` already resolved through
+    :func:`_f_q_max_hz` (None when nothing was known). The actual resonator
+    frequency prefers the measured ``f_bare_hz``, then measured ``f_dress0_hz``,
+    then the standing ``readout_freq_hz``; the design side prefers ``f_bare_hz``
+    then ``f_dress0_hz`` — the difference between the two resonator choices is
+    the Lamb shift, 0.1% under the square root.
+    """
+    value, tier = experiment.fact_sourced(target, "g_hz", None)
+    if value is None:
+        return _DEFAULT_G_INIT_HZ
+    if tier != FACT_DESIGN:
+        return float(value)
+
+    res_entity = experiment.device.resonator_of(target)
+    f_q_design = experiment.design.get(target, "f_q_max_hz")
+    f_r_design = None
+    for field in ("f_bare_hz", "f_dress0_hz"):
+        f_r_design = experiment.design.get(res_entity, field)
+        if f_r_design is not None:
+            break
+    f_r_actual = None
+    if experiment.physical is not None:
+        for field in ("f_bare_hz", "f_dress0_hz"):
+            f_r_actual = experiment.physical.get(res_entity, field)
+            if f_r_actual is not None:
+                break
+    if f_r_actual is None:
+        try:
+            f_r_actual = float(experiment.anchor(target, "readout_freq_hz"))
+        except (ValueError, KeyError, AttributeError):
+            f_r_actual = None
+
+    inputs = (f_q_max_hz, f_r_actual, f_q_design, f_r_design)
+    if any(v is None or not np.isfinite(v) or v <= 0.0 for v in inputs):
+        return float(value)
+    return float(value) * float(np.sqrt(
+        (f_q_max_hz * f_r_actual) / (float(f_q_design) * float(f_r_design))))
+
+
 def _f_bare_hz(experiment, target: str) -> tuple[float | None, bool, str]:
     """The BARE resonator frequency for the fit: ``(value, pin?, source)``.
 
@@ -349,7 +401,9 @@ class ResonatorSpectroscopyFlux(Experiment):
         # detuning), so they ride per_target_kwargs rather than the shared set.
         # E_c and the g seed follow the fact -> design -> code-default precedence
         # (Experiment.fact): a stored ec_hz/g_hz wins, else design.toml, else the
-        # code default. g_hz is re-seeded from what THIS experiment last wrote.
+        # code default. g_hz is re-seeded from what THIS experiment last wrote;
+        # a DESIGN-tier g is first rescaled to the chip's actual frequencies
+        # (g ∝ sqrt(f_q·f_r) — see _g_init_hz).
         sources: dict[str, str] = {}
         bare_sources: dict[str, str] = {}
         per_target: dict[str, dict] = {}
@@ -359,7 +413,9 @@ class ResonatorSpectroscopyFlux(Experiment):
             sources[q] = source
             ptk: dict = {
                 "ec": self.fact(q, "ec_hz", _DEFAULT_EC_HZ),
-                "g_init": self.fact(q, "g_hz", _DEFAULT_G_INIT_HZ),
+                # a design-tier g is rescaled to the chip's actual frequencies
+                # (g ∝ sqrt(f_q·f_r)); a measured g rides through untouched
+                "g_init": _g_init_hz(self, q, value),
             }
             if value is not None:
                 ptk["f_q_max"] = value
