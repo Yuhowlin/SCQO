@@ -1,0 +1,6 @@
+name = "qubit-relaxation-flat-data-fit"
+repos = { scqat = "e37188d" }        # LAST commit per repo (scqat only)
+kind = "fix"                          # behavior-preserving repair of a crash
+coupling = ""                         # no new floor: render_figures already existed in scqat.core.figures
+validated = "offline"                 # repro + fitter/estimator regression tests; no hardware
+notes = "BEHAVIOR CHANGE: qubit_relaxation no longer crashes on a flat/degenerate trace (first sample == last -> lmfit 'Parameter c has min == max'). The exp-decay fitter widens its offset bound, and a failed T1 fit now reports success=false and still emits the raw-data figure instead of failing the whole run."
