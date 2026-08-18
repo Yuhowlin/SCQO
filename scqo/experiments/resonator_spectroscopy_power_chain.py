@@ -80,8 +80,11 @@ class ResonatorSpectroscopyPowerChainResult(Result):
     """``fit[qubit]``: ``readout_power_dbm`` (new), ``readout_freq_hz`` (new),
     ``optimal_power_dbm``, ``frequency_shift_hz``, plus the old values; and the
     punchout physics ``f_bare_hz`` / ``f_dress0_hz`` (proposed on the resonator
-    mode) with the record-only ``lamb_shift_hz``, ``branch_success`` and
-    ``old_idle_flux`` — the flux the dressed frequency was measured at."""
+    mode) with the record-only ``lamb_shift_hz``, the plateau boundary powers
+    ``dress_max_power_dbm`` / ``bare_min_power_dbm`` (highest still-dispersive /
+    lowest fully-punched-out power — setup-chain properties, never chip facts),
+    ``branch_success`` and ``old_idle_flux`` — the flux the dressed frequency
+    was measured at."""
 
 
 @register

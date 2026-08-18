@@ -36,14 +36,20 @@ def branch_fit(experiment, results: Dict[str, Any], target: str) -> Dict[str, An
     """The punchout's physical extras for ``result.fit[target]``.
 
     ``f_bare_hz`` / ``f_dress0_hz`` are catalog facts on the resonator mode;
-    ``lamb_shift_hz`` and ``old_idle_flux`` are record-only provenance — the first
-    because it is derivable from the two facts, the second because it is the
-    condition ``f_dress0_hz`` was measured under, not a measurement of its own.
+    everything else is record-only provenance. ``lamb_shift_hz`` because it is
+    derivable from the two facts; ``old_idle_flux`` because it is the condition
+    ``f_dress0_hz`` was measured under, not a measurement of its own; and the
+    plateau boundary powers ``dress_max_power_dbm`` / ``bare_min_power_dbm``
+    (the highest power that is still dispersive and the lowest that is fully
+    punched out; NaN when that branch did not resolve) because a port power is
+    a property of THIS setup's output chain, never of the chip.
     """
     return {
         "f_bare_hz": float(results["f_bare"]),
         "f_dress0_hz": float(results["f_dress0"]),
         "lamb_shift_hz": float(results["lamb_shift"]),
+        "dress_max_power_dbm": float(results["dress_max_power"]),
+        "bare_min_power_dbm": float(results["bare_min_power"]),
         "branch_success": bool(results["branch_success"]),
         "old_idle_flux": standing_flux_v(experiment, target),
     }

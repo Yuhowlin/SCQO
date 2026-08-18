@@ -285,6 +285,9 @@ def test_punchout_branch_physics(session, name):
     assert fit["lamb_shift_hz"] == pytest.approx(
         fit["f_dress0_hz"] - fit["f_bare_hz"])
     assert fit["lamb_shift_hz"] == pytest.approx(8.0e6, rel=0.1)
+    # the plateau boundary powers bracket the transition, in order — the
+    # record-only "how much of the window was actually plateau" provenance
+    assert fit["dress_max_power_dbm"] < fit["bare_min_power_dbm"]
     # the flux the dressed frequency was measured AT — record-only provenance,
     # and what distinguishes a punchout before a flux map from one after it
     assert "old_idle_flux" in fit
