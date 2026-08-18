@@ -30,6 +30,55 @@ from typing import Any, Dict
 import numpy as np
 
 from ._capabilities.flux import standing_flux_v
+from ._transmon_estimate import g_coeff_from_g, g_hz_from_pull
+
+#: where a punchout's coupling came from, recorded per target in ``fit``.
+G_PUNCHOUT = "punchout"   # the run's own Lamb shift + the standing drive freq
+G_NONE = "none"           # no calibrated drive frequency (or an unphysical pull)
+
+
+def coupling_fit(experiment, results: Dict[str, Any], target: str) -> Dict[str, Any]:
+    """The coupling a punchout measures, when the qubit frequency is known.
+
+    ``g = sqrt(lamb_shift * (f_bare - f_q))`` with ``f_q`` the target's standing
+    ``drive_freq_hz``. Everything but that one number comes from THIS run's two
+    branches, which makes this route independent of the flux map's arch fit —
+    and specifically of the ``f_r0``-pin systematic that moves the flux fit's g
+    by ~13% (see ``RELEASES.d/flux-design-g-seed-rescale.toml``). On 5Q4C the
+    two routes agree to 0.2-2.4% in ``g_coeff``, inside their own run-to-run
+    scatter.
+
+    THE ASSUMPTION, stated because nothing can check it: ``drive_freq_hz`` must
+    be the qubit frequency at the flux this punchout ran at. Both are current
+    device state, so they agree unless the flux moved between calibrating the
+    drive and running this sweep — ``old_idle_flux`` in the same fit is the
+    audit trail.
+
+    Withheld (NaN, ``g_source = "none"``, nothing proposed) when there is no
+    finite standing drive frequency — the bring-up case — or when the pull and
+    the detuning disagree in sign, which means the data is not a dispersive
+    pull at all.
+    """
+    nan = float("nan")
+    withheld = {"g_hz": nan, "g_coeff": nan, "g_source": G_NONE}
+    lamb = results.get("lamb_shift")
+    f_bare = results.get("f_bare")
+    if lamb is None or f_bare is None:
+        return withheld
+    if not (np.isfinite(lamb) and np.isfinite(f_bare)):
+        return withheld
+    try:
+        f_q = float(experiment.anchor(target, "drive_freq_hz"))
+    except (ValueError, KeyError, AttributeError):
+        return withheld
+    if not (np.isfinite(f_q) and f_q > 0.0):
+        return withheld
+    try:
+        g = g_hz_from_pull(float(lamb), float(f_bare), f_q)
+        coeff = g_coeff_from_g(g, f_q, float(f_bare))
+    except ValueError:
+        return withheld  # not a dispersive pull, or a nonsensical frequency
+    return {"g_hz": g, "g_coeff": coeff, "g_source": G_PUNCHOUT}
 
 
 def branch_fit(experiment, results: Dict[str, Any], target: str) -> Dict[str, Any]:
@@ -52,19 +101,23 @@ def branch_fit(experiment, results: Dict[str, Any], target: str) -> Dict[str, An
         "bare_min_power_dbm": float(results["bare_min_power"]),
         "branch_success": bool(results["branch_success"]),
         "old_idle_flux": standing_flux_v(experiment, target),
+        # ...and the coupling the same two branches imply, when the qubit
+        # frequency is known (see coupling_fit).
+        **coupling_fit(experiment, results, target),
     }
 
 
 def propose_branches(experiment, target: str, fit: Dict[str, Any]) -> None:
-    """Write the resolved branch frequencies onto the target's RESONATOR mode.
+    """Write the resolved branch frequencies + coupling onto the RESONATOR mode.
 
     Per-field rather than all-or-nothing: a punchout whose window only reached the
     dispersive regime still measured ``f_dress0_hz`` honestly, and withholding it
     because the bare branch was out of range would discard good physics. A branch
-    that did not resolve is NaN and is simply not proposed.
+    that did not resolve is NaN and is simply not proposed — same for the
+    coupling pair, which needs both branches AND a known drive frequency.
     """
     res_view = experiment.device.component(experiment.device.resonator_of(target))
-    for field in ("f_bare_hz", "f_dress0_hz"):
+    for field in ("f_bare_hz", "f_dress0_hz", "g_hz", "g_coeff"):
         value = fit.get(field)
         if value is not None and np.isfinite(value):
             setattr(res_view, field, float(value))

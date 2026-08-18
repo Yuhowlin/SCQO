@@ -167,7 +167,7 @@ def test_flux_map_writes_the_sweet_spot_on_the_flux_channel(session):
     assert _suggest(session, "resonator_spectroscopy_flux") == {
         ("q0_z", "idle_flux"), ("q0_z", "flux_offset"),
         ("q0_z", "flux_per_phi0"), ("q0_ro", "readout_freq_hz"),
-        ("q0_res", "f_bare_hz"), ("q0_res", "g_hz")}
+        ("q0_res", "f_bare_hz"), ("q0_res", "g_hz"), ("q0_res", "g_coeff")}
 
 
 def test_flux_map_withholds_dispersive_physics_without_an_arch_anchor(tmp_path, monkeypatch):
@@ -232,6 +232,120 @@ def test_flux_map_f_q_max_falls_back_to_the_fab_resistance(tmp_path, monkeypatch
     assert fit["f_q_max_source"] == "junction_resistance"
     # 9 kOhm at Delta=43.5 GHz, E_c=0.2 GHz -> ~4.80 GHz (see _transmon_estimate)
     assert fit["f_q_max_hz"] == pytest.approx(4.797e9, rel=1e-3)
+
+
+@pytest.mark.parametrize("name", ["resonator_spectroscopy_power_amp",
+                                  "resonator_spectroscopy_power_chain"])
+def test_punchout_derives_the_coupling_from_its_two_branches(session, name):
+    """A punchout measures g without any arch fit: g = sqrt(lamb·(f_bare − f_q))
+    with f_q the standing drive frequency. That makes it INDEPENDENT of the flux
+    map's f_r0 pin, which is why both experiments write g_hz."""
+    from scqo.experiments._punchout import G_PUNCHOUT
+    from scqo.experiments._transmon_estimate import g_coeff_from_g, g_hz_from_pull
+
+    out = session.run(name, {"targets": ["q0"]}, update="none")
+    assert out.get("error") is None, out.get("error")
+    fit = out["fit"]["q0"]
+    assert fit["g_source"] == G_PUNCHOUT
+    f_q = float(session.device.channel("q0", "drive").drive_freq_hz)
+    expected = g_hz_from_pull(fit["lamb_shift_hz"], fit["f_bare_hz"], f_q)
+    assert fit["g_hz"] == pytest.approx(expected)
+    assert fit["g_coeff"] == pytest.approx(
+        g_coeff_from_g(expected, f_q, fit["f_bare_hz"]))
+    # the coefficient is dimensionless and O(0.01) for a real transmon
+    assert 0.001 < fit["g_coeff"] < 0.2
+
+
+@pytest.mark.parametrize("name", ["resonator_spectroscopy_power_amp",
+                                  "resonator_spectroscopy_power_chain"])
+def test_punchout_withholds_the_coupling_without_a_drive_frequency(
+        tmp_path, monkeypatch, name):
+    """At bring-up the qubit has not answered yet, so there is no f_q to turn the
+    Lamb shift into a coupling. Both g values are withheld and NOT proposed —
+    the two branch frequencies, which need no qubit, still are."""
+    from scqo.experiments import get
+    from scqo.experiments._punchout import G_NONE
+
+    roster = demo_components(tunable=True)
+    design = demo_design(roster)
+    vendor = InMemoryDevice(roster, demo_vendor_state(roster, design))
+    s = Session(SimulatedBackend(vendor), roster, design=design,
+                scqo_dir=tmp_path / "scqo", data_root=tmp_path / "data",
+                device_name="chipT", setup_name="sim", cooldown_id="cd1")
+    cls = get(name)
+    real_anchor = cls.anchor
+
+    def no_drive_freq(self, target, field):
+        if field == "drive_freq_hz":
+            raise ValueError(f"{target}.drive_freq_hz has no standing value")
+        return real_anchor(self, target, field)
+
+    monkeypatch.setattr(cls, "anchor", no_drive_freq)
+    out = s.run(name, {"targets": ["q0"]})
+    assert out.get("error") is None, out.get("error")
+    fit = out["fit"]["q0"]
+    assert fit["g_source"] == G_NONE
+    assert not np.isfinite(fit["g_hz"]) and not np.isfinite(fit["g_coeff"])
+    proposed = {(sg["entity"], sg["field"]) for sg in out["suggestions"]}
+    assert ("q0_res", "g_hz") not in proposed
+    assert ("q0_res", "g_coeff") not in proposed
+    assert ("q0_res", "f_bare_hz") in proposed   # the branches still land
+
+
+def test_the_two_coupling_routes_are_the_same_algebra(session):
+    """The punchout route and the flux fit are ONE relation seen twice: feed the
+    flux map's own sweet-spot pull (sweet_spot_res − f_bare) and its f_q_max
+    through the punchout formula and the flux fit's g must come back.
+
+    Deliberately not a cross-EXPERIMENT agreement test: the two offline
+    simulators plant independent truths (the punchout hardcodes an 8 MHz Lamb
+    shift, the flux simulator draws g from 70-100 MHz), so they cannot agree
+    here and forcing them to would test the placeholders, not the physics. The
+    real cross-route check ran on hardware — 0.2-2.4% on 5Q4C q1/q2/q3, inside
+    each route's own run-to-run scatter (recorded in the ledger fragment)."""
+    from scqo.experiments._transmon_estimate import g_coeff_from_g, g_hz_from_pull
+
+    out = session.run("resonator_spectroscopy_flux", {"targets": ["q0"]},
+                      update="none")
+    assert out.get("error") is None, out.get("error")
+    fit = out["fit"]["q0"]
+    pull = fit["sweet_spot_res_hz"] - fit["f_bare_hz"]
+    implied = g_hz_from_pull(pull, fit["f_bare_hz"], fit["f_q_max_hz"])
+    assert implied == pytest.approx(fit["g_hz"], rel=1e-6)
+    assert g_coeff_from_g(implied, fit["f_q_max_hz"],
+                          fit["f_bare_hz"]) == pytest.approx(fit["g_coeff"])
+
+
+def test_flux_map_projects_a_detuned_park_up_to_the_arch_top(tmp_path):
+    """drive_freq_hz is the qubit AT THE PARKED FLUX. Parked off the sweet spot
+    with a stored arch, f_q_max is projected up and the provenance tag says so;
+    with no stored arch the parked-at-the-sweet-spot assumption stands, tagged
+    plainly."""
+    from scqo.experiments.resonator_spectroscopy_flux import (
+        F_Q_MAX_DRIVE,
+        F_Q_MAX_DRIVE_ARCH,
+    )
+
+    roster = demo_components(tunable=True)
+    design = demo_design(roster)
+    vendor = InMemoryDevice(roster, demo_vendor_state(roster, design))
+    s = Session(SimulatedBackend(vendor), roster, design=design,
+                scqo_dir=tmp_path / "scqo", data_root=tmp_path / "data",
+                device_name="chipT", setup_name="sim", cooldown_id="cd1")
+
+    # no stored arch yet -> the standing drive frequency is taken AS the top
+    plain = s.run("resonator_spectroscopy_flux", {"targets": ["q0"]}, update="none")
+    assert plain["fit"]["q0"]["f_q_max_source"] == F_Q_MAX_DRIVE
+    f_q_max_plain = plain["fit"]["q0"]["f_q_max_hz"]
+
+    # store an arch whose sweet spot is a sixth of a period from the park
+    idle = float(s.device.channel("q0", "flux").idle_flux)
+    s.set_values({"q0_z.flux_offset": idle + 0.1, "q0_z.flux_per_phi0": 0.6})
+    detuned = s.run("resonator_spectroscopy_flux", {"targets": ["q0"]}, update="none")
+    fit = detuned["fit"]["q0"]
+    assert fit["f_q_max_source"] == F_Q_MAX_DRIVE_ARCH
+    # projecting UP the arch: the top is above the parked frequency
+    assert fit["f_q_max_hz"] > f_q_max_plain
 
 
 def test_flux_map_design_g_seed_rescales_to_the_chip_frequencies(tmp_path):
@@ -316,11 +430,14 @@ def test_flux_map_proposes_dispersive_physics_when_provenance_tag_is_stripped(se
 def test_punchout_writes_the_operating_point_and_both_branches(session, name):
     """A punchout proposes the operating point on the readout CHANNEL and the
     physics the same sweep measured on the RESONATOR mode: the low-power dressed
-    dip and the high-power bare one. Both mechanisms (fast amplitude sweep,
-    chain-stepped) are one measurement and must agree on what they write."""
+    dip, the high-power bare one, and — because the standing drive frequency
+    turns their gap into a coupling — g_hz with its geometry-constant twin
+    g_coeff. Both mechanisms (fast amplitude sweep, chain-stepped) are one
+    measurement and must agree on what they write."""
     assert _suggest(session, name) == {
         ("q0_ro", "readout_power_dbm"), ("q0_ro", "readout_freq_hz"),
-        ("q0_res", "f_bare_hz"), ("q0_res", "f_dress0_hz")}
+        ("q0_res", "f_bare_hz"), ("q0_res", "f_dress0_hz"),
+        ("q0_res", "g_hz"), ("q0_res", "g_coeff")}
 
 
 @pytest.mark.parametrize("name", ["resonator_spectroscopy_power_amp",

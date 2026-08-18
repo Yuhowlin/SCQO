@@ -27,7 +27,13 @@ from pydantic import Field
 from .._scqat import per_qubit_results
 from ..contract import DatasetContract
 from ..experiment import FACT_DESIGN, FACT_MEASURED
-from ._transmon_estimate import DEFAULT_GAP_DELTA_HZ, f_q_max_hz_from_resistance
+from ._transmon_estimate import (
+    DEFAULT_GAP_DELTA_HZ,
+    f_q_max_hz_from_parked,
+    f_q_max_hz_from_resistance,
+    g_coeff_from_g,
+    g_hz_from_coeff,
+)
 from ._capabilities.detuning import (
     ReadoutDetuningSweepParameters,
     readout_detuning_sweep,
@@ -38,6 +44,7 @@ from ._capabilities.flux import (
     flux_anchor_v,
     flux_sweep,
     foreign_flux_source,
+    standing_flux_v,
 )
 from ._sim import stable_seed
 from ..parameters import AveragingParameters, TargetSelection
@@ -98,6 +105,7 @@ class ResonatorSpectroscopyFluxParameters(
 #: where the dispersive fit's f_q_max came from, recorded per target in ``fit``.
 #: Only a MEASURED origin makes the fitted f_r0/g physics — see :func:`_f_q_max_hz`.
 F_Q_MAX_DRIVE = "drive_freq"   # the target's standing drive_freq_hz (arch-top proxy)
+F_Q_MAX_DRIVE_ARCH = "drive_freq_arch"  # ...corrected to the top through a STORED arch
 F_Q_MAX_RESISTANCE = "junction_resistance"  # predicted from the fab's R_n
 F_Q_MAX_DESIGN = "design"      # the datasheet's f_q_max_hz
 F_Q_MAX_ASSUMED = "assumed"    # nothing known — the estimator's placeholder heuristic
@@ -124,6 +132,60 @@ _F_BARE_WARNING = (
 )
 
 
+def _actual_resonator_hz(experiment, res_entity: str,
+                         target: str) -> float | None:
+    """The chip's resonator frequency for a coupling calculation, or None.
+
+    MEASURED ``f_bare_hz`` first (the uncoupled mode the coupling formula wants),
+    then measured ``f_dress0_hz``, then the standing ``readout_freq_hz``. The
+    three differ by the Lamb shift, ~0.1% under the square root that consumes
+    this, so the ordering is a preference and not a correctness requirement.
+    """
+    if experiment.physical is not None:
+        for field in ("f_bare_hz", "f_dress0_hz"):
+            stored = experiment.physical.get(res_entity, field)
+            if stored is not None:
+                return float(stored)
+    try:
+        return float(experiment.anchor(target, "readout_freq_hz"))
+    except (ValueError, KeyError, AttributeError):
+        return None
+
+
+def _arch_top_from_parked(experiment, target: str,
+                          f_q_parked_hz: float) -> tuple[float, str]:
+    """Project a parked qubit frequency to the arch TOP through a STORED arch.
+
+    ``drive_freq_hz`` is the qubit at whatever flux the line is parked at; only at
+    the sweet spot is it ``f_q_max``. When a previous map stored ``flux_offset``
+    and ``flux_per_phi0`` on the flux channel, the standing ``idle_flux`` says how
+    far off the sweet spot we are and the arch inverts exactly
+    (:func:`._transmon_estimate.f_q_max_hz_from_parked`).
+
+    Degrades to the uncorrected value (tag ``drive_freq``) whenever the arch is
+    not stored, the idle bias is unreadable, or the projection refuses (parked far
+    down the arch, where inverting amplifies every error) — the parked-at-the-
+    sweet-spot assumption is then explicit in the tag rather than silent.
+    """
+    offset = experiment.fact(target, "flux_offset", None)
+    period = experiment.fact(target, "flux_per_phi0", None)
+    # standing_flux_v, NOT flux_anchor_v: this probe sweeps in the ABSOLUTE frame,
+    # where flux_anchor_v is the window ORIGIN and returns a hardcoded 0.0 — which
+    # would read as "parked at 0 V" and invent a huge bogus correction.
+    idle = standing_flux_v(experiment, target)
+    if offset is None or period is None or idle is None:
+        return f_q_parked_hz, F_Q_MAX_DRIVE
+    ec = experiment.fact(target, "ec_hz", _DEFAULT_EC_HZ)
+    try:
+        corrected = f_q_max_hz_from_parked(
+            f_q_parked_hz, ec, float(idle), float(offset), float(period))
+    except ValueError:
+        return f_q_parked_hz, F_Q_MAX_DRIVE
+    if not (np.isfinite(corrected) and corrected > 0.0):
+        return f_q_parked_hz, F_Q_MAX_DRIVE
+    return float(corrected), F_Q_MAX_DRIVE_ARCH
+
+
 def _f_q_max_hz(experiment, target: str) -> tuple[float | None, str]:
     """The arch-top qubit frequency to hold FIXED in the dispersive fit, and where
     it came from.
@@ -138,9 +200,15 @@ def _f_q_max_hz(experiment, target: str) -> tuple[float | None, str]:
 
     Precedence, best first:
 
-    1. the target's standing ``drive_freq_hz`` — the arch top exactly while the qubit
-       is parked at its sweet spot; the same proxy, and the same reason,
-       ``qubit_spectroscopy_cryoscope`` uses for its arch curvature;
+    1. the target's standing ``drive_freq_hz`` — the qubit frequency AT THE PARKED
+       FLUX, which is the arch top exactly while the qubit sits at its sweet spot;
+       the same proxy, and the same reason, ``qubit_spectroscopy_cryoscope`` uses
+       for its arch curvature. When a PREVIOUS map already stored the arch
+       (``flux_offset`` + ``flux_per_phi0``), :func:`_arch_top_from_parked` removes
+       that assumption by projecting the parked frequency back to the top and the
+       tag becomes ``drive_freq_arch``; at the sweet spot the correction is exactly
+       nothing (the 5Q4C qubits park within 0.5 mV of theirs, so it is a guard for
+       a deliberately detuned park rather than a numeric fix);
     2. the fab's ``junction_resistance_ohm`` through Ambegaokar-Baratoff
        (:mod:`._transmon_estimate`) — as-FABRICATED, so it beats the datasheet
        whenever the qubit has not answered yet;
@@ -164,7 +232,7 @@ def _f_q_max_hz(experiment, target: str) -> tuple[float | None, str]:
         except (ValueError, KeyError, AttributeError):
             candidate = float("nan")
         if np.isfinite(candidate) and candidate > 0.0:
-            value, source = candidate, F_Q_MAX_DRIVE
+            value, source = _arch_top_from_parked(experiment, target, candidate)
     if value is None:
         value, source = _f_q_max_from_fabrication(experiment, target)
     if value is None:
@@ -218,30 +286,33 @@ def _g_init_hz(experiment, target: str, f_q_max_hz: float | None) -> float:
     then ``f_dress0_hz`` — the difference between the two resonator choices is
     the Lamb shift, 0.1% under the square root.
     """
+    res_entity = experiment.device.resonator_of(target)
+    # A stored/design g_coeff is the DIRECT route: it is frequency-independent by
+    # construction, so it needs no rescale — just evaluate it here. Preferred over
+    # reconstructing the same thing from a design g_hz plus design frequencies.
+    coeff, _coeff_tier = experiment.fact_sourced(target, "g_coeff", None)
+    if coeff is not None and np.isfinite(coeff) and coeff > 0.0:
+        f_r_now = _actual_resonator_hz(experiment, res_entity, target)
+        if (f_q_max_hz is not None and f_r_now is not None
+                and np.isfinite(f_q_max_hz) and f_q_max_hz > 0.0):
+            try:
+                return g_hz_from_coeff(float(coeff), f_q_max_hz, f_r_now)
+            except ValueError:
+                pass  # fall through to the g_hz tiers
+
     value, tier = experiment.fact_sourced(target, "g_hz", None)
     if value is None:
         return _DEFAULT_G_INIT_HZ
     if tier != FACT_DESIGN:
         return float(value)
 
-    res_entity = experiment.device.resonator_of(target)
     f_q_design = experiment.design.get(target, "f_q_max_hz")
     f_r_design = None
     for field in ("f_bare_hz", "f_dress0_hz"):
         f_r_design = experiment.design.get(res_entity, field)
         if f_r_design is not None:
             break
-    f_r_actual = None
-    if experiment.physical is not None:
-        for field in ("f_bare_hz", "f_dress0_hz"):
-            f_r_actual = experiment.physical.get(res_entity, field)
-            if f_r_actual is not None:
-                break
-    if f_r_actual is None:
-        try:
-            f_r_actual = float(experiment.anchor(target, "readout_freq_hz"))
-        except (ValueError, KeyError, AttributeError):
-            f_r_actual = None
+    f_r_actual = _actual_resonator_hz(experiment, res_entity, target)
 
     inputs = (f_q_max_hz, f_r_actual, f_q_design, f_r_design)
     if any(v is None or not np.isfinite(v) or v <= 0.0 for v in inputs):
@@ -470,6 +541,15 @@ class ResonatorSpectroscopyFlux(Experiment):
                 # the fitted f_bare_hz/g_hz physics (see update()).
                 fit["f_q_max_source"] = sources.get(qubit, F_Q_MAX_ASSUMED)
                 fit["f_bare_source"] = bare_sources.get(qubit, F_BARE_FREE)
+            # The frequency-INDEPENDENT twin of the fitted g: the geometry
+            # constant g / sqrt(f_q_max · f_bare). g_hz goes stale the moment the
+            # qubit is re-tuned; this does not, which is why both are stored.
+            if "g_hz" in fit and "f_q_max_hz" in fit and "f_bare_hz" in fit:
+                try:
+                    fit["g_coeff"] = g_coeff_from_g(
+                        fit["g_hz"], fit["f_q_max_hz"], fit["f_bare_hz"])
+                except ValueError:
+                    pass  # a degenerate fit; g_coeff is simply not reported
             result.fit[qubit] = fit
             result.outcomes[qubit] = Outcome.SUCCESSFUL if bool(disp["success"]) else Outcome.FAILED
         return result
@@ -533,6 +613,10 @@ class ResonatorSpectroscopyFlux(Experiment):
                     res_view.f_bare_hz = fit["f_bare_hz"]
                 if "g_hz" in fit:
                     res_view.g_hz = fit["g_hz"]
+                # ...and its frequency-independent twin, under the same gate: it
+                # is the same measurement expressed as the geometry constant.
+                if "g_coeff" in fit and np.isfinite(fit["g_coeff"]):
+                    res_view.g_coeff = fit["g_coeff"]
 
     def probe(self):  # pragma: no cover - driver half
         raise NotImplementedError("a driver backend supplies probe()")

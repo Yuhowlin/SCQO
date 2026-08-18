@@ -277,11 +277,25 @@ MODES: dict[str, ModeKind] = {
                       "coupling/intrinsic split waits for a complex-S21 "
                       "estimator.", role="fact", design_ok=True),
             "g_hz": FieldSpec(
-                "Hz", "Qubit-resonator coupling from the dispersive fit. "
-                      "g ∝ sqrt(f_q·f_r) with a geometry-constant coefficient, "
-                      "so a DESIGN value is only valid at the design "
-                      "frequencies — the flux fit rescales its seed to the "
-                      "chip's actual ones.",
+                "Hz", "Qubit-resonator coupling AT THE CURRENT OPERATING POINT "
+                      "(the qubit frequency it was measured at). Written by the "
+                      "dispersive flux fit and by a punchout that knows the "
+                      "drive frequency. g = g_coeff sqrt(f_q f_bare), so this "
+                      "value goes stale when the qubit is re-tuned while "
+                      "g_coeff does not — a DESIGN g_hz likewise holds only at "
+                      "the design frequencies, and the flux fit rescales its "
+                      "seed to the chip's actual ones.",
+                role="fact", design_ok=True),
+            "g_coeff": FieldSpec(
+                "", "Qubit-resonator coupling as a DIMENSIONLESS geometry "
+                    "constant: g_coeff = g_hz / sqrt(f_q f_bare_hz), the "
+                    "capacitance-ratio factor. Unlike g_hz this survives "
+                    "re-tuning, re-parking and cooldowns, so it is what a "
+                    "datasheet designs and what predicts g at a new operating "
+                    "point (g = g_coeff sqrt(f_q f_bare)). VALID BETWEEN "
+                    "transmon-regime operating points only — do NOT extrapolate "
+                    "it down a flux arch (measured and refuted 2026-08-18; see "
+                    "experiments/_transmon_estimate.py).",
                 role="fact", design_ok=True),
             "chi_hz": FieldSpec(
                 "Hz", "Dispersive shift per excitation; "
