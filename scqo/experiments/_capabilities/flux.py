@@ -179,3 +179,29 @@ def flux_anchor_v(experiment: "Experiment", target: str) -> float:
         return 0.0
     source = getattr(experiment.params, "flux_component", None) or target
     return experiment.anchor(source, "idle_flux")
+
+
+def standing_flux_v(experiment: "Experiment", target: str) -> float | None:
+    """The bias the target is PARKED at right now, or ``None`` when it has none.
+
+    Record-only provenance for experiments that do NOT sweep flux but whose
+    result depends on where the qubit sits — a punchout's dressed resonator
+    frequency is only meaningful together with the flux it was measured at, and
+    the same punchout re-run after a flux map re-parks ``idle_flux`` reports a
+    different one.
+
+    NOT :func:`flux_anchor_v`, which answers a different question: that one is the
+    ORIGIN OF A SWEPT WINDOW and returns a hardcoded ``0.0`` for Parameters that
+    subclass neither flux mixin — a lie about where a non-sweeping experiment ran.
+
+    Tolerant where :meth:`~scqo.experiment.Experiment.anchor` is not. ``anchor``
+    raises when a knob has neither a standing value nor a design fallback, and on
+    a FIXED-frequency transmon ``idle_flux`` does not resolve at all (no flux
+    channel exists) — both are ordinary states for a punchout, which runs happily
+    on fixed-frequency qubits. Either way the honest answer is "no standing flux",
+    not a failed run.
+    """
+    try:
+        return float(experiment.anchor(target, "idle_flux"))
+    except (ValueError, KeyError, AttributeError):
+        return None

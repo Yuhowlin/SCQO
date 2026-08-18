@@ -21,6 +21,7 @@ from pydantic import Field, model_validator
 
 from .._scqat import per_qubit_results
 from ..contract import DatasetContract
+from ._punchout import branch_fit, propose_branches
 from ._sim import stable_seed
 from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
@@ -66,7 +67,10 @@ class ResonatorSpectroscopyPowerChainParameters(TargetSelection, AveragingParame
 
 class ResonatorSpectroscopyPowerChainResult(Result):
     """``fit[qubit]``: ``readout_power_dbm`` (new), ``readout_freq_hz`` (new),
-    ``optimal_power_dbm``, ``frequency_shift_hz``, plus the old values."""
+    ``optimal_power_dbm``, ``frequency_shift_hz``, plus the old values; and the
+    punchout physics ``f_bare_hz`` / ``f_dress0_hz`` (proposed on the resonator
+    mode) with the record-only ``lamb_shift_hz``, ``branch_success`` and
+    ``old_idle_flux`` — the flux the dressed frequency was measured at."""
 
 
 @register
@@ -82,7 +86,11 @@ class ResonatorSpectroscopyPowerChain(Experiment):
         "one compile+run cycle per point; wide absolute range; cross-backend comparable). "
         "Absolute dBm axis; proposes readout_power_dbm + readout_freq_hz. Use for a calibrated "
         "wide sweep. (The sibling resonator_spectroscopy_power_amp is the fast amplitude-sweep "
-        "version.)"
+        "version.) Also extracts the punchout's two branches as resonator-mode facts: the "
+        "low-power dip is the DRESSED resonator (f_dress0_hz, qubit in |0>) and the high-power "
+        "one, where the qubit saturates, is the BARE resonator (f_bare_hz) — the only direct "
+        "measurement of f_bare_hz there is, and what resonator_spectroscopy_flux pins to make "
+        "its coupling g quantitative."
     )
     Parameters: ClassVar[type] = ResonatorSpectroscopyPowerChainParameters
     Result: ClassVar[type] = ResonatorSpectroscopyPowerChainResult
@@ -200,11 +208,18 @@ class ResonatorSpectroscopyPowerChain(Experiment):
         q_data = np.empty_like(i_data)
         for k in range(len(targets)):
             dressed = truth_rng.uniform(-0.1, 0.1) * span  # dispersive dip position
-            knee_dbm = top - truth_rng.uniform(8.0, 12.0)  # onset, relative to the top
-            # above the knee the dip walks DOWN toward the bare cavity and washes out
-            walk = max(0.0, p - knee_dbm)
-            center = dressed - walk * 0.8e6  # ~-0.8 MHz per dB past the knee
-            depth = 0.8 / (1.0 + walk / 4.0)
+            knee_dbm = top - truth_rng.uniform(12.0, 16.0)  # onset, well inside the window
+            # A punchout has TWO asymptotes, not a ramp: below the knee the qubit
+            # dresses the resonator (dip at `dressed`), far above it the qubit is
+            # saturated and the dip has settled on the BARE cavity, `lamb` lower.
+            # Both come from truth_rng, which is power-INDEPENDENT, so every
+            # per-point call of this simulator sees the same resonator.
+            lamb = 8.0e6  # Lamb shift g^2/Delta, dressed above bare
+            width = 1.0   # dB; saturation is sharp, so a bare PLATEAU is reached
+            center = dressed - lamb * 0.5 * (1.0 + np.tanh((p - knee_dbm) / width))
+            # washes out with drive, but saturating — the bare plateau must stay
+            # fittable or the points that define f_bare get rejected as outliers
+            depth = 0.8 - 0.3 * 0.5 * (1.0 + np.tanh((p - knee_dbm) / width))
             magnitude = 1.0 - depth / (1.0 + ((detuning - center) / kappa) ** 2)
             # the return signal still scales with the DELIVERED power (the chain
             # attenuates the drive; the receive path is fixed)
@@ -251,6 +266,10 @@ class ResonatorSpectroscopyPowerChain(Experiment):
                 "frequency_shift_hz": shift,
                 "old_readout_power_dbm": old_power[qubit],
                 "old_readout_freq_hz": old_freqs[qubit],
+                # The two punchout branches, under their catalog field names.
+                # lamb_shift_hz is record-only: it is f_dress0 - f_bare, and a
+                # quantity derivable from two stored facts is never stored twice.
+                **branch_fit(self, r, qubit),
             }
             ok = bool(r["optimal_success"]) and np.isfinite(optimal_dbm) and np.isfinite(shift)
             result.outcomes[qubit] = Outcome.SUCCESSFUL if ok else Outcome.FAILED
@@ -306,6 +325,9 @@ class ResonatorSpectroscopyPowerChain(Experiment):
                 view = self.device.channel(qubit, "readout")
                 view.readout_power_dbm = fit["readout_power_dbm"]
                 view.readout_freq_hz = fit["readout_freq_hz"]
+                # ...and the physics the same sweep measured: the bare and
+                # dressed resonator frequencies on the RESONATOR mode.
+                propose_branches(self, qubit, fit)
 
     def probe(self):  # pragma: no cover - driver half
         raise NotImplementedError("a driver backend supplies probe()")

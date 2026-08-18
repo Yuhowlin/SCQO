@@ -260,6 +260,62 @@ def test_flux_map_proposes_dispersive_physics_when_provenance_tag_is_stripped(se
     assert ("q0_res", "f_bare_hz") in fields and ("q0_res", "g_hz") in fields
 
 
+@pytest.mark.parametrize("name", ["resonator_spectroscopy_power_amp",
+                                  "resonator_spectroscopy_power_chain"])
+def test_punchout_writes_the_operating_point_and_both_branches(session, name):
+    """A punchout proposes the operating point on the readout CHANNEL and the
+    physics the same sweep measured on the RESONATOR mode: the low-power dressed
+    dip and the high-power bare one. Both mechanisms (fast amplitude sweep,
+    chain-stepped) are one measurement and must agree on what they write."""
+    assert _suggest(session, name) == {
+        ("q0_ro", "readout_power_dbm"), ("q0_ro", "readout_freq_hz"),
+        ("q0_res", "f_bare_hz"), ("q0_res", "f_dress0_hz")}
+
+
+@pytest.mark.parametrize("name", ["resonator_spectroscopy_power_amp",
+                                  "resonator_spectroscopy_power_chain"])
+def test_punchout_branch_physics(session, name):
+    """The dressed dip sits ABOVE the bare one for a qubit below its resonator,
+    and their gap is the Lamb shift g^2/Delta. The simulator plants 8 MHz."""
+    out = session.run(name, {"targets": ["q0"]}, update="none")
+    assert out.get("error") is None, out.get("error")
+    fit = out["fit"]["q0"]
+    assert fit["branch_success"]
+    assert fit["f_dress0_hz"] > fit["f_bare_hz"]
+    assert fit["lamb_shift_hz"] == pytest.approx(
+        fit["f_dress0_hz"] - fit["f_bare_hz"])
+    assert fit["lamb_shift_hz"] == pytest.approx(8.0e6, rel=0.1)
+    # the flux the dressed frequency was measured AT — record-only provenance,
+    # and what distinguishes a punchout before a flux map from one after it
+    assert "old_idle_flux" in fit
+
+
+def test_punchout_feeds_the_flux_map_a_measured_bare_frequency(tmp_path):
+    """THE LOOP this feature exists for: punchout measures f_bare_hz directly (the
+    high-power branch), and once accepted the flux map PINS it instead of fitting
+    it free — which is what makes the flux map's g quantitative."""
+    roster = demo_components(tunable=True)
+    design = demo_design(roster)
+    vendor = InMemoryDevice(roster, demo_vendor_state(roster, design))
+    s = Session(SimulatedBackend(vendor), roster, design=design,
+                scqo_dir=tmp_path / "scqo", data_root=tmp_path / "data",
+                device_name="chipT", setup_name="sim", cooldown_id="cd1")
+
+    # 1. punchout, accepting what it proposes (f_bare_hz among it)
+    punch = s.run("resonator_spectroscopy_power_amp", {"targets": ["q0"]},
+                  update="apply")
+    assert punch.get("error") is None, punch.get("error")
+    measured_bare = s.physical.get("q0_res", "f_bare_hz")
+    assert measured_bare is not None, "punchout did not land f_bare_hz"
+
+    # 2. the flux map now finds a MEASURED bare frequency and pins it
+    flux = s.run("resonator_spectroscopy_flux", {"targets": ["q0"]}, update="none")
+    assert flux.get("error") is None, flux.get("error")
+    fit = flux["fit"]["q0"]
+    assert fit["f_bare_source"] == "measured"
+    assert fit["f_bare_hz"] == pytest.approx(measured_bare)  # held, not re-fitted
+
+
 def test_flux_map_pins_a_measured_bare_frequency(tmp_path):
     """A STORED f_bare_hz is pinned as a fit constant — that is what breaks the
     f_r0/g degeneracy — and is therefore NOT proposed back: it was an input, not a
