@@ -128,10 +128,10 @@ def test_preview_invalid_params_reports_like_run(make_session, tmp_path):
     sess = make_session(RenderingBackend)
     result = sess.preview(
         "resonator_spectroscopy",
-        {"targets": ["q0"], "num_points": "not_a_number"},
+        {"targets": ["q0"], "num_readout_freq_points": "not_a_number"},
         out_dir=tmp_path / "prev")
     assert result.get("error")
-    assert "num_points" in result["error"]
+    assert "num_readout_freq_points" in result["error"]
     assert not (tmp_path / "prev").exists()
 
 

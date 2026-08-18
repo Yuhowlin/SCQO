@@ -300,11 +300,11 @@ def test_failed_run_is_persisted_and_findable(tmp_path):
 
 def test_load_run_and_open_dataset(tmp_path):
     sess = _session(tmp_path)
-    r = sess.run("resonator_spectroscopy", {"targets": ["q0", "q1"], "num_points": 51})
+    r = sess.run("resonator_spectroscopy", {"targets": ["q0", "q1"], "num_readout_freq_points": 51})
 
     loaded = sess.load_run(r["run_id"])
     assert loaded["record"]["experiment"] == "resonator_spectroscopy"
-    assert loaded["parameters"]["num_points"] == 51
+    assert loaded["parameters"]["num_readout_freq_points"] == 51
     assert loaded["result"]["outcomes"] == r["outcomes"]
     assert loaded["figures"]  # PNG paths, ready for a viewer
 

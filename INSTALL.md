@@ -224,8 +224,9 @@ so the command line keeps the last word:
 ```toml
 # Standing per-experiment defaults. Precedence: code defaults < this file < CLI/caller.
 [resonator_spectroscopy]
-frequency_span_hz = 15e6
-num_points = 201
+start_readout_detuning_hz = -7.5e6
+end_readout_detuning_hz = 7.5e6
+num_readout_freq_points = 201
 
 [single_shot_readout]
 qubits = ["q1"]          # even required knobs may get a standing default

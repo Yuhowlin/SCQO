@@ -35,23 +35,24 @@ def _session(tmp_path=None, **kwargs) -> Session:
 
 
 def test_run_merges_file_defaults(tmp_path):
-    sess = _session(tmp_path, parameter_defaults={"resonator_spectroscopy": {"num_points": 51}})
+    sess = _session(tmp_path, parameter_defaults={"resonator_spectroscopy": {"num_readout_freq_points": 51}})
     result = sess.run("resonator_spectroscopy", {"targets": ["q0"]})
     assert result["outcomes"]["q0"] == "successful"
     # the persisted parameters are the fully-resolved values actually used
-    assert sess.load_run(result["run_id"])["parameters"]["num_points"] == 51
+    assert sess.load_run(result["run_id"])["parameters"]["num_readout_freq_points"] == 51
 
 
 def test_caller_params_beat_file_defaults(tmp_path):
-    sess = _session(tmp_path, parameter_defaults={"resonator_spectroscopy": {"num_points": 51}})
-    result = sess.run("resonator_spectroscopy", {"targets": ["q0"], "num_points": 75})
-    assert sess.load_run(result["run_id"])["parameters"]["num_points"] == 75
+    sess = _session(tmp_path, parameter_defaults={"resonator_spectroscopy": {"num_readout_freq_points": 51}})
+    result = sess.run("resonator_spectroscopy", {"targets": ["q0"], "num_readout_freq_points": 75})
+    assert sess.load_run(result["run_id"])["parameters"]["num_readout_freq_points"] == 75
 
 
 def test_code_defaults_when_no_table(tmp_path):
     sess = _session(tmp_path, parameter_defaults={"qubit_ramsey": {"num_points": 51}})
     result = sess.run("resonator_spectroscopy", {"targets": ["q0"]})
-    assert sess.load_run(result["run_id"])["parameters"]["num_points"] == 101  # pydantic default
+    assert sess.load_run(result["run_id"])["parameters"][
+        "num_readout_freq_points"] == 101  # pydantic default
 
 
 def test_file_defaults_can_supply_required_targets():
@@ -100,13 +101,13 @@ def test_validation_failure_is_not_persisted(tmp_path):
 
 def test_catalog_overlays_effective_defaults():
     sess = _session(
-        parameter_defaults={"resonator_spectroscopy": {"num_points": 51, "targets": ["q1"], "bogus_key": 1}},
+        parameter_defaults={"resonator_spectroscopy": {"num_readout_freq_points": 51, "targets": ["q1"], "bogus_key": 1}},
         parameter_defaults_source="X:/parameters.toml",
     )
     entry = next(e for e in sess.catalog() if e["name"] == "resonator_spectroscopy")
     props = entry["parameters_schema"]["properties"]
-    assert props["num_points"]["default"] == 51
-    assert props["num_points"]["x-default-source"] == "X:/parameters.toml"
+    assert props["num_readout_freq_points"]["default"] == 51
+    assert props["num_readout_freq_points"]["x-default-source"] == "X:/parameters.toml"
     # a file-supplied required key is no longer required for THIS session's callers
     assert "targets" not in entry["parameters_schema"].get("required", [])
     assert props["targets"]["default"] == ["q1"]
@@ -115,8 +116,8 @@ def test_catalog_overlays_effective_defaults():
 
     # the raw registry and a defaults-free Session stay pristine (no cross-pollution)
     raw = next(e for e in registry.catalog() if e["name"] == "resonator_spectroscopy")
-    assert raw["parameters_schema"]["properties"]["num_points"]["default"] == 101
-    assert "x-default-source" not in raw["parameters_schema"]["properties"]["num_points"]
+    assert raw["parameters_schema"]["properties"]["num_readout_freq_points"]["default"] == 101
+    assert "x-default-source" not in raw["parameters_schema"]["properties"]["num_readout_freq_points"]
     assert "targets" in raw["parameters_schema"]["required"]
     plain = next(e for e in _session().catalog() if e["name"] == "resonator_spectroscopy")
-    assert plain["parameters_schema"]["properties"]["num_points"]["default"] == 101
+    assert plain["parameters_schema"]["properties"]["num_readout_freq_points"]["default"] == 101

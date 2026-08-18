@@ -16,6 +16,10 @@ from pydantic import Field
 
 from .._scqat import per_qubit_results
 from ..contract import DatasetContract
+from ._capabilities.detuning import (
+    ReadoutDetuningSweepParameters,
+    readout_detuning_sweep,
+)
 from ._depletion import DEPLETION_FACTOR_DESC, depletion_time_s
 from ._sim import stable_seed
 from ..parameters import AveragingParameters, TargetSelection
@@ -24,14 +28,16 @@ from ..experiment import Experiment
 from . import register
 
 
-class ResonatorSpectroscopyParameters(TargetSelection, AveragingParameters):
-    """Inputs for resonator spectroscopy."""
+class ResonatorSpectroscopyParameters(TargetSelection, AveragingParameters,
+                                      ReadoutDetuningSweepParameters):
+    """Inputs for resonator spectroscopy.
 
-    frequency_span_hz: float = Field(
-        20e6, gt=0, description="Total sweep width around the current "
-                                "readout frequency.")
-    num_points: int = Field(101, gt=1,
-                            description="Number of frequency points.")
+    The frequency window is the readout_detuning capability's
+    ``[start_readout_detuning_hz, end_readout_detuning_hz]`` pair, relative to
+    the target's current ``readout_freq_hz``; the mixin defaults ARE this
+    experiment's window.
+    """
+
     readout_amplitude: float | None = Field(
         None, gt=0, description="Optional readout amplitude override; None "
                                 "keeps the device value.")
@@ -76,21 +82,22 @@ class ResonatorSpectroscopy(Experiment):
     params: ResonatorSpectroscopyParameters
 
     def define_sweep(self) -> dict[str, np.ndarray]:
-        span = self.params.frequency_span_hz
-        return {"detuning_hz": np.linspace(-span / 2, span / 2,
-                                           self.params.num_points)}
+        return readout_detuning_sweep(self.params)
 
     def simulate(self, coords: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         detuning = coords["detuning_hz"]
         targets = self.params.targets
         rng = np.random.default_rng(
             stable_seed("resonator_spectroscopy", *targets))
-        span = float(detuning[-1] - detuning[0])
-        kappa = span / 15
+        width = float(detuning[-1] - detuning[0])
+        center = float(detuning[0] + detuning[-1]) / 2
+        kappa = width / 15
         i_data = np.empty((len(targets), detuning.size))
         q_data = np.empty_like(i_data)
         for k in range(len(targets)):
-            true_offset = rng.uniform(-0.15, 0.15) * span
+            # hidden truth, placed relative to the window MIDPOINT — an
+            # asymmetric window would otherwise silently re-center the dip
+            true_offset = center + rng.uniform(-0.15, 0.15) * width
             magnitude = 1.0 - 0.8 / (1.0 + ((detuning - true_offset)
                                             / kappa) ** 2)
             noise = 0.01

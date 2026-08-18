@@ -35,7 +35,7 @@ def test_bare_listing_names_and_footer():
     # counts computed from the entries, every capability + the none bucket
     assert lines[-2] == ("# capabilities: state_readout(0) flux(2) "
                          "qubit_reset(1) flux_pulse(0) amplitude(0) "
-                         "drive_detuning(0) none(1)")
+                         "drive_detuning(0) readout_detuning(0) none(1)")
     assert lines[-1] == ("# filter: scqo run --capability <name>    "
                          "detail: scqo run <name> --help")
     # the NAME columns respect the width (the two meta footer lines may wrap;
@@ -99,13 +99,18 @@ def test_real_catalog_flux_filter_matches_the_pinned_carriers():
     ]
 
 
-def test_real_catalog_none_bucket_is_the_resonator_trio():
+def test_real_catalog_none_bucket_is_empty_since_readout_detuning():
+    """The `none` filter still renders — an empty bucket is a legitimate
+    listing, not an error — and it IS empty: readout_detuning classified the
+    last three unclassified core experiments, which used to be this bucket.
+    Zero capabilities stays legal for a NEW experiment (registry.catalog's own
+    rule), so this pins today's registry, not a permanent property."""
     lines = _catalog_listing_lines(_core_entries(), capabilities=["none"])
-    assert lines[1:] == [
-        "resonator_spectroscopy",
-        "resonator_spectroscopy_power_amp",
-        "resonator_spectroscopy_power_chain",
-    ]
+    assert lines[1:] == []
+    entries = {e["name"]: e for e in _core_entries()}
+    for name in ("resonator_spectroscopy", "resonator_spectroscopy_power_amp",
+                 "resonator_spectroscopy_power_chain"):
+        assert entries[name]["capabilities"] == ["readout_detuning"], name
 
 
 def test_guard_refuses_experiment_name():

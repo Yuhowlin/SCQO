@@ -94,13 +94,14 @@ def _derived_capabilities(cls: type[Experiment]) -> list[str]:
         FluxPulseSweepParameters,
         FluxSweepParameters,
         QubitResetParameters,
+        ReadoutDetuningSweepParameters,
         StateReadoutParameters,
     )
 
     # Derivation order is fixed (tests pin the exact lists): the two original
     # capabilities first, then each later addition appended at the END so it
     # does not reshuffle every existing entry — qubit_reset, then flux_pulse,
-    # then amplitude, then drive_detuning.
+    # then amplitude, then drive_detuning, then readout_detuning.
     caps = []
     if issubclass(cls.Parameters, StateReadoutParameters):
         caps.append("state_readout")
@@ -117,11 +118,14 @@ def _derived_capabilities(cls: type[Experiment]) -> list[str]:
     # carriers also attach the absolute `digital_amp` axis
     if issubclass(cls.Parameters, AmplitudeSweepParameters):
         caps.append("amplitude")
-    # the swept drive-frequency window, Hz relative to the current drive
-    # frequency (the readout-side detuning sweeps are NOT carriers — their
-    # window is relative to readout_freq_hz)
+    # The swept frequency window in its two FRAMES — same axis, different
+    # origin, and an experiment could legitimately carry both (a drive x
+    # readout map), which is why the mixins are siblings and their field names
+    # carry the frame. See _capabilities/detuning.py.
     if issubclass(cls.Parameters, DriveDetuningSweepParameters):
         caps.append("drive_detuning")
+    if issubclass(cls.Parameters, ReadoutDetuningSweepParameters):
+        caps.append("readout_detuning")
     return caps
 
 

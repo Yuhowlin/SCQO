@@ -27,11 +27,11 @@ from pydantic import Field
 from .._scqat import per_qubit_results
 from ..contract import DatasetContract
 from ._capabilities.detuning import (
-    END_DETUNING_DESC,
+    END_DRIVE_DETUNING_DESC,
     NUM_FREQ_POINTS_DESC,
-    START_DETUNING_DESC,
+    START_DRIVE_DETUNING_DESC,
     DriveDetuningSweepParameters,
-    detuning_sweep,
+    drive_detuning_sweep,
 )
 from ._capabilities.flux import (
     NUM_FLUX_DESC,
@@ -60,9 +60,9 @@ class QubitSpectroscopyFluxPulseParameters(
     """
 
     # capability defaults widened: the arch spans hundreds of MHz across a flux map
-    start_detuning_hz: float = Field(-200e6, description=START_DETUNING_DESC)
-    end_detuning_hz: float = Field(200e6, description=END_DETUNING_DESC)
-    num_freq_points: int = Field(101, gt=1, description=NUM_FREQ_POINTS_DESC)
+    start_drive_detuning_hz: float = Field(-200e6, description=START_DRIVE_DETUNING_DESC)
+    end_drive_detuning_hz: float = Field(200e6, description=END_DRIVE_DETUNING_DESC)
+    num_drive_freq_points: int = Field(101, gt=1, description=NUM_FREQ_POINTS_DESC)
     # capability default narrowed: the arch fit needs >= 5 good slices
     num_flux_points: int = Field(21, gt=4, description=NUM_FLUX_DESC + " (the arch fit needs >= 5 good slices).")
     ec_ghz: float = Field(0.2, gt=0, description="Charging energy (GHz) held fixed in the arch model.")
@@ -125,7 +125,7 @@ class QubitSpectroscopyFluxPulse(Experiment):
     params: QubitSpectroscopyFluxPulseParameters
 
     def define_sweep(self) -> dict[str, np.ndarray]:
-        return {**flux_sweep(self.params), **detuning_sweep(self.params)}
+        return {**flux_sweep(self.params), **drive_detuning_sweep(self.params)}
 
     def run(self) -> Result:
         """Boundary-recorded drive-chain set -> acquire -> revert (shared helper).

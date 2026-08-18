@@ -24,7 +24,8 @@ from scqo.experiments._capabilities import (
     ACTIVE_RESET_ROUNDS_DESC,
     AMP_AXIS,
     DETUNING_AXIS,
-    END_DETUNING_DESC,
+    END_DRIVE_DETUNING_DESC,
+    END_READOUT_DETUNING_DESC,
     FLUX_AXIS,
     MAX_AMP_FACTOR_DESC,
     MAX_FLUX_DESC,
@@ -37,10 +38,12 @@ from scqo.experiments._capabilities import (
     NUM_FLUX_DESC,
     NUM_FREQ_POINTS_DESC,
     RESET_METHOD_DESC,
-    START_DETUNING_DESC,
+    START_DRIVE_DETUNING_DESC,
+    START_READOUT_DETUNING_DESC,
     THERMALIZATION_TIME_DESC,
     AmplitudeSweepParameters,
     DriveDetuningSweepParameters,
+    ReadoutDetuningSweepParameters,
     FluxComponentParameters,
     QubitResetParameters,
     StateReadoutParameters,
@@ -55,6 +58,25 @@ from scqo.testing import SimulatedBackend, demo_device
 def _catalog_by_name() -> dict[str, dict]:
     ensure_demo_experiments()
     return {entry["name"]: entry for entry in catalog()}
+
+
+def _core_catalog() -> dict[str, dict]:
+    """``_catalog_by_name`` restricted to the EXPORTED core classes.
+
+    Any test that asserts an exact CARRIER SET must use this: other test
+    modules ``@register`` deliberately-broken fixtures, and
+    ``tests/test_datastore.py`` builds two of them (``broken_resonator_spectroscopy``,
+    ``update_explodes``) by SUBCLASSING ResonatorSpectroscopy — so they inherit
+    its Parameters mixins and derive its capabilities for real. The live
+    registry then holds them or not depending on test ORDER. Same
+    selection-by-type as :func:`test_every_experiment_is_pinned_here`."""
+    from scqo import experiments as registry
+    from scqo.experiment import Experiment
+
+    core = {obj.name for obj in (getattr(registry, n) for n in registry.__all__)
+            if isinstance(obj, type) and issubclass(obj, Experiment)}
+    return {name: entry for name, entry in _catalog_by_name().items()
+            if name in core}
 
 
 #: derivation order is fixed: state_readout, then flux, then qubit_reset, then
@@ -96,7 +118,7 @@ EXPECTED_CAPABILITIES = {
     # the initialization. Both keep the depletion-only wait as their timebase.
     "qubit_parity_switch_continuous": ["state_readout"],
     "qubit_parity_switch_discrete": ["state_readout"],
-    "resonator_spectroscopy_flux": ["flux"],
+    "resonator_spectroscopy_flux": ["flux", "readout_detuning"],
     "qubit_spectroscopy_flux_pulse": ["flux", "flux_pulse", "drive_detuning"],
     # reset without discrimination: these pulse the qubit and read it out, so
     # shot independence needs a reset, but their probes do not return `state`
@@ -121,7 +143,7 @@ EXPECTED_CAPABILITIES = {
     "qubit_t1_ade": ["qubit_reset"],
     "qubit_t1_bayesian": ["qubit_reset"],
     "readout_power": ["qubit_reset", "amplitude"],
-    "readout_frequency": ["qubit_reset"],
+    "readout_frequency": ["qubit_reset", "readout_detuning"],
     "qubit_spectroscopy": ["qubit_reset", "drive_detuning"],
     "qubit_spectroscopy_overlap": ["qubit_reset", "drive_detuning"],
     "qubit_tomography": ["qubit_reset"],
@@ -130,9 +152,9 @@ EXPECTED_CAPABILITIES = {
     # explicitly capability-less: no qubit pulse at all, so nothing to reset and
     # no state to discriminate. Zero capabilities is a legitimate state, not an
     # error.
-    "resonator_spectroscopy": [],
-    "resonator_spectroscopy_power_amp": [],
-    "resonator_spectroscopy_power_chain": [],
+    "resonator_spectroscopy": ["readout_detuning"],
+    "resonator_spectroscopy_power_amp": ["readout_detuning"],
+    "resonator_spectroscopy_power_chain": ["readout_detuning"],
 }
 
 
@@ -178,7 +200,7 @@ def test_capability_summaries_track_the_derived_set():
 
     assert list(CAPABILITY_SUMMARIES) == [
         "state_readout", "flux", "qubit_reset", "flux_pulse", "amplitude",
-        "drive_detuning"]
+        "drive_detuning", "readout_detuning"]
     assert set(CAPABILITY_SUMMARIES) == {
         cap for caps in EXPECTED_CAPABILITIES.values() for cap in caps}
     # one short plain line each: no reST markup, no scraped "Mixin:" prefix
@@ -237,11 +259,20 @@ def test_canonical_field_text_never_drifts():
         if "drive_detuning" in entry["capabilities"]:
             # carriers may APPEND an origin refinement (the cryoscope's parked
             # drive), so the check is startswith — the shared wording still pins
-            assert props["start_detuning_hz"]["description"].startswith(
-                START_DETUNING_DESC), name
-            assert props["end_detuning_hz"]["description"].startswith(
-                END_DETUNING_DESC), name
-            assert props["num_freq_points"]["description"].startswith(
+            assert props["start_drive_detuning_hz"]["description"].startswith(
+                START_DRIVE_DETUNING_DESC), name
+            assert props["end_drive_detuning_hz"]["description"].startswith(
+                END_DRIVE_DETUNING_DESC), name
+            assert props["num_drive_freq_points"]["description"].startswith(
+                NUM_FREQ_POINTS_DESC), name
+        if "readout_detuning" in entry["capabilities"]:
+            # same startswith rule (readout_frequency appends its chi-scale
+            # note to the point count)
+            assert props["start_readout_detuning_hz"]["description"].startswith(
+                START_READOUT_DETUNING_DESC), name
+            assert props["end_readout_detuning_hz"]["description"].startswith(
+                END_READOUT_DETUNING_DESC), name
+            assert props["num_readout_freq_points"]["description"].startswith(
                 NUM_FREQ_POINTS_DESC), name
 
 
@@ -385,8 +416,8 @@ def test_resonator_spectroscopy_proposes_the_depletion_wait():
     roster, design, vendor = demo_device()
     sess = Session(SimulatedBackend(vendor), roster, design=design)
     out = sess.run("resonator_spectroscopy",
-                   {"targets": ["q0"], "num_averages": 30, "num_points": 51,
-                    "depletion_factor": 4.0})
+                   {"targets": ["q0"], "num_averages": 30,
+                    "num_readout_freq_points": 51, "depletion_factor": 4.0})
     proposed = {(s["entity"], s["field"]): s["after"] for s in out["suggestions"]}
     kappa = out["fit"]["q0"]["kappa_tot_hz"]
 
@@ -551,9 +582,8 @@ def test_the_amplitude_capability_is_derived_from_the_mixin():
 # drive_detuning capability: the swept drive-frequency window
 # --------------------------------------------------------------------------
 #: the four carriers — every drive-frequency window in the registry. The
-#: readout-side detuning sweeps (resonator_spectroscopy*, readout_frequency)
-#: share the axis NAME but are relative to readout_freq_hz, deliberately NOT
-#: carriers.
+#: readout-side detuning sweeps share the axis NAME but are relative to
+#: readout_freq_hz, and carry the SIBLING readout_detuning capability instead.
 DRIVE_DETUNING_CARRIERS = {
     "qubit_spectroscopy",
     "qubit_spectroscopy_overlap",
@@ -566,7 +596,7 @@ def test_the_drive_detuning_capability_is_derived_from_the_mixin():
     """Every carrier of the window Parameters carries it, nothing else does,
     and each sweeps the ONE canonical axis — that is the point of the
     capability."""
-    entries = _catalog_by_name()
+    entries = _core_catalog()
     carriers = {n for n, e in entries.items()
                 if "drive_detuning" in e["capabilities"]}
     assert carriers == DRIVE_DETUNING_CARRIERS
@@ -581,10 +611,82 @@ def test_drive_detuning_window_must_ascend():
     """end > start, validated on the mixin: scqat's peak fitters assume an
     ascending detuning axis, so a reversed window is refused at Parameters
     construction rather than fitting garbage."""
-    with pytest.raises(ValidationError, match="end_detuning_hz"):
-        DriveDetuningSweepParameters(start_detuning_hz=10e6, end_detuning_hz=-10e6)
-    with pytest.raises(ValidationError, match="end_detuning_hz"):
-        DriveDetuningSweepParameters(start_detuning_hz=0.0, end_detuning_hz=0.0)
+    with pytest.raises(ValidationError, match="end_drive_detuning_hz"):
+        DriveDetuningSweepParameters(start_drive_detuning_hz=10e6,
+                                     end_drive_detuning_hz=-10e6)
+    with pytest.raises(ValidationError, match="end_drive_detuning_hz"):
+        DriveDetuningSweepParameters(start_drive_detuning_hz=0.0,
+                                     end_drive_detuning_hz=0.0)
     # asymmetric but ascending is the capability's reason to exist
-    ok = DriveDetuningSweepParameters(start_detuning_hz=-70e6, end_detuning_hz=0.0)
-    assert ok.start_detuning_hz < ok.end_detuning_hz
+    ok = DriveDetuningSweepParameters(start_drive_detuning_hz=-70e6,
+                                      end_drive_detuning_hz=0.0)
+    assert ok.start_drive_detuning_hz < ok.end_drive_detuning_hz
+
+
+# --------------------------------------------------------------------------
+# readout_detuning capability: the swept readout-frequency window
+# --------------------------------------------------------------------------
+#: the five carriers — every readout-frequency window in the registry.
+#: readout_power sweeps AMPLITUDE at a fixed frequency and is deliberately not
+#: one.
+READOUT_DETUNING_CARRIERS = {
+    "resonator_spectroscopy",
+    "resonator_spectroscopy_power_amp",
+    "resonator_spectroscopy_power_chain",
+    "resonator_spectroscopy_flux",
+    "readout_frequency",
+}
+
+
+def test_the_readout_detuning_capability_is_derived_from_the_mixin():
+    """Every carrier of the window Parameters carries it, nothing else does,
+    and each sweeps the ONE canonical axis — the same axis the drive frame
+    emits, because a frame is an origin and not a different quantity."""
+    entries = _core_catalog()
+    carriers = {n for n, e in entries.items()
+                if "readout_detuning" in e["capabilities"]}
+    assert carriers == READOUT_DETUNING_CARRIERS
+    for name in carriers:
+        cls = get(name)
+        # NOT always first: the flux map is (flux_bias_v, detuning_hz) and the
+        # _amp punchout is (power_dbm, detuning_hz)
+        assert DETUNING_AXIS in cls.Contract.sweeps, name
+        assert issubclass(cls.Parameters, ReadoutDetuningSweepParameters), name
+
+
+def test_readout_detuning_window_must_ascend():
+    """end > start, validated on the mixin: the readout estimators build
+    full_freq = detuning + readout_freq_hz on an ascending axis and the
+    per-slice dip fitters assume it, so a reversed window is refused at
+    Parameters construction rather than fitting garbage."""
+    with pytest.raises(ValidationError, match="end_readout_detuning_hz"):
+        ReadoutDetuningSweepParameters(start_readout_detuning_hz=10e6,
+                                       end_readout_detuning_hz=-10e6)
+    with pytest.raises(ValidationError, match="end_readout_detuning_hz"):
+        ReadoutDetuningSweepParameters(start_readout_detuning_hz=0.0,
+                                       end_readout_detuning_hz=0.0)
+    # asymmetric but ascending is the capability's reason to exist: a punchout
+    # walks the dip DOWN from f_dress0 toward f_bare
+    ok = ReadoutDetuningSweepParameters(start_readout_detuning_hz=-25e6,
+                                        end_readout_detuning_hz=5e6)
+    assert ok.start_readout_detuning_hz < ok.end_readout_detuning_hz
+
+
+def test_the_two_detuning_frames_are_independent_siblings():
+    """Neither mixin subclasses the other and their FIELD NAMES are disjoint.
+
+    Unlike the flux frames — where FluxPulseSweepParameters subclasses the
+    absolute mixin on purpose, so a pulse carrier derives both capabilities —
+    these two are siblings that one experiment could legitimately carry at once
+    (a drive x readout frequency map). Shared field names would then MERGE by
+    MRO into a single number silently driving both sweeps, and a subclass
+    relation would make every readout carrier claim drive_detuning. Both
+    failures are silent, so both are pinned here."""
+    assert not issubclass(ReadoutDetuningSweepParameters, DriveDetuningSweepParameters)
+    assert not issubclass(DriveDetuningSweepParameters, ReadoutDetuningSweepParameters)
+
+    def own(cls):
+        return set(cls.model_fields) - set(Parameters.model_fields)
+
+    assert not (own(DriveDetuningSweepParameters)
+                & own(ReadoutDetuningSweepParameters))

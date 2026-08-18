@@ -97,7 +97,8 @@ def test_parameter_defaults_absent_is_empty(monkeypatch, tmp_path):
 def test_parameter_defaults_loaded_from_default_path(monkeypatch, tmp_path):
     params = tmp_path / "parameters.toml"
     params.write_text(
-        "[resonator_spectroscopy]\nfrequency_span_hz = 15e6\nnum_points = 201\n\n"
+        "[resonator_spectroscopy]\nend_readout_detuning_hz = 7.5e6\n"
+        "num_readout_freq_points = 201\n\n"
         '[single_shot_readout]\nqubits = ["q1"]\n',
         encoding="utf-8",
     )
@@ -106,9 +107,12 @@ def test_parameter_defaults_loaded_from_default_path(monkeypatch, tmp_path):
     config.write_text('[lab]\nbackend = "simulated"\n', encoding="utf-8")
     cfg = labconfig.load(config)
     # TOML-native types survive: float via exponent, int, list of strings
-    assert cfg.parameter_defaults["resonator_spectroscopy"] == {"frequency_span_hz": 15e6, "num_points": 201}
-    assert isinstance(cfg.parameter_defaults["resonator_spectroscopy"]["frequency_span_hz"], float)
-    assert isinstance(cfg.parameter_defaults["resonator_spectroscopy"]["num_points"], int)
+    assert cfg.parameter_defaults["resonator_spectroscopy"] == {
+        "end_readout_detuning_hz": 7.5e6, "num_readout_freq_points": 201}
+    assert isinstance(
+        cfg.parameter_defaults["resonator_spectroscopy"]["end_readout_detuning_hz"], float)
+    assert isinstance(
+        cfg.parameter_defaults["resonator_spectroscopy"]["num_readout_freq_points"], int)
     assert cfg.parameter_defaults["single_shot_readout"] == {"qubits": ["q1"]}
     assert cfg.parameters_source == params
 

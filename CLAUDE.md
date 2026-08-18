@@ -215,15 +215,22 @@ scqo/
                     #   The neutral bound is lt=2.0 (the widest ANY backend expresses);
                     #   the real limit is factor x stored <= 1 and each driver refuses it
                     #   BY NAME (scqo-qm + scqo-qblox, each experiments/_amp_limits),
-                    #   detuning.py = the swept drive-frequency window:
-                    #   start/end_detuning_hz + num_freq_points, Hz RELATIVE to the
-                    #   current drive_freq_hz (explicit [start, end] so an asymmetric
-                    #   window is expressible; ascending enforced — scqat's peak fitters
-                    #   assume it), DETUNING_AXIS = `detuning_hz`. The four
-                    #   qubit_spectroscopy* experiments carry it; the readout-side
-                    #   detuning sweeps (resonator_spectroscopy*, readout_frequency)
-                    #   share the axis NAME but are readout_freq_hz-relative and are
-                    #   NOT carriers);
+                    #   detuning.py = the swept frequency window in TWO FRAMES
+                    #   sharing ONE axis (DETUNING_AXIS = `detuning_hz`; a frame is
+                    #   an origin, not a different quantity). drive_detuning =
+                    #   start/end_drive_detuning_hz + num_drive_freq_points, RELATIVE
+                    #   to the current drive_freq_hz (the four qubit_spectroscopy*);
+                    #   readout_detuning = start/end_readout_detuning_hz +
+                    #   num_readout_freq_points, RELATIVE to readout_freq_hz (the four
+                    #   resonator_spectroscopy* + readout_frequency). Explicit
+                    #   [start, end] so an ASYMMETRIC window is expressible — on the
+                    #   readout side that is the physics, since power and flux sweeps
+                    #   both walk the dip DOWN from f_dress0 toward f_bare; ascending
+                    #   enforced per frame (the fitters assume it). THE FRAME IS IN THE
+                    #   FIELD NAME and the two mixins are independent SIBLINGS (unlike
+                    #   the flux frames, where _pulse subclasses absolute): one
+                    #   experiment could carry both, and shared names would merge by
+                    #   MRO into one number driving two sweeps);
                     #   catalog
                     #   `capabilities` are DERIVED from mixin subclassing — never declared
                     #   strings, zero capabilities legitimate (new experiments may be

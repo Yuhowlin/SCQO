@@ -76,14 +76,16 @@ class QubitSpectroscopyOverlap(QubitSpectroscopy):
         The shift and the extra width scale with ``acq_start_ns`` only through
         the hidden per-qubit truth, not physically — this is an offline
         placeholder, so it just has to be deterministic, distinguishable from
-        the parent's data, and land inside the ``[start_detuning_hz,
-        end_detuning_hz]`` window (``estimate()`` rejects a peak outside it).
+        the parent's data, and land inside the ``[start_drive_detuning_hz,
+        end_drive_detuning_hz]`` window (``estimate()`` rejects a peak outside it).
         """
         detuning = coords["detuning_hz"]
         targets = self.params.targets
         rng = np.random.default_rng(stable_seed("qubit_spectroscopy_overlap", *targets))
-        width = self.params.end_detuning_hz - self.params.start_detuning_hz
-        window_mid = (self.params.start_detuning_hz + self.params.end_detuning_hz) / 2
+        start = self.params.start_drive_detuning_hz
+        end = self.params.end_drive_detuning_hz
+        width = end - start
+        window_mid = (start + end) / 2
         i_data = np.empty((len(targets), detuning.size))
         q_data = np.empty_like(i_data)
         for k in range(len(targets)):

@@ -28,6 +28,10 @@ from .._scqat import per_qubit_results
 from ..contract import DatasetContract
 from ..experiment import FACT_MEASURED
 from ._transmon_estimate import DEFAULT_GAP_DELTA_HZ, f_q_max_hz_from_resistance
+from ._capabilities.detuning import (
+    ReadoutDetuningSweepParameters,
+    readout_detuning_sweep,
+)
 from ._capabilities.flux import (
     NUM_FLUX_DESC,
     FluxSweepParameters,
@@ -44,12 +48,19 @@ from ._flux_component import FluxComponentParameters
 
 
 class ResonatorSpectroscopyFluxParameters(
-    TargetSelection, AveragingParameters, FluxSweepParameters, FluxComponentParameters
+    TargetSelection, AveragingParameters, FluxSweepParameters,
+    ReadoutDetuningSweepParameters, FluxComponentParameters
 ):
-    """Inputs for the resonator-vs-flux map."""
+    """Inputs for the resonator-vs-flux map.
 
-    frequency_span_hz: float = Field(20e6, gt=0, description="Total readout-detuning span around the current readout_freq.")
-    num_freq_points: int = Field(101, gt=1, description="Number of frequency points.")
+    The frequency window is the readout_detuning capability's
+    ``[start_readout_detuning_hz, end_readout_detuning_hz]`` pair, relative to
+    the target's current ``readout_freq_hz``. An ASYMMETRIC one is the natural
+    shape here: ``readout_freq_hz`` is normally parked at the sweet spot, and
+    detuning the qubit only ever shrinks the pull ``g^2/(f_r0 - f_q)``, so the
+    arch walks DOWNWARD out of a centred window.
+    """
+
     # capability default narrowed: the dispersive fit needs >= 5 good slices
     num_flux_points: int = Field(21, gt=4, description=NUM_FLUX_DESC + " (the dispersive fit needs >= 5 good slices).")
     analysis_method: Literal["dispersive", "sine"] = Field(
@@ -283,11 +294,7 @@ class ResonatorSpectroscopyFlux(Experiment):
     params: ResonatorSpectroscopyFluxParameters
 
     def define_sweep(self) -> dict[str, np.ndarray]:
-        span = self.params.frequency_span_hz
-        return {
-            **flux_sweep(self.params),
-            "detuning_hz": np.linspace(-span / 2, span / 2, self.params.num_freq_points),
-        }
+        return {**flux_sweep(self.params), **readout_detuning_sweep(self.params)}
 
     def simulate(self, coords: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         flux = coords["flux_bias_v"]

@@ -88,7 +88,7 @@ qubit_ramsey_cryoscope              resonator_spectroscopy_power_chain
 qubit_relaxation                    single_shot_readout
 qubit_relaxation_flux_pulse         single_shot_readout_gef
 qubit_spectroscopy
-# capabilities: state_readout(14) flux(4) qubit_reset(30) flux_pulse(3) amplitude(4) drive_detuning(4) none(3)
+# capabilities: state_readout(14) flux(4) qubit_reset(30) flux_pulse(3) amplitude(4) drive_detuning(4) readout_detuning(5) none(0)
 # filter: scqo run --capability <name>    detail: scqo run <name> --help
 ```
 
@@ -296,7 +296,7 @@ See every knob an experiment has — with your standing defaults marked — via
 `scqo run <experiment> --help`.
 
 ```bash
-scqo run resonator_spectroscopy --targets q1 --set frequency_span_hz=15e6
+scqo run resonator_spectroscopy --targets q1 --set start_readout_detuning_hz=-7.5e6 --set end_readout_detuning_hz=7.5e6
 scqo run resonator_spectroscopy --help
 ```
 

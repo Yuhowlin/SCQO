@@ -30,12 +30,12 @@ def test_catalog_lists_the_ported_experiment(session):
     entries = {e["name"]: e for e in session.catalog()}
     entry = entries["resonator_spectroscopy"]
     assert entry["required_operations"] == ["readout"]
-    assert "frequency_span_hz" in entry["parameters_schema"]["properties"]
+    assert "start_readout_detuning_hz" in entry["parameters_schema"]["properties"]
 
 
 def test_run_suggest_accept_roundtrip(session):
     out = session.run("resonator_spectroscopy",
-                      {"targets": ["q0", "q1"], "num_points": 61})
+                      {"targets": ["q0", "q1"], "num_readout_freq_points": 61})
     assert out.get("error") is None
     assert out["run_id"] and out["data_path"]
     proposed = {(s["entity"], s["field"], s["role"])
@@ -86,7 +86,7 @@ def test_target_gate_refuses_before_hardware(session):
 
 def test_invalid_params_return_structured_not_raise(session):
     out = session.run("resonator_spectroscopy",
-                      {"targets": ["q0"], "num_points": 1})
+                      {"targets": ["q0"], "num_readout_freq_points": 1})
     assert "invalid parameters" in out["error"]
     assert out.get("run_id") is None                  # nothing persisted
     # EVERY return of run() carries "suggestions", so a caller in a loop
@@ -98,7 +98,7 @@ def test_run_campaign_repeats_and_summarizes(session):
     """The run-flow twin of the campaign suite: N runs, one manifest, statistics."""
     out = session.run_campaign({
         "label": "t1_stability", "repeat": 3, "defaults": {"targets": ["q0"]},
-        "steps": [{"experiment": "resonator_spectroscopy", "params": {"num_points": 61}}],
+        "steps": [{"experiment": "resonator_spectroscopy", "params": {"num_readout_freq_points": 61}}],
     })
     assert out["status"] == "complete" and out["repeat_done"] == 3
     assert out["statistics"]["resonator_spectroscopy"]["q0"]["f_dress0_hz"]["n"] == 3

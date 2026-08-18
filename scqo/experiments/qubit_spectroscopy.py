@@ -17,7 +17,7 @@ from pydantic import Field
 
 from .._scqat import per_qubit_results
 from ..contract import DatasetContract
-from ._capabilities.detuning import DriveDetuningSweepParameters, detuning_sweep
+from ._capabilities.detuning import DriveDetuningSweepParameters, drive_detuning_sweep
 from ._capabilities.qubit_reset import QubitResetParameters
 from ._sim import stable_seed
 from ..parameters import AveragingParameters, TargetSelection
@@ -33,8 +33,9 @@ class QubitSpectroscopyParameters(
     """Inputs for a qubit-spectroscopy (two-tone) measurement.
 
     The frequency window is the drive_detuning capability's
-    ``[start_detuning_hz, end_detuning_hz]`` pair, relative to the target's
-    current ``drive_freq_hz``; the mixin defaults ARE this experiment's window.
+    ``[start_drive_detuning_hz, end_drive_detuning_hz]`` pair, relative to the
+    target's current ``drive_freq_hz``; the mixin defaults ARE this
+    experiment's window.
     """
 
     drive_power_dbm: float = Field(
@@ -77,7 +78,7 @@ class QubitSpectroscopy(Experiment):
     params: QubitSpectroscopyParameters
 
     def define_sweep(self) -> dict[str, np.ndarray]:
-        return detuning_sweep(self.params)
+        return drive_detuning_sweep(self.params)
 
     def run(self) -> Result:
         """Boundary-recorded drive-chain set -> acquire -> revert (shared helper).
@@ -100,8 +101,10 @@ class QubitSpectroscopy(Experiment):
         detuning = coords["detuning_hz"]
         targets = self.params.targets
         rng = np.random.default_rng(stable_seed("qubit_spectroscopy", *targets))
-        width = self.params.end_detuning_hz - self.params.start_detuning_hz
-        center = (self.params.start_detuning_hz + self.params.end_detuning_hz) / 2
+        start = self.params.start_drive_detuning_hz
+        end = self.params.end_drive_detuning_hz
+        width = end - start
+        center = (start + end) / 2
         i_data = np.empty((len(targets), detuning.size))
         q_data = np.empty_like(i_data)
         for k in range(len(targets)):
@@ -146,7 +149,9 @@ class QubitSpectroscopy(Experiment):
                     "old_drive_freq_hz": old,
                 }
                 ok = np.isfinite(det) and (
-                    self.params.start_detuning_hz <= det <= self.params.end_detuning_hz
+                    self.params.start_drive_detuning_hz
+                    <= det
+                    <= self.params.end_drive_detuning_hz
                 )
             else:
                 result.fit[qubit] = {"n_peaks": 0.0, "old_drive_freq_hz": old}

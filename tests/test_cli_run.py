@@ -95,32 +95,32 @@ def test_catalog_capability_filter(tmp_path):
 def test_run_help_shows_schema_epilog(tmp_path):
     proc = _run_cli(tmp_path, "run", "resonator_spectroscopy", "--help")
     assert proc.returncode == 0, proc.stderr
-    assert "frequency_span_hz" in proc.stdout  # pydantic schema rendered in --help
+    assert "start_readout_detuning_hz" in proc.stdout  # pydantic schema rendered in --help
 
 
 def test_file_defaults_reach_the_saved_run(tmp_path):
     proc = _run_cli(
         tmp_path, "run", "resonator_spectroscopy",
-        parameters_toml='[resonator_spectroscopy]\nnum_points = 51\ntargets = ["q0"]\n',
+        parameters_toml='[resonator_spectroscopy]\nnum_readout_freq_points = 51\ntargets = ["q0"]\n',
     )
     assert proc.returncode == 0, proc.stderr
     result = _result(proc)
     # file-supplied targets applied — NOT masked by the all-device fallback (q0 AND q1)
     assert result["outcomes"] == {"q0": "successful"}
     saved = json.loads((Path(result["data_path"]) / "parameters.json").read_text(encoding="utf-8"))
-    assert saved["num_points"] == 51
+    assert saved["num_readout_freq_points"] == 51
     # provenance goes to stderr so stdout stays parseable JSON
     assert "# parameter defaults from" in proc.stderr
 
 
 def test_cli_set_beats_file_defaults(tmp_path):
     proc = _run_cli(
-        tmp_path, "run", "resonator_spectroscopy", "--set", "num_points=99",
-        parameters_toml="[resonator_spectroscopy]\nnum_points = 51\n",
+        tmp_path, "run", "resonator_spectroscopy", "--set", "num_readout_freq_points=99",
+        parameters_toml="[resonator_spectroscopy]\nnum_readout_freq_points = 51\n",
     )
     assert proc.returncode == 0, proc.stderr
     saved = json.loads((Path(_result(proc)["data_path"]) / "parameters.json").read_text(encoding="utf-8"))
-    assert saved["num_points"] == 99
+    assert saved["num_readout_freq_points"] == 99
 
 
 # ------------------------------------------------------- suggest / review / accept

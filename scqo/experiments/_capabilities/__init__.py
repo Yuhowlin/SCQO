@@ -25,11 +25,15 @@ from .amplitude import (
 )
 from .detuning import (
     DETUNING_AXIS,
-    END_DETUNING_DESC,
+    END_DRIVE_DETUNING_DESC,
+    END_READOUT_DETUNING_DESC,
     NUM_FREQ_POINTS_DESC,
-    START_DETUNING_DESC,
+    START_DRIVE_DETUNING_DESC,
+    START_READOUT_DETUNING_DESC,
     DriveDetuningSweepParameters,
-    detuning_sweep,
+    ReadoutDetuningSweepParameters,
+    drive_detuning_sweep,
+    readout_detuning_sweep,
 )
 from .flux import (
     FLUX_AXIS,
@@ -84,6 +88,7 @@ CAPABILITY_SUMMARIES = {
     "flux_pulse": "the flux window is a pulse relative to idle_flux",
     "amplitude": "sweeps amplitude as a factor of the standing amplitude",
     "drive_detuning": "sweeps the drive detuning relative to the current drive frequency",
+    "readout_detuning": "sweeps the readout detuning relative to the current readout frequency",
 }
 
 __all__ = [
@@ -93,7 +98,8 @@ __all__ = [
     "AMP_AXIS",
     "CAPABILITY_SUMMARIES",
     "DETUNING_AXIS",
-    "END_DETUNING_DESC",
+    "END_DRIVE_DETUNING_DESC",
+    "END_READOUT_DETUNING_DESC",
     "FLUX_AXIS",
     "MAX_AMP_FACTOR_DESC",
     "MIN_AMP_FACTOR_DESC",
@@ -110,9 +116,11 @@ __all__ = [
     "POPULATION_ALT",
     "RESET_METHOD_DESC",
     "SHOT_STATE_ALT",
-    "START_DETUNING_DESC",
+    "START_DRIVE_DETUNING_DESC",
+    "START_READOUT_DETUNING_DESC",
     "THERMALIZATION_TIME_DESC",
     "DriveDetuningSweepParameters",
+    "ReadoutDetuningSweepParameters",
     "FluxComponentParameters",
     "FluxPulseSweepParameters",
     "FluxSweepParameters",
@@ -124,8 +132,8 @@ __all__ = [
     "amp_anchor",
     "amp_sweep",
     "attach_absolute_amp",
-    "detuning_sweep",
     "discrimination_method",
+    "drive_detuning_sweep",
     "flux_anchor_v",
     "flux_frame",
     "flux_sweep",
@@ -134,6 +142,7 @@ __all__ = [
     "joint_to_marginals",
     "member_order",
     "population_row",
+    "readout_detuning_sweep",
     "readout_vars",
     "reset_wait_ns",
     "shot_state_vars",

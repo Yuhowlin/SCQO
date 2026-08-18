@@ -21,6 +21,10 @@ from pydantic import Field, model_validator
 
 from .._scqat import per_qubit_results
 from ..contract import DatasetContract
+from ._capabilities.detuning import (
+    ReadoutDetuningSweepParameters,
+    readout_detuning_sweep,
+)
 from ._depletion import READOUT_DEPLETION_NS_DESC
 from ._punchout import branch_fit, propose_branches
 from ._sim import stable_seed
@@ -30,11 +34,18 @@ from ..experiment import Experiment
 from . import register
 
 
-class ResonatorSpectroscopyPowerAmpParameters(TargetSelection, AveragingParameters):
-    """Inputs for the fast amplitude-sweep absolute-power punchout scan."""
+class ResonatorSpectroscopyPowerAmpParameters(TargetSelection, AveragingParameters,
+                                              ReadoutDetuningSweepParameters):
+    """Inputs for the fast amplitude-sweep absolute-power punchout scan.
 
-    frequency_span_hz: float = Field(20e6, gt=0, description="Total detuning span around the current readout_freq_hz.")
-    num_freq_points: int = Field(101, gt=1, description="Number of frequency points.")
+    The frequency window is the readout_detuning capability's
+    ``[start_readout_detuning_hz, end_readout_detuning_hz]`` pair, relative to
+    the target's current ``readout_freq_hz``. Punchout is the strongest case for
+    an ASYMMETRIC one: the dip starts at the DRESSED resonator and walks DOWN to
+    the bare one as the qubit saturates, so the window belongs below the current
+    readout frequency, not centred on it.
+    """
+
     max_power_dbm: float = Field(
         -20.0,
         le=10.0,
@@ -109,12 +120,11 @@ class ResonatorSpectroscopyPowerAmp(Experiment):
     def define_sweep(self) -> dict[str, np.ndarray]:
         # Order (power_dbm, detuning_hz) = outer -> fastest: the frequency loop is
         # innermost on hardware, so the acquired axis order is (power, detuning).
-        span = self.params.frequency_span_hz
         return {
             "power_dbm": np.linspace(
                 self.params.min_power_dbm, self.params.max_power_dbm, self.params.num_power_points
             ),
-            "detuning_hz": np.linspace(-span / 2, span / 2, self.params.num_freq_points),
+            **readout_detuning_sweep(self.params),
         }
 
     def run(self) -> Result:
@@ -190,12 +200,15 @@ class ResonatorSpectroscopyPowerAmp(Experiment):
         targets = self.params.targets
         top = float(self.params.max_power_dbm)
         rng = np.random.default_rng(stable_seed("resonator_spectroscopy_power_amp", *targets))
-        span = float(detuning[-1] - detuning[0])
-        kappa = span / 15
+        width = float(detuning[-1] - detuning[0])
+        center = float(detuning[0] + detuning[-1]) / 2
+        kappa = width / 15
         i_data = np.empty((len(targets), power.size, detuning.size))
         q_data = np.empty_like(i_data)
         for k in range(len(targets)):
-            dressed = rng.uniform(-0.1, 0.1) * span  # dispersive dip position (low power)
+            # dispersive dip position (low power), relative to the window
+            # MIDPOINT — an asymmetric window must not re-center the truth
+            dressed = center + rng.uniform(-0.1, 0.1) * width
             knee_dbm = top - rng.uniform(12.0, 16.0)  # punchout onset, well inside the window
             # A punchout has TWO asymptotes, not a ramp: below the knee the qubit
             # dresses the resonator (dip at `dressed`), far above it the qubit is

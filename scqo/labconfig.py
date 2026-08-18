@@ -31,8 +31,9 @@ or per user. One top-level table per experiment; values sit between the code def
 and whatever the caller passes — code defaults < this file < caller/CLI::
 
     [resonator_spectroscopy]
-    frequency_span_hz = 15e6
-    num_points = 201
+    start_readout_detuning_hz = -7.5e6
+    end_readout_detuning_hz = 7.5e6
+    num_readout_freq_points = 201
 
 A ``parameters_file`` that is named but missing raises (like a mistyped config path),
 and an existing file that does not parse raises too — this file changes what gets

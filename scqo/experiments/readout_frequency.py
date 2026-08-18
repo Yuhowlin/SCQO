@@ -16,6 +16,13 @@ from pydantic import Field
 
 from .._scqat import per_qubit_results
 from ..contract import DatasetContract
+from ._capabilities.detuning import (
+    END_READOUT_DETUNING_DESC,
+    NUM_FREQ_POINTS_DESC,
+    START_READOUT_DETUNING_DESC,
+    ReadoutDetuningSweepParameters,
+    readout_detuning_sweep,
+)
 from ._capabilities.qubit_reset import QubitResetParameters
 from ._capabilities.state_readout import ReadoutModeParameters, discrimination_method
 from ._sim import stable_seed
@@ -26,11 +33,20 @@ from . import register
 
 
 class ReadoutFrequencyParameters(TargetSelection, QubitResetParameters,
-                                 ReadoutModeParameters):
+                                 ReadoutModeParameters,
+                                 ReadoutDetuningSweepParameters):
     """Inputs for fidelity-vs-readout-frequency optimization."""
 
-    frequency_span_hz: float = Field(5e6, gt=0, description="Total detuning span around the current readout_freq (chi-scale).")
-    num_freq_points: int = Field(21, gt=2, description="Frequency points (one Gaussian-mixture fit per point in shot mode).")
+    # capability window re-declared at the CHI scale: this scan resolves the
+    # |g>/|e> separation optimum, which sits within a chi of the current
+    # readout frequency, not within a resonator linewidth of it.
+    start_readout_detuning_hz: float = Field(
+        -2.5e6, description=START_READOUT_DETUNING_DESC)
+    end_readout_detuning_hz: float = Field(
+        2.5e6, description=END_READOUT_DETUNING_DESC)
+    num_readout_freq_points: int = Field(
+        21, gt=2, description=NUM_FREQ_POINTS_DESC
+        + " One Gaussian-mixture fit per point in shot mode.")
     num_shots: int = Field(
         1000, gt=99,
         description="Measurements per prepared state per frequency — kept per "
@@ -82,9 +98,8 @@ class ReadoutFrequency(Experiment):
     params: ReadoutFrequencyParameters
 
     def define_sweep(self) -> dict[str, np.ndarray]:
-        span = self.params.frequency_span_hz
         return {
-            "detuning_hz": np.linspace(-span / 2, span / 2, self.params.num_freq_points),
+            **readout_detuning_sweep(self.params),
             "prepared_state": np.array([0, 1]),
         }
 
@@ -99,10 +114,13 @@ class ReadoutFrequency(Experiment):
         targets = self.params.targets
         rng = np.random.default_rng(stable_seed("readout_frequency", *targets))
         span = float(detuning[-1] - detuning[0])
+        center = float(detuning[0] + detuning[-1]) / 2
         i_data = np.empty((len(targets), detuning.size, 2, n_shots))
         q_data = np.empty_like(i_data)
         for k in range(len(targets)):
-            best_det = rng.uniform(-span / 6, span / 6)  # hidden max-contrast detuning
+            # hidden max-contrast detuning, relative to the window MIDPOINT —
+            # an asymmetric window must not re-center the truth
+            best_det = center + rng.uniform(-span / 6, span / 6)
             sep_max = rng.uniform(3.0, 4.0)
             width = span / 6
             for j, det in enumerate(detuning):

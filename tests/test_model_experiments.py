@@ -537,16 +537,16 @@ def test_spectroscopy_cryoscope_window_and_drive_len_validation():
 
     # an asymmetric, one-sided window flows through ascending
     asym = cls(SimpleNamespace(device=None),
-               cls.Parameters(targets=["q0"], start_detuning_hz=-70e6,
-                              end_detuning_hz=0.0, num_freq_points=71))
+               cls.Parameters(targets=["q0"], start_drive_detuning_hz=-70e6,
+                              end_drive_detuning_hz=0.0, num_drive_freq_points=71))
     det = asym.define_sweep()["detuning_hz"]
     assert det[0] == pytest.approx(-70e6) and det[-1] == pytest.approx(0.0)
     assert det.size == 71
     assert np.all(np.diff(det) > 0)  # ascending — peak_fit's gamma bound needs it
 
     # end must exceed start (the mixin's window-order validator)
-    with pytest.raises(ValueError, match="end_detuning_hz"):
-        cls.Parameters(targets=["q0"], start_detuning_hz=10e6, end_detuning_hz=-10e6)
+    with pytest.raises(ValueError, match="end_drive_detuning_hz"):
+        cls.Parameters(targets=["q0"], start_drive_detuning_hz=10e6, end_drive_detuning_hz=-10e6)
 
     # drive_len_ns: at or above the 16 ns floor, on the 4 ns grid
     with pytest.raises(ValueError):
@@ -608,7 +608,7 @@ def test_shaped_flux_pulse_refuses_a_duration_override():
 
 READOUT_SWEEPS = [
     ("readout_power", "readout_amp", {"num_amp_points": 5}),
-    ("readout_frequency", "readout_freq_hz", {"num_freq_points": 5}),
+    ("readout_frequency", "readout_freq_hz", {"num_readout_freq_points": 5}),
 ]
 
 

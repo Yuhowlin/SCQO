@@ -16,8 +16,8 @@ BAND-LIMITED v1: the drive is centered on the arch-predicted parked detuning
 nominal fallback), NOT by shifting the LO. It therefore reaches only excursions
 whose detuning stays in the analog band; a gate-sized excursion needs an LO
 shift, which is deferred. The detuning window is the drive_detuning capability's
-explicit ``[start_detuning_hz, end_detuning_hz]`` range relative to that center
-(ASYMMETRIC allowed — when the centering is imperfect the parked line sits
+explicit ``[start_drive_detuning_hz, end_drive_detuning_hz]`` range relative to
+that center (ASYMMETRIC allowed — when the centering is imperfect the parked line sits
 systematically to one side, so a one-sided window spends every point on signal
 instead of half on empty detuning).
 
@@ -58,11 +58,11 @@ from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
 from ._capabilities.detuning import (
     DETUNING_AXIS,
-    END_DETUNING_DESC,
+    END_DRIVE_DETUNING_DESC,
     NUM_FREQ_POINTS_DESC,
-    START_DETUNING_DESC,
+    START_DRIVE_DETUNING_DESC,
     DriveDetuningSweepParameters,
-    detuning_sweep,
+    drive_detuning_sweep,
 )
 from ._capabilities.qubit_reset import QubitResetParameters
 from ._capabilities.state_readout import (
@@ -113,19 +113,19 @@ class QubitSpectroscopyCryoscopeParameters(
     # capability window re-declared: THIS experiment's origin is the
     # ARCH-PREDICTED PARKED drive (drive_freq_hz + center_offset_hz), not the
     # bare knob — the appended text is the frame refinement.
-    start_detuning_hz: float = Field(
+    start_drive_detuning_hz: float = Field(
         -100e6,
-        description=START_DETUNING_DESC + " HERE the origin is the arch-predicted "
-        "PARKED drive (drive_freq_hz + center_offset_hz) — when the centering is "
+        description=START_DRIVE_DETUNING_DESC + " HERE the origin is the "
+        "arch-predicted PARKED drive (drive_freq_hz + center_offset_hz) — when the centering is "
         "only nominal (arch facts unset) the parked line sits systematically to "
         "one side, so put the whole window there (e.g. start=-70e6, end=0).",
     )
-    end_detuning_hz: float = Field(
+    end_drive_detuning_hz: float = Field(
         100e6,
-        description=END_DETUNING_DESC + " Relative to the arch-predicted parked "
-        "drive, like start_detuning_hz.",
+        description=END_DRIVE_DETUNING_DESC + " Relative to the arch-predicted "
+        "parked drive, like start_drive_detuning_hz.",
     )
-    num_freq_points: int = Field(101, gt=1, description=NUM_FREQ_POINTS_DESC)
+    num_drive_freq_points: int = Field(101, gt=1, description=NUM_FREQ_POINTS_DESC)
     drive_len_ns: float = Field(
         400.0, ge=16, multiple_of=4,
         description="Duration of the spectroscopy drive pulse, ns (on the 4 ns "
@@ -158,7 +158,8 @@ class QubitSpectroscopyCryoscopeParameters(
         description="Nominal flux-frequency curvature (Hz per V^2) used to center "
         "the drive when the arch facts (f_q_max_hz, flux_per_phi0) are unset. Only "
         "a rough centering; measure the arch (qubit_spectroscopy_flux_pulse) for an "
-        "accurate one, or widen the [start_detuning_hz, end_detuning_hz] window.",
+        "accurate one, or widen the [start_drive_detuning_hz, "
+        "end_drive_detuning_hz] window.",
     )
     num_averages: int = Field(
         100, gt=0, description="Number of shots to average per sweep point."
@@ -291,7 +292,7 @@ class QubitSpectroscopyCryoscope(Experiment):
         wait = _log_time_ns(
             self.params.min_wait_ns, self.params.max_wait_ns, self.params.num_wait_points
         )
-        return {**detuning_sweep(self.params), WAIT_AXIS: wait}
+        return {**drive_detuning_sweep(self.params), WAIT_AXIS: wait}
 
     def attach_acquisition_coords(self) -> None:
         """Snapshot the per-target parked detuning onto the dataset so the estimator
