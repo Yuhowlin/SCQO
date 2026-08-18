@@ -34,6 +34,7 @@ from .detuning import (
     ReadoutDetuningSweepParameters,
     drive_detuning_sweep,
     readout_detuning_sweep,
+    window_bounds,
 )
 from .flux import (
     FLUX_AXIS,
@@ -148,4 +149,5 @@ __all__ = [
     "shot_state_vars",
     "signal_rename",
     "states_to_joint_population",
+    "window_bounds",
 ]

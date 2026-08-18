@@ -31,6 +31,7 @@ from typing import ClassVar
 import numpy as np
 from pydantic import Field
 
+from ._capabilities.detuning import window_bounds
 from ._overlap import OVERLAP_FIELD_DESCS
 from ._sim import stable_seed
 from . import register
@@ -82,10 +83,10 @@ class QubitSpectroscopyOverlap(QubitSpectroscopy):
         detuning = coords["detuning_hz"]
         targets = self.params.targets
         rng = np.random.default_rng(stable_seed("qubit_spectroscopy_overlap", *targets))
-        start = self.params.start_drive_detuning_hz
-        end = self.params.end_drive_detuning_hz
-        width = end - start
-        window_mid = (start + end) / 2
+        low, high = window_bounds(self.params.start_drive_detuning_hz,
+                                  self.params.end_drive_detuning_hz)
+        width = high - low
+        window_mid = (low + high) / 2
         i_data = np.empty((len(targets), detuning.size))
         q_data = np.empty_like(i_data)
         for k in range(len(targets)):

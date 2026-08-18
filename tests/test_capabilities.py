@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
 import pytest
 from pydantic import ValidationError
 
@@ -47,8 +48,11 @@ from scqo.experiments._capabilities import (
     FluxComponentParameters,
     QubitResetParameters,
     StateReadoutParameters,
+    drive_detuning_sweep,
     foreign_flux_source,
+    readout_detuning_sweep,
     reset_wait_ns,
+    window_bounds,
 )
 from scqo.parameters import Parameters
 from scqo.experiments import get
@@ -607,20 +611,34 @@ def test_the_drive_detuning_capability_is_derived_from_the_mixin():
         assert issubclass(cls.Parameters, DriveDetuningSweepParameters), name
 
 
-def test_drive_detuning_window_must_ascend():
-    """end > start, validated on the mixin: scqat's peak fitters assume an
-    ascending detuning axis, so a reversed window is refused at Parameters
-    construction rather than fitting garbage."""
-    with pytest.raises(ValidationError, match="end_drive_detuning_hz"):
-        DriveDetuningSweepParameters(start_drive_detuning_hz=10e6,
-                                     end_drive_detuning_hz=-10e6)
-    with pytest.raises(ValidationError, match="end_drive_detuning_hz"):
+def test_drive_detuning_edges_take_either_order():
+    """The pair DEFINES the window, it does not choose a traversal direction.
+
+    A reversed pair is accepted and normalised to the SAME ascending axis --
+    the two orderings are the identical measurement. Normalising here is what
+    keeps scqat safe: `peak_fit` builds its width bound as
+    `detuning[-1] - detuning[0]` with no abs(), so a descending axis inverts it
+    and the fit degrades silently (a 4 MHz line measured back as 174 MHz).
+    """
+    up = DriveDetuningSweepParameters(start_drive_detuning_hz=-80e6,
+                                      end_drive_detuning_hz=20e6,
+                                      num_drive_freq_points=101)
+    down = DriveDetuningSweepParameters(start_drive_detuning_hz=20e6,
+                                        end_drive_detuning_hz=-80e6,
+                                        num_drive_freq_points=101)
+    axis_up = drive_detuning_sweep(up)[DETUNING_AXIS]
+    axis_down = drive_detuning_sweep(down)[DETUNING_AXIS]
+    assert axis_up == pytest.approx(axis_down)          # same measurement
+    assert np.all(np.diff(axis_down) > 0)               # ... and ascending
+    assert axis_down[0] == pytest.approx(-80e6)
+    assert axis_down[-1] == pytest.approx(20e6)
+    # the edges themselves are preserved verbatim -- only the AXIS is ordered
+    assert down.start_drive_detuning_hz == 20e6
+
+    # a zero-width window is a typo, not a measurement
+    with pytest.raises(ValidationError, match="zero-width"):
         DriveDetuningSweepParameters(start_drive_detuning_hz=0.0,
                                      end_drive_detuning_hz=0.0)
-    # asymmetric but ascending is the capability's reason to exist
-    ok = DriveDetuningSweepParameters(start_drive_detuning_hz=-70e6,
-                                      end_drive_detuning_hz=0.0)
-    assert ok.start_drive_detuning_hz < ok.end_drive_detuning_hz
 
 
 # --------------------------------------------------------------------------
@@ -654,22 +672,33 @@ def test_the_readout_detuning_capability_is_derived_from_the_mixin():
         assert issubclass(cls.Parameters, ReadoutDetuningSweepParameters), name
 
 
-def test_readout_detuning_window_must_ascend():
-    """end > start, validated on the mixin: the readout estimators build
-    full_freq = detuning + readout_freq_hz on an ascending axis and the
-    per-slice dip fitters assume it, so a reversed window is refused at
-    Parameters construction rather than fitting garbage."""
-    with pytest.raises(ValidationError, match="end_readout_detuning_hz"):
-        ReadoutDetuningSweepParameters(start_readout_detuning_hz=10e6,
-                                       end_readout_detuning_hz=-10e6)
-    with pytest.raises(ValidationError, match="end_readout_detuning_hz"):
+def test_readout_detuning_edges_take_either_order():
+    """The readout frame's twin of the drive rule — and the frame where writing
+    the pair 'downward' is the natural one, since a punchout walks the dip DOWN
+    from f_dress0 toward f_bare."""
+    up = ReadoutDetuningSweepParameters(start_readout_detuning_hz=-15e6,
+                                        end_readout_detuning_hz=10e6,
+                                        num_readout_freq_points=51)
+    down = ReadoutDetuningSweepParameters(start_readout_detuning_hz=10e6,
+                                          end_readout_detuning_hz=-15e6,
+                                          num_readout_freq_points=51)
+    axis_up = readout_detuning_sweep(up)[DETUNING_AXIS]
+    axis_down = readout_detuning_sweep(down)[DETUNING_AXIS]
+    assert axis_up == pytest.approx(axis_down)
+    assert np.all(np.diff(axis_down) > 0)
+    assert axis_down[0] == pytest.approx(-15e6)
+
+    with pytest.raises(ValidationError, match="zero-width"):
         ReadoutDetuningSweepParameters(start_readout_detuning_hz=0.0,
                                        end_readout_detuning_hz=0.0)
-    # asymmetric but ascending is the capability's reason to exist: a punchout
-    # walks the dip DOWN from f_dress0 toward f_bare
-    ok = ReadoutDetuningSweepParameters(start_readout_detuning_hz=-25e6,
-                                        end_readout_detuning_hz=5e6)
-    assert ok.start_readout_detuning_hz < ok.end_readout_detuning_hz
+
+
+def test_window_bounds_is_the_one_ordering_point():
+    """Every 'is x inside the window?' test must go through this helper: a
+    chained ``start <= x <= end`` is silently ALWAYS FALSE on a reversed pair,
+    which would fail every good fit while looking like a physics problem."""
+    assert window_bounds(-80e6, 20e6) == (-80e6, 20e6)
+    assert window_bounds(20e6, -80e6) == (-80e6, 20e6)
 
 
 def test_the_two_detuning_frames_are_independent_siblings():

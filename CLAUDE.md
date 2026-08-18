@@ -225,8 +225,13 @@ scqo/
                     #   resonator_spectroscopy* + readout_frequency). Explicit
                     #   [start, end] so an ASYMMETRIC window is expressible — on the
                     #   readout side that is the physics, since power and flux sweeps
-                    #   both walk the dip DOWN from f_dress0 toward f_bare; ascending
-                    #   enforced per frame (the fitters assume it). THE FRAME IS IN THE
+                    #   both walk the dip DOWN from f_dress0 toward f_bare. The edges
+                    #   take EITHER order (only zero width is refused) and the axis is
+                    #   normalised ASCENDING in _window_sweep — both drivers could sweep
+                    #   descending, but scqat's peak_fit inverts its width bound on a
+                    #   descending axis and mis-fits SILENTLY, so the one ordering point
+                    #   is window_bounds() (never a chained start <= x <= end).
+                    #   THE FRAME IS IN THE
                     #   FIELD NAME and the two mixins are independent SIBLINGS (unlike
                     #   the flux frames, where _pulse subclasses absolute): one
                     #   experiment could carry both, and shared names would merge by

@@ -17,7 +17,11 @@ from pydantic import Field
 
 from .._scqat import per_qubit_results
 from ..contract import DatasetContract
-from ._capabilities.detuning import DriveDetuningSweepParameters, drive_detuning_sweep
+from ._capabilities.detuning import (
+    DriveDetuningSweepParameters,
+    drive_detuning_sweep,
+    window_bounds,
+)
 from ._capabilities.qubit_reset import QubitResetParameters
 from ._sim import stable_seed
 from ..parameters import AveragingParameters, TargetSelection
@@ -101,10 +105,10 @@ class QubitSpectroscopy(Experiment):
         detuning = coords["detuning_hz"]
         targets = self.params.targets
         rng = np.random.default_rng(stable_seed("qubit_spectroscopy", *targets))
-        start = self.params.start_drive_detuning_hz
-        end = self.params.end_drive_detuning_hz
-        width = end - start
-        center = (start + end) / 2
+        low, high = window_bounds(self.params.start_drive_detuning_hz,
+                                  self.params.end_drive_detuning_hz)
+        width = high - low
+        center = (low + high) / 2
         i_data = np.empty((len(targets), detuning.size))
         q_data = np.empty_like(i_data)
         for k in range(len(targets)):
@@ -148,11 +152,12 @@ class QubitSpectroscopy(Experiment):
                     "n_peaks": float(len(peaks)),
                     "old_drive_freq_hz": old,
                 }
-                ok = np.isfinite(det) and (
-                    self.params.start_drive_detuning_hz
-                    <= det
-                    <= self.params.end_drive_detuning_hz
-                )
+                # window_bounds, never a chained start <= det <= end: the edges
+                # may arrive in either order and a reversed pair would make the
+                # chain always-False, failing every good fit.
+                low, high = window_bounds(self.params.start_drive_detuning_hz,
+                                          self.params.end_drive_detuning_hz)
+                ok = np.isfinite(det) and low <= det <= high
             else:
                 result.fit[qubit] = {"n_peaks": 0.0, "old_drive_freq_hz": old}
                 ok = False

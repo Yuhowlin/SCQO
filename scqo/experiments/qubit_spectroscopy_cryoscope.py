@@ -288,7 +288,8 @@ class QubitSpectroscopyCryoscope(Experiment):
         return float(quad * self.params.flux_pulse_amp_v ** 2)
 
     def define_sweep(self) -> dict[str, np.ndarray]:
-        # ascending window (mixin-validated); peak_fit's gamma bound assumes ascending.
+        # the mixin normalises the edges to an ascending axis, which peak_fit's
+        # (un-abs'd) gamma bound requires — see _capabilities/detuning.py.
         wait = _log_time_ns(
             self.params.min_wait_ns, self.params.max_wait_ns, self.params.num_wait_points
         )
