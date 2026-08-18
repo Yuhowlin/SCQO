@@ -145,6 +145,10 @@ _TRANSMON_BASE: dict[str, FieldSpec] = {
         role="fact", design_ok=True),
     "anharmonicity_hz": FieldSpec(
         "Hz", "Anharmonicity f_12 - f_01.", role="fact", design_ok=True),
+    "ec_hz": FieldSpec(
+        "Hz", "Charging energy E_C/h (E_C ~ -anharmonicity). Held fixed in the "
+              "resonator flux arch f_q = (f_q_max + E_C) sqrt(|cos|) - E_C.",
+        role="fact", design_ok=True),
     "t1_s": FieldSpec("s", "Energy-relaxation time T1.", role="fact"),
     "t2_star_s": FieldSpec("s", "Ramsey dephasing time T2*.", role="fact"),
     "t2_echo_s": FieldSpec("s", "Hahn-echo coherence time T2_echo.", role="fact"),

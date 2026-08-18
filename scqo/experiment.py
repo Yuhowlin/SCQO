@@ -68,8 +68,11 @@ class Experiment(ABC):
         #: device surface experiments read/write — the Session swaps in the
         #: RecordingDevice (live) or the SuggestionCapture (around update()).
         self.device = backend.device
-        #: the datasheet for anchor fallbacks (set by the Session).
+        #: the datasheet for anchor/fact fallbacks (set by the Session).
         self.design: Design = Design({})
+        #: the physical-fact store (physical.json), set by the Session; None when
+        #: an experiment runs standalone (tests) — `fact()` then skips that tier.
+        self.physical = None
         self.sweep_axes: dict[str, np.ndarray] = {}
         self.dataset: xr.Dataset | None = None
         self.result: Result | None = None
@@ -120,6 +123,30 @@ class Experiment(ABC):
             f"{entity}.{field} has no standing value and no design fallback "
             f"— set it (scqo set {entity}.{field}=...) or declare a design "
             f"value in design.toml")
+
+    def fact(self, name: str, field: str, default: float | None = None) -> float | None:
+        """Read a physical FACT with the precedence stored value (physical.json)
+        -> design.toml -> ``default``.
+
+        The fact-side twin of :meth:`anchor` (which serves channel KNOBS and
+        raises on facts): a MODE fact — a resonator's ``g_hz``, a transmon's
+        ``ec_hz`` — is unreachable through the device views during ``estimate()``,
+        so this reads the physical store the Session attached (``self.physical``)
+        directly. ``name`` takes the qubit-closure sugar
+        (``fact("q1", "g_hz")`` resolves to the attached resonator ``q1_res``;
+        ``fact("q1", "ec_hz")`` to the qubit mode). Unlike ``anchor`` it never
+        raises on a missing value — it degrades to ``default`` — because its
+        callers have a physical code default to fall back on."""
+        roster = self.device.roster
+        entity, _spec = roster.resolve_field(name, field)
+        if self.physical is not None:
+            stored = self.physical.get(entity, field)
+            if stored is not None:
+                return float(stored)
+        seed = self.design.get(entity, field)
+        if seed is not None:
+            return float(seed)
+        return default
 
     # ------------------------------------------------------------------ backend
     @abstractmethod

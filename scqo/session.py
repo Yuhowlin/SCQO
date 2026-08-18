@@ -248,6 +248,7 @@ class Session:
         exp = cls(self.backend, validated)
         exp.device = self.device  # route through the recording surface
         exp.design = self.design
+        exp.physical = self.physical  # fact reads (Experiment.fact) during estimate()
 
         gate_error = self._validate_targets(cls, exp)
         if gate_error is not None:
@@ -372,6 +373,7 @@ class Session:
         exp = cls(self.backend, validated)
         exp.device = self.device  # route through the recording surface
         exp.design = self.design
+        exp.physical = self.physical  # fact reads (Experiment.fact) during estimate()
 
         gate_error = self._validate_targets(cls, exp)
         if gate_error is not None:
@@ -867,6 +869,8 @@ class Session:
                 merged = {**self.parameter_defaults.get(name, {}),
                           **plan.step_params(first_step[name])}
                 exp = cls(self.backend, cls.Parameters(**merged))
+                exp.design = self.design
+                exp.physical = self.physical  # keep fact() usable in update()
                 exp.result = cls.Result(
                     outcomes={t: Outcome.SUCCESSFUL for t in fit}, fit=fit)
                 capture = SuggestionCapture(self.device, self.physical,

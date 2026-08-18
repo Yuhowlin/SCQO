@@ -162,9 +162,122 @@ def test_drag_target_gate_rejects_unnormalized_spellings(session):
 
 
 def test_flux_map_writes_the_sweet_spot_on_the_flux_channel(session):
+    """The sweet spot + period always, and the dispersive physics too because the
+    demo qubit HAS a standing drive_freq_hz to anchor f_q_max on."""
     assert _suggest(session, "resonator_spectroscopy_flux") == {
         ("q0_z", "idle_flux"), ("q0_z", "flux_offset"),
+        ("q0_z", "flux_per_phi0"), ("q0_ro", "readout_freq_hz"),
+        ("q0_res", "f_r0_hz"), ("q0_res", "g_hz")}
+
+
+def test_flux_map_withholds_dispersive_physics_without_an_arch_anchor(session, monkeypatch):
+    """f_r0/g are conditional on an f_q_max the trace CANNOT fit (it fixes only the
+    product g^2*f_q_max), so they are proposed only against a measured arch top.
+    Take the drive frequency away — true bring-up, before the qubit has answered —
+    and they must disappear while the flux-periodicity proposals survive."""
+    from scqo.experiments.resonator_spectroscopy_flux import ResonatorSpectroscopyFlux
+
+    real_anchor = ResonatorSpectroscopyFlux.anchor
+
+    def no_drive_freq(self, name, field):
+        if field == "drive_freq_hz":
+            raise ValueError(f"{name}.drive_freq_hz has no standing value")
+        return real_anchor(self, name, field)
+
+    monkeypatch.setattr(ResonatorSpectroscopyFlux, "anchor", no_drive_freq)
+    out = session.run("resonator_spectroscopy_flux", {"targets": ["q0"]})
+    assert out.get("error") is None, out.get("error")
+    assert out["fit"]["q0"]["f_q_max_source"] == "assumed"
+    assert {(s["entity"], s["field"]) for s in out["suggestions"]} == {
+        ("q0_z", "idle_flux"), ("q0_z", "flux_offset"),
         ("q0_z", "flux_per_phi0"), ("q0_ro", "readout_freq_hz")}
+
+
+def test_flux_map_explicit_f_q_max_overrides_the_drive_anchor(session):
+    """An explicitly supplied arch top wins over the drive-channel proxy, is the
+    value the fit was pinned to, and still counts as measured physics."""
+    out = session.run("resonator_spectroscopy_flux",
+                      {"targets": ["q0"], "f_q_max_hz": 4.2e9})
+    assert out.get("error") is None, out.get("error")
+    fit = out["fit"]["q0"]
+    assert fit["f_q_max_source"] == "param"
+    assert fit["f_q_max_hz"] == pytest.approx(4.2e9)
+    assert ("q0_res", "g_hz") in {(s["entity"], s["field"]) for s in out["suggestions"]}
+
+
+def test_flux_map_proposes_dispersive_physics_when_provenance_tag_is_stripped(session):
+    """Campaign finalize replays update() over an AGGREGATED fit that keeps only
+    numeric quantities, so the f_q_max_source tag is gone. update() must then
+    re-derive the anchor from device state and still propose f_r0/g — dropping them
+    would silently discard physics the per-repeat runs did propose."""
+    from scqo.experiments.resonator_spectroscopy_flux import ResonatorSpectroscopyFlux
+    from scqo.result import Outcome
+    from scqo.suggestions import SuggestionCapture
+
+    exp = ResonatorSpectroscopyFlux(
+        session.backend, ResonatorSpectroscopyFlux.Parameters(targets=["q0"]))
+    exp.device = session.device
+    exp.design = session.design
+    exp.result = ResonatorSpectroscopyFlux.Result(
+        outcomes={"q0": Outcome.SUCCESSFUL},
+        fit={"q0": {  # a numeric-only aggregated fit — no f_q_max_source tag
+            "flux_offset": 0.1, "sweet_spot_res_hz": 5.93e9,
+            "flux_per_phi0": 0.58, "f_r0_hz": 5.921e9, "g_hz": 90e6,
+            "f_q_max_hz": 5.14e9}})
+    capture = SuggestionCapture(session.device, session.physical, session.roster)
+    exp.device = capture
+    exp.update()
+    fields = {(s.entity, s.field) for s in capture.suggestions}
+    assert ("q0_res", "f_r0_hz") in fields and ("q0_res", "g_hz") in fields
+
+
+def test_flux_map_ec_defaults_when_unsourced(session):
+    """No stored ec_hz and none in the demo design -> the code default 0.2 GHz
+    feeds the arch and is recorded (record-only, never proposed)."""
+    out = session.run("resonator_spectroscopy_flux", {"targets": ["q0"]})
+    assert out.get("error") is None, out.get("error")
+    assert out["fit"]["q0"]["ec_hz"] == pytest.approx(0.2e9)
+    # ec is a sourced INPUT, not measured physics -> never suggested.
+    assert ("q0", "ec_hz") not in {(s["entity"], s["field"]) for s in out["suggestions"]}
+
+
+def test_flux_map_ec_sourced_from_stored_fact(session):
+    """A stored ec_hz fact wins over the code default and is the value the arch
+    was fitted with (the fact tier of the fact->design->default precedence)."""
+    session.set_values({"q0.ec_hz": 1.9e8})
+    out = session.run("resonator_spectroscopy_flux", {"targets": ["q0"]})
+    assert out.get("error") is None, out.get("error")
+    assert out["fit"]["q0"]["ec_hz"] == pytest.approx(1.9e8)
+
+
+def test_fact_helper_precedence(session):
+    """Experiment.fact() reads stored fact -> design.toml -> code default, in
+    that order (the primitive anchor() lacks — anchor serves knobs, raises on
+    facts). g_hz resolves through the qubit closure to the attached resonator."""
+    from scqo.design import Design
+    from scqo.experiments.resonator_spectroscopy_flux import ResonatorSpectroscopyFlux
+
+    exp = ResonatorSpectroscopyFlux(
+        session.backend, ResonatorSpectroscopyFlux.Parameters(targets=["q0"]))
+    exp.device = session.device
+
+    # (1) nothing stored, empty design -> the code default.
+    exp.design = Design({})
+    exp.physical = None
+    assert exp.fact("q0", "ec_hz", 0.2e9) == pytest.approx(0.2e9)
+
+    # (2) design declares it -> design wins over the default.
+    exp.design = Design({"q0": {"ec_hz": 1.7e8}})
+    assert exp.fact("q0", "ec_hz", 0.2e9) == pytest.approx(1.7e8)
+
+    # (3) a stored fact wins over the design value.
+    session.set_values({"q0.ec_hz": 2.1e8})
+    exp.physical = session.physical
+    assert exp.fact("q0", "ec_hz", 0.2e9) == pytest.approx(2.1e8)
+
+    # qubit-closure addressing: q0 + g_hz -> the attached resonator q0_res.
+    session.set_values({"q0_res.g_hz": 8.5e7})
+    assert exp.fact("q0", "g_hz", 50e6) == pytest.approx(8.5e7)
 
 
 def test_pair_zz_writes_coupler_idle_and_pair_fact(session):
