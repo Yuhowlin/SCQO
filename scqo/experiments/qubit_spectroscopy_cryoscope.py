@@ -6,8 +6,8 @@ phase wraps, this experiment measures the qubit frequency DIRECTLY by
 spectroscopy at each wait-time INTO a parked flux pulse, reaching the
 microsecond tails (bias-tee droop, slow wiring transients). The sequence per
 (detuning, wait) point: reset -> set the drive near the parked qubit frequency
--> play a long flux ``const`` pulse -> wait ``t`` into it -> play an x180
-spectroscopy pulse -> read out. Per wait-time the spectroscopy peak center gives
+-> play a long flux ``const`` pulse -> wait ``t`` into it -> play a long, weak
+pi-area spectroscopy pulse -> read out. Per wait-time the spectroscopy peak center gives
 the qubit's frequency, which maps to the delivered flux; the flux settling is fit
 to a sum of exponentials -> the predistortion tap ``(amplitude, tau)`` components.
 
@@ -21,12 +21,43 @@ that center (ASYMMETRIC allowed — when the centering is imperfect the parked l
 systematically to one side, so a one-sided window spends every point on signal
 instead of half on empty detuning).
 
-SPECTROSCOPY DRIVE: the probe plays a long, weak ``saturation`` (square) tone of
-duration ``drive_len_ns`` whose amplitude is auto-scaled to hold the calibrated
-x180 pulse AREA (peak-amplitude x time), so a longer pulse is a proportionally
-weaker one. The line width is then Fourier-limited (FWHM ~ 0.8 / drive_len_ns)
-with little power broadening — the fix for a bare x180's tens-of-MHz line that a
-few-MHz settling tail cannot be tracked against.
+SPECTROSCOPY DRIVE: the probe plays a long, weak tone BUILT FOR THIS RUN — the
+``drive_shape`` envelope at exactly ``drive_len_ns``, at the amplitude that holds
+the calibrated x180 pulse AREA, so a longer pulse is a proportionally weaker one
+and the tone stays a true pi pulse with little power broadening. The line is then
+Fourier-limited at a constant set by the envelope:
+
+    envelope                FWHM x drive_len_ns    first shoulder
+    square                        0.799               11.6 %
+    gaussian (sigma = T/4)        1.095                0.28 %
+    gaussian (sigma = T/5)        1.285                0.01 %
+    cosine (Hann)                 1.334                0.46 %
+
+SHAPE IS NOT THE LEVER — LENGTH IS. Measured on 5Q4C q1 (2026-08-19, three runs
+at one setting with only the envelope changed, drive_len_ns=100, 51 points over
+30 MHz): the extracted center's scatter tracks the LINEWIDTH and nothing else —
+0.0087, 0.0088 and 0.0101 MHz of scatter per MHz of FWHM for square, gaussian and
+cosine. So the narrowest line wins, and that is ``square``:
+
+    shape       measured FWHM   center scatter   drift / scatter
+    square         7.4 MHz        0.064 MHz           10.1
+    gaussian      14.6 MHz        0.128 MHz            7.3
+    cosine        16.2 MHz        0.164 MHz            3.9
+
+A square tone's 11.6% Rabi-nutation shoulders (at ~ +/- 8.9 / drive_len_ns; an
+AREA effect, not a sinc sidelobe, so a flat top does not remove them) were the
+argument for a smooth envelope — they cost nothing measurable here, while the
+1.6-2x width they buy costs a factor 2-2.5 in center precision. Reach for
+``cosine``/``gaussian`` only against evidence of a SHAPE problem (a split or
+visibly asymmetric line), never to narrow the band.
+
+The real ceiling is a Fourier tradeoff that no envelope escapes: wait points
+shorter than ``drive_len_ns`` average the settling over the pulse, so resolving a
+tail at ``t`` caps the pulse near ``t`` and the line near ``0.8 / t``.
+
+WINDOW: keep the line a MINORITY of the detuning window (roughly FWHM <= a third
+of it) — not for the fit, which is per-peak, but so the sweep keeps real baseline
+either side of the line.
 
 FRAME (deliberately NOT a ``_pulse`` experiment): the flux amplitude is a SCALAR
 parameter ``flux_pulse_amp_v`` (volts RELATIVE to idle_flux — the pulse rides on
@@ -47,7 +78,7 @@ QM-only today: the base ``probe()`` raises, and only LCHQMDriver supplies one.
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 import numpy as np
 from pydantic import Field, field_validator, model_validator
@@ -129,12 +160,47 @@ class QubitSpectroscopyCryoscopeParameters(
     drive_len_ns: float = Field(
         400.0, ge=16, multiple_of=4,
         description="Duration of the spectroscopy drive pulse, ns (on the 4 ns "
-        "grid). It sets the spectral line width: FWHM ~ 0.8 / drive_len_ns (400 ns "
-        "-> ~2 MHz), so lengthen it to resolve a narrow settling tail. The backend "
-        "auto-scales the drive amplitude to hold the calibrated x180 pulse area, so "
-        "a longer pulse is a proportionally weaker one (little power broadening). "
-        "Wait points shorter than drive_len_ns average the settling over the pulse, "
-        "so keep drive_len_ns well below the tails of interest.",
+        "grid). THE lever on the linewidth: FWHM ~ C / drive_len_ns, with C from "
+        "drive_shape (0.80 square, 1.10 gaussian at the default sigma, 1.33 "
+        "cosine) — 100 ns of square is ~8 MHz, 400 ns ~2 MHz. A narrower line "
+        "locates its center proportionally better, so lengthen it to resolve a "
+        "small settling step. The backend auto-scales the drive amplitude to hold "
+        "the calibrated x180 pulse area, so a longer pulse is a proportionally "
+        "weaker one (little power broadening). The counter-pressure: wait points "
+        "shorter than drive_len_ns average the settling over the pulse, so a tail "
+        "at t caps drive_len_ns near t — set it around min_wait_ns and read the "
+        "linewidth off that, rather than choosing the two independently.",
+    )
+    drive_shape: Literal["square", "cosine", "gaussian"] = Field(
+        "square",
+        description="Envelope of the spectroscopy tone, built for this run at "
+        "exactly drive_len_ns and at the pi-area amplitude. 'square' (default) is "
+        "the NARROWEST line per ns (FWHM 0.80 / drive_len_ns vs 1.10 gaussian at "
+        "sigma=T/4 and 1.33 cosine), and the center precision that decides this "
+        "measurement is set by the linewidth: on 5Q4C q1 the per-wait center "
+        "scatter was 0.064 / 0.128 / 0.164 MHz for square / gaussian / cosine at "
+        "one setting. The smooth envelopes' only advantage is suppressing the "
+        "square tone's 11.6% Rabi-nutation shoulders, which cost nothing "
+        "measurable there — take one when the line itself looks wrong (split or "
+        "asymmetric), not to narrow the band. They also render an ARBITRARY "
+        "waveform (one instrument waveform-memory sample per ns) where square "
+        "stays a constant waveform and costs none.",
+    )
+    drive_sigma_frac: float = Field(
+        0.25, gt=0.05, le=0.5,
+        description="Gaussian envelope width as a fraction of drive_len_ns (sigma "
+        "= frac x drive_len_ns); ignored by the other shapes. Smaller = a gentler "
+        "truncation and smaller shoulders but a WIDER line (0.25 -> FWHM 1.10 / "
+        "drive_len_ns with 0.28% shoulders; 0.20 -> 1.29 with 0.01%), so the "
+        "default 0.25 is the narrow end of the usable range.",
+    )
+    drive_amp_factor: float = Field(
+        1.0, gt=0,
+        description="Extra multiplier on the pi-area drive amplitude. 1.0 = the "
+        "calibrated x180 rotation area, i.e. a true pi pulse (full contrast on "
+        "resonance). Below 1 trades contrast for a slightly narrower line; above 1 "
+        "over-rotates and SPLITS the line, and the backend refuses a tone louder "
+        "than the loudest already stored on that drive line.",
     )
     min_wait_ns: int = Field(
         16, ge=16,

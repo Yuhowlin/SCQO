@@ -697,8 +697,9 @@ def test_spectroscopy_cryoscope_accept_roundtrips_paired_facts(session):
 def test_spectroscopy_cryoscope_window_and_drive_len_validation():
     """The detuning window is the drive_detuning capability's explicit
     [start, end] range (asymmetric allowed, edges in either order, axis always
-    emitted ascending), and drive_len_ns sits on the 4 ns grid at or above
-    16 ns. define_sweep reads only params, so a stub backend exercises it."""
+    emitted ascending), and the spectroscopy tone's shape parameters carry their
+    own bounds (drive_len_ns on the 4 ns grid at or above 16 ns). define_sweep
+    reads only params, so a stub backend exercises it."""
     cls = registry.get("qubit_spectroscopy_cryoscope")
 
     # the default window reproduces the old symmetric +/-100 MHz, 101 points
@@ -732,6 +733,38 @@ def test_spectroscopy_cryoscope_window_and_drive_len_validation():
         cls.Parameters(targets=["q0"], drive_len_ns=10)   # below the 16 ns floor
     with pytest.raises(ValueError):
         cls.Parameters(targets=["q0"], drive_len_ns=18)   # off the 4 ns grid
+
+
+def test_spectroscopy_cryoscope_drive_shape_parameters():
+    """The spectroscopy tone is a built pi pulse, SQUARE by default: the center
+    precision that decides this measurement is set by the linewidth (5Q4C q1,
+    2026-08-19 — scatter 0.064 / 0.128 / 0.164 MHz for square / gaussian / cosine
+    at one setting, tracking their 7.4 / 14.6 / 16.2 MHz widths), and square is the
+    narrowest per ns. The smooth envelopes stay selectable for a line that looks
+    WRONG rather than wide, with their knobs bounded."""
+    cls = registry.get("qubit_spectroscopy_cryoscope")
+
+    default = cls.Parameters(targets=["q0"])
+    assert default.drive_shape == "square"
+    assert default.drive_sigma_frac == pytest.approx(0.25)
+    assert default.drive_amp_factor == pytest.approx(1.0)
+
+    for shape in ("square", "cosine", "gaussian"):
+        assert cls.Parameters(targets=["q0"], drive_shape=shape).drive_shape == shape
+    with pytest.raises(ValueError):
+        cls.Parameters(targets=["q0"], drive_shape="lorentzian")
+
+    # sigma is a FRACTION of the length: a whole-length sigma is not a gaussian,
+    # and a vanishing one is a spike the 4 ns grid cannot render.
+    for bad in (0.05, 0.0, 0.6, -0.1):
+        with pytest.raises(ValueError):
+            cls.Parameters(targets=["q0"], drive_sigma_frac=bad)
+    assert cls.Parameters(targets=["q0"], drive_sigma_frac=0.5).drive_sigma_frac == 0.5
+
+    # the pi-area multiplier is strictly positive (0 plays no tone at all)
+    for bad in (0.0, -1.0):
+        with pytest.raises(ValueError):
+            cls.Parameters(targets=["q0"], drive_amp_factor=bad)
 
 
 @pytest.mark.parametrize("name,axes", [
