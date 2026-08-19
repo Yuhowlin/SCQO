@@ -3,40 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>{% block title %}SCQO{% endblock %}</title>
-<style>
-  body { font: 14px/1.45 system-ui, sans-serif; margin: 0; color: #1d2733; }
-  nav { background: #14385c; padding: 8px 16px; }
-  nav a { color: #dce8f5; text-decoration: none; margin-right: 18px; font-weight: 600; }
-  nav a:hover { color: #fff; }
-  main { padding: 14px 18px; max-width: 1200px; }
-  table { border-collapse: collapse; width: 100%; margin: 8px 0; }
-  th, td { text-align: left; padding: 4px 10px; border-bottom: 1px solid #e2e8ef; font-size: 13px; }
-  th { background: #f2f6fa; }
-  a { color: #14507e; }
-  .badge { padding: 1px 8px; border-radius: 9px; font-size: 12px; color: #fff; }
-  .successful { background: #2c8a4b; } .partial { background: #c78a1c; }
-  .failed { background: #b6382e; } .no_data { background: #6b7683; }
-  .operator { background: #14507e; }  /* human-proposed suggestion (scqo suggest) */
-  .changed { background: #fff3d6; font-weight: 600; }
-  form.filters input, form.filters select { margin-right: 8px; margin-bottom: 6px; }
-  img.figure { max-width: 100%; border: 1px solid #e2e8ef; margin: 6px 0; }
-  pre { background: #f6f8fa; padding: 8px; overflow-x: auto; font-size: 12px; }
-  .error-box { background: #fdecea; border: 1px solid #e5b4ae; padding: 8px 12px; }
-  svg { width: 100%; height: auto; }
-  svg .axis { stroke: #98a4b3; } svg .trend { fill: none; stroke: #14507e; stroke-width: 2; }
-  svg circle { fill: #14507e; } svg .tick { font-size: 11px; fill: #5a6672; }
-  svg .ctxsep { stroke: #98a4b3; stroke-dasharray: 4 3; }
-  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 5px; margin-right: 4px; }
-  svg circle.ctx-0 { fill: #14507e; } .swatch.ctx-0 { background: #14507e; }
-  svg circle.ctx-1 { fill: #c78a1c; } .swatch.ctx-1 { background: #c78a1c; }
-  svg circle.ctx-2 { fill: #2c8a4b; } .swatch.ctx-2 { background: #2c8a4b; }
-  svg circle.ctx-3 { fill: #b6382e; } .swatch.ctx-3 { background: #b6382e; }
-  svg circle.ctx-4 { fill: #7b5ab8; } .swatch.ctx-4 { background: #7b5ab8; }
-  svg circle.ctx-5 { fill: #0f8b8d; } .swatch.ctx-5 { background: #0f8b8d; }
-  .muted { color: #6b7683; font-size: 12px; }
-  .live { color: #2c8a4b; font-weight: 600; font-size: 12px; }
-  .ext { color: #b6382e; font-size: 12px; }
-</style>
+{% include "_style.html" %}
 </head>
 <body>
 <nav>

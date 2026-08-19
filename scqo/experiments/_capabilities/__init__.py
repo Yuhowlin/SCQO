@@ -1,10 +1,12 @@
-"""Capability modules: shared Parameters mixins + helpers behind the derived catalog tags.
+"""Capability modules: shared Parameters mixins + helpers behind the catalog's capabilities.
 
 One capability = one module: the canonical Parameters mixin, the contract
 fragment, and the simulate/estimate helpers that every carrier uses instead of
-copy-pasting. The registry derives an experiment's ``tags`` from which mixins its
-Parameters subclass — a tag can therefore never lie or rot, and experiments with
-no tags are legitimate (a new experiment may not be classifiable yet).
+copy-pasting. The registry derives an experiment's ``capabilities`` from which
+mixins its Parameters subclass — a capability can therefore never lie or rot,
+and experiments with no capabilities are legitimate (a new experiment may not be
+classifiable yet). Not "tags": that word is the datastore's (user-attached run
+tags), and the two must never share a name.
 """
 
 from .amplitude import (
@@ -50,6 +52,7 @@ from .state_readout import (
     SHOT_STATE_ALT,
     ReadoutModeParameters,
     StateReadoutParameters,
+    discrimination_method,
     joint_state_labels,
     joint_to_marginals,
     member_order,
@@ -60,11 +63,26 @@ from .state_readout import (
     states_to_joint_population,
 )
 
+#: One line per capability for the CLI catalog browser (`scqo run --capability`),
+#: in derivation order (``scqo.experiments._derived_capabilities``). Curated by
+#: hand rather than scraped from the mixin docstrings: those carry reST markup,
+#: and this package also holds mixins that are deliberately NOT capabilities
+#: (ReadoutModeParameters, FluxComponentParameters), so scanning would mislead.
+#: test_capabilities pins the keys to exactly the derivable set.
+CAPABILITY_SUMMARIES = {
+    "state_readout": "chooses analog I/Q vs FPGA state-discriminated acquisition",
+    "flux": "sweeps a flux-bias window on a z line (absolute volts)",
+    "qubit_reset": "resets the qubit between shots (thermal wait or active)",
+    "flux_pulse": "the flux window is a pulse relative to idle_flux",
+    "amplitude": "sweeps amplitude as a factor of the standing amplitude",
+}
+
 __all__ = [
     "ABS_AMP_COORD",
     "ABS_AMP_LABEL",
     "ACTIVE_RESET_ROUNDS_DESC",
     "AMP_AXIS",
+    "CAPABILITY_SUMMARIES",
     "FLUX_AXIS",
     "MAX_AMP_FACTOR_DESC",
     "MIN_AMP_FACTOR_DESC",
@@ -92,6 +110,7 @@ __all__ = [
     "amp_anchor",
     "amp_sweep",
     "attach_absolute_amp",
+    "discrimination_method",
     "flux_anchor_v",
     "flux_frame",
     "flux_sweep",

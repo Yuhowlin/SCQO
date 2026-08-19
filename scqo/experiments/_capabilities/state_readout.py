@@ -1,8 +1,8 @@
 """State-readout capability: the digital (FPGA-discriminated) acquisition modes.
 
 An experiment HAS this capability exactly when its Parameters subclass
-:class:`StateReadoutParameters`; the catalog derives the ``"state_readout"`` tag
-from that subclass relation (never from a declared string). The capability owns
+:class:`StateReadoutParameters`; the catalog derives the ``"state_readout"``
+capability from that subclass relation (never from a declared string). The capability owns
 the Parameters fields (one canonical text), the contract fragments
 (``POPULATION_ALT`` / ``SHOT_STATE_ALT``), the simulate-side draws and packers,
 the estimate-side rename (:func:`signal_rename`), and the joint-population
@@ -91,6 +91,21 @@ class ReadoutModeParameters(Parameters):
         "shot_idx axis (full information, more memory; digital data stays "
         "per-member integer levels).",
     )
+
+
+def discrimination_method(readout_mode: str) -> str:
+    """The scqat ``readout_fidelity`` method that fits data acquired in this
+    readout mode — ``"gmm"`` for ``"shot"``, ``"average"`` for ``"average"``.
+
+    DERIVED, never a second knob: an FPGA-averaged acquisition returns ONE I/Q
+    point per prepared state, and no Gaussian mixture can be trained on that, so
+    letting an operator pair ``readout_mode="average"`` with a mixture fit would
+    only make an unrepresentable request representable.
+    """
+    if readout_mode not in ("average", "shot"):
+        raise ValueError(
+            f"unknown readout_mode {readout_mode!r}; expected 'average' or 'shot'")
+    return "average" if readout_mode == "average" else "gmm"
 
 
 def population_row(

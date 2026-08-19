@@ -69,36 +69,37 @@ scqo run                                         # no arguments = show the menu
 ```
 
 ```
-pair_swap_chevron                Single-excitation swap chevron: flux amplitude x pulse duration on one pair member (record-only 2D map).
-pair_swap_flux_map               Fixed-duration coupler-flux x member-flux swap spot (record-only 2D map).
-pair_zz_coupler                  Residual ZZ vs coupler standing bias ... proposes the coupler z channel's idle_flux (ZZ-off point) + the pair's zz_hz fact.
-qubit_drag_alternating           Sweep DRAG beta over alternating x180/-x180 trains ... calibrates drag_beta.
-qubit_drag_equator               Sweep DRAG beta over three equator sequences ... calibrates drag_beta.
-qubit_echo [state_readout]       Hahn echo ... proposes t2_echo_s (a sample fact).
-qubit_echo_flux_pulse [state_readout,flux,flux_pulse]  T2-echo vs flux-PULSE map, window relative to idle_flux (record-only spectrum).
-qubit_pi_pulse_error             Repeated-X180 error amplification ... refines pi_amp.
-qubit_power_rabi [state_readout] Sweep drive amplitude ... recalibrates pi_amp.
-qubit_ramsey [state_readout]     Two pi/2 pulses ... corrects drive_freq_hz and reports T2*.
-qubit_relaxation [state_readout] Pi pulse + swept wait ... proposes t1_s (a sample fact).
-qubit_relaxation_flux_pulse [state_readout,flux,flux_pulse] T1 vs flux-PULSE map, window relative to idle_flux (record-only spectrum).
-qubit_spectroscopy               Sweep a weak saturation drive ... recalibrates drive_freq_hz.
-qubit_spectroscopy_flux_pulse [flux,flux_pulse]  2D flux arch, window relative to idle_flux ... proposes flux_offset/flux_per_phi0 (z channel) + ej_sum_hz/f_q_max_hz (mode facts) + idle_flux (re-parks at the sweet spot).
-qubit_sqrb [state_readout]       Randomized benchmarking ... average gate fidelity.
-qubit_t1_ade [qubit_reset]       Track T1 vs lab time: 3-delay closed-form decay rate on the FPGA (ADE; record-only; QM backend only).
-qubit_t1_bayesian [qubit_reset]  Track T1 vs lab time: per-shot adaptive Bayesian estimation, tau = c*T1_est (record-only; QM backend only).
-qubit_tomography                 State tomography ... populations + gate error trajectory.
-readout_frequency                Per-shot fidelity vs freq ... updates readout_freq_hz.
-readout_power                    Per-shot fidelity vs amp ... updates readout_amp.
-resonator_spectroscopy           Sweep readout frequency ... updates readout_freq_hz; proposes f_r_hz + kappa_tot_hz on the resonator mode.
-resonator_spectroscopy_flux [flux]        2D resonator flux map ... proposes flux_offset/flux_per_phi0 and parks the operating point at the sweet spot.
-resonator_spectroscopy_power_amp Fast punchout (FPGA amplitude sweep) ... proposes readout_power_dbm + readout_freq_hz.
-resonator_spectroscopy_power_chain        Careful punchout (steps the output chain per point) ... proposes readout_power_dbm + readout_freq_hz.
-single_shot_readout              IQ blobs ... stores fidelity_g/fidelity_e (monitors) + proposes the discriminator knobs.
+pair_swap_chevron                   qubit_spectroscopy_cryoscope
+pair_swap_flux_map                  qubit_spectroscopy_flux_pulse
+pair_zz_coupler                     qubit_spectroscopy_overlap
+qc_n_stark_amp                      qubit_sqrb
+qc_n_swap_amp                       qubit_stark_phase_echo
+qubit_deterministic_benchmarking    qubit_t1_ade
+qubit_drag_alternating              qubit_t1_bayesian
+qubit_drag_equator                  qubit_thermal_population
+qubit_echo                          qubit_tomography
+qubit_echo_flux_pulse               qubit_xyz_delay
+qubit_parity_switch_continuous      readout_frequency
+qubit_parity_switch_discrete        readout_power
+qubit_pi_pulse_error                resonator_spectroscopy
+qubit_power_rabi                    resonator_spectroscopy_flux
+qubit_ramsey                        resonator_spectroscopy_power_amp
+qubit_ramsey_cryoscope              resonator_spectroscopy_power_chain
+qubit_relaxation                    single_shot_readout
+qubit_relaxation_flux_pulse         single_shot_readout_gef
+qubit_spectroscopy
+# capabilities: state_readout(14) flux(4) qubit_reset(30) flux_pulse(3) amplitude(4) none(3)
+# filter: scqo run --capability <name>    detail: scqo run <name> --help
 ```
 
-(The `[state_readout]`/`[flux]` markers are capability tags, derived from each
-experiment's parameters — the menu prints them so you can see at a glance which
-experiments take `use_state_discrimination` or sweep a flux window.)
+(The menu is names only on purpose — a name tells you the family and the
+method, and the full description plus every parameter lives one step away in
+`scqo run <name> --help`. The footer counts **capabilities**, derived from each
+experiment's parameters: `scqo run --capability flux` narrows the menu to the
+experiments that sweep a flux window, repeating the flag ANDs the filters, and
+`--capability none` shows the experiments with no capability mixin yet — a
+legitimate state for a new experiment. Capabilities are not "tags": a tag is
+the searchable label YOU attach to a saved run, as in the next command.)
 
 Start with **resonator spectroscopy** — always the first measurement on a device: you
 have to find the readout resonance before any qubit experiment means anything. Tag it

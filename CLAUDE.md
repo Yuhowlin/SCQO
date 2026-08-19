@@ -119,8 +119,10 @@ scqo/
                   #   external|unrecorded; strict-match, run outranks campaign)
   lock.py         # the production cut: freeze() writes components.lock, verify()
                   #   enforces superset-by-signature (retire, never delete)
-  checks.py       # doctor witnesses over the model, renderer-free (unreachable modes,
-                  #   design coverage, lock drift, roster-vs-vendor inventory, wiring)
+  checks.py       # doctor witnesses, renderer-free: model (unreachable modes, design
+                  #   coverage, lock drift, roster-vs-vendor inventory, wiring) +
+                  #   environment (profile-resident venv base / foreign-profile
+                  #   config+data_root — the multi-account-server trap, INSTALL §1)
   report.py       # report rows behind `scqo state` / `scqo device` - renderer-free,
                   #   JSON-able (CLI prints, viewer + AI loop consume the same shapes).
                   #   Also the catalog-DERIVED field orders + units (never hand-kept
@@ -163,7 +165,9 @@ scqo/
                   #   port 2 = one physical fact across all contexts) and the
                   #   device page holds the facts x (cooldown, setup) matrix —
                   #   all read from history.sqlite strictly read-only (never
-                  #   creates one)
+                  #   creates one); per-setup export.{html,xlsx,pdf} (_export.py:
+                  #   self-contained offline HTML with embedded run snapshots /
+                  #   two-sheet xlsx / 16:9 PDF document mirroring the offline HTML)
   __main__.py     # `python -m scqo <data_root>` - rebuild the index from the run folders
   cli/            # the `scqo` command (run/campaign/find/accept/suggest/set/tag/state/
                   #   user/device/doctor): ONE engine, any-directory;
@@ -173,7 +177,8 @@ scqo/
                   #   CHANNEL ENTITY and resolves names through the roster, never by
                   #   parsing them; simulated is built in
   experiments/    # the registry lives in __init__.py: @register / get / catalog (the
-                  #   AI's menu; maturity core|contrib + DERIVED capability tags)
+                  #   AI's menu; maturity core|contrib + DERIVED capabilities —
+                  #   never "tags", that word is the datastore's run tags)
     _capabilities/  # one module per capability: the canonical Parameters mixin + contract
                     #   fragment + sim/estimate helpers (state_readout.py,
                     #   flux.py = the swept flux window in TWO FRAMES sharing one axis
@@ -211,8 +216,11 @@ scqo/
                     #   the real limit is factor x stored <= 1 and each driver refuses it
                     #   BY NAME (scqo-qm + scqo-qblox, each experiments/_amp_limits));
                     #   catalog
-                    #   `tags` are DERIVED from mixin subclassing — never declared strings,
-                    #   zero tags legitimate (new experiments may be unclassifiable)
+                    #   `capabilities` are DERIVED from mixin subclassing — never declared
+                    #   strings, zero capabilities legitimate (new experiments may be
+                    #   unclassifiable); CAPABILITY_SUMMARIES = the curated one-liner
+                    #   per capability behind `scqo run --capability` (keys pinned to
+                    #   the derived set by test_capabilities)
     _depletion.py               # the post-readout photon-depletion wait: THE precedence
                                 #   helper depletion_wait_ns + the kappa->wait formula.
                                 #   The readout twin of qubit_reset one level over -
@@ -283,8 +291,12 @@ scqo/
     resonator_spectroscopy_flux.py   # 2D resonator flux map -> idle_flux + readout_freq_hz
                                 #   at the sweet spot; flux_offset/flux_per_phi0 (flux-channel
                                 #   facts) + f_r0_hz/g_hz (resonator facts)
-    readout_power.py            # per-shot fidelity vs amp prefactor -> readout_amp
-    readout_frequency.py        # per-shot fidelity vs readout detuning -> readout_freq_hz
+    readout_power.py            # vs amp prefactor -> readout_amp. TWO readout modes:
+                                #   'shot' = per-shot IQ + mixture fit -> max FIDELITY;
+                                #   'average' = one FPGA-averaged point per prepared
+                                #   state, no fit -> max blob SEPARATION (fast, but
+                                #   blind to measurement-induced transitions)
+    readout_frequency.py        # the same two modes vs readout detuning -> readout_freq_hz
     resonator_spectroscopy_power_amp.py  # FAST punchout: set-top -> one-program FPGA amplitude
                                 #   sweep down -> revert; absolute-dBm window -> readout_power_dbm + readout_freq_hz
     resonator_spectroscopy_power_chain.py  # CAREFUL punchout: steps the output chain per point
@@ -426,7 +438,7 @@ while `-k qubit_ramsey` misses the second. **0 collected means the filter was wr
 Leave `test_cli_*.py` (20 subprocess spawns), `test_index_scale.py` (100k rows) and `test_viewer.py` alone
 unless the edit is in `scqo/cli/`, `scqo/datastore.py` or `scqo/viewer/` respectively.
 
-The **full suite** (`uv run pytest -q`) costs **618 tests / ~10 min** — the `test_cli_*.py` subprocess
+The **full suite** (`uv run pytest -q`) costs **771 tests / ~15 min** — the `test_cli_*.py` subprocess
 tests dominate it (`test_cli_cooldown` alone is 42 s, three `test_cli_run` cases 23–30 s each). It is
 for exactly two cases: (1) cutting a release, and (2) an edit to
 shared core, where the blast radius is everything — `catalog.py`, `entities.py`, `roster.py`, `stores.py`,
@@ -492,4 +504,4 @@ unique locks experiments to that instrument.
 - `D:\github\QBLOX_training` — read-only Qblox reference docs (`docs/applications/superconducting/single_qubit_experiment_helpers/experiment.py`, `cal*.py`, `custom_elements.py`).
 
 ## Status
-Current published release: **v1.0.1** — see `RELEASES.toml` for the combo manifest and required upgrade actions. Release history lives in git tags + `RELEASES.toml`, not here.
+Current published release: **v2.2.0** — see `RELEASES.toml` for the combo manifest and required upgrade actions. Release history lives in git tags + `RELEASES.toml`, not here.

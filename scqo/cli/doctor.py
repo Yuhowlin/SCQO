@@ -3,10 +3,12 @@
     scqo doctor                 # the first command to run when anything misbehaves
 
 Read-only: touches no instrument, writes nothing. Checks the whole resolution chain
-a run would use — python/scqo install, the device selection (user overlay / [lab]),
-the device's cooldown registry (active cycle, current setup, instrument-config folder
-and its expected vendor files), backend driver entry points, data_root, registries,
-and the experiment catalog. Exit 0 = healthy (warnings allowed), 1 = failures.
+a run would use — python/scqo install, profile-resident install/config paths (the
+multi-account-server trap — INSTALL §1 SSH-server note), the device selection
+(user overlay / [lab]), the device's cooldown registry (active cycle, current setup,
+instrument-config folder and its expected vendor files), backend driver entry points,
+data_root, registries, and the experiment catalog. Exit 0 = healthy (warnings
+allowed), 1 = failures.
 """
 
 from __future__ import annotations
@@ -176,6 +178,15 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
         cfg = load_lab_config(args.config)
     except Exception as err:  # malformed user.toml/parameters.toml, missing named files...
         checks.append((FAIL, "config", f"{type(err).__name__}: {err}"))
+
+    # Runs even when the config failed to load: the venv-base witness is
+    # independent of it, and doctor is the only account-side view of the trap.
+    from scqo.checks import profile_residency_checks
+
+    checks.extend(tuple(c) for c in profile_residency_checks(
+        config_source=cfg.source if cfg is not None else None,
+        data_root=cfg.data_root if cfg is not None else None,
+    ))
 
     if cfg is not None:
         if cfg.source is None:

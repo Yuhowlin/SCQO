@@ -13,14 +13,19 @@ index exactly like ``scqo tag`` (never instruments, never measurement data).
 
 from __future__ import annotations
 
+import base64
 import json
+import re
 import sqlite3
+from datetime import datetime
 from html import escape
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
+
+from ._export import XLSX_MEDIA_TYPE, pdf_bytes, xlsx_bytes
 
 from ..changes import (
     HISTORY_FILE,
@@ -344,12 +349,13 @@ def create_app(data_root: str | Path) -> FastAPI:
                 })
         return rows
 
-    @app.get("/setup/{device}/{cooldown}/{setup_name}", response_class=HTMLResponse)
-    def setup_page(request: Request, device: str, cooldown: str, setup_name: str):
-        # A (device, cooldown, setup) triple names one on-disk context — a path
-        # identity like /run/<id>. Any well-formed triple renders (an unknown
-        # one shows an empty page, the /device?device= precedent); only a
-        # non-filename-safe segment 404s.
+    def _setup_context(device: str, cooldown: str, setup_name: str) -> dict:
+        """Everything setup.html renders, minus the request — shared by the
+        page and its three export routes. A (device, cooldown, setup) triple
+        names one on-disk context — a path identity like /run/<id>. Any
+        well-formed triple renders (an unknown one yields the empty-context
+        dict, the /device?device= precedent); only a non-filename-safe
+        segment 404s."""
         scqo_dir = _scqo_dir(device, cooldown, setup_name)
         if scqo_dir is None:
             raise HTTPException(
@@ -385,19 +391,126 @@ def create_app(data_root: str | Path) -> FastAPI:
         phys_rows = _param_rows(_values_of(scqo_dir / PHYSICAL_FILE),
                                 _latest_pairs(scqo_dir, "physical"),
                                 PHYSICAL_FIELD_ORDER)
+        return {"device": device, "cooldown": cooldown, "setup_name": setup_name,
+                "cycle": cycle, "setup_meta": setup_meta,
+                "in_registry": setup_meta is not None,
+                "is_active": bool(active and active[0] == cooldown),
+                "cooldown_error": cooldown_error,
+                "authority": authority, "snapshot_run": snapshot_run,
+                "latest_run": own_latest,
+                "state_rows": state_rows, "physical_rows": phys_rows,
+                "state_path": str(scqo_dir / STATE_FILE)}
+
+    @app.get("/setup/{device}/{cooldown}/{setup_name}", response_class=HTMLResponse)
+    def setup_page(request: Request, device: str, cooldown: str, setup_name: str):
         return templates.TemplateResponse(
-            request,
-            "setup.html",
-            {"device": device, "cooldown": cooldown, "setup_name": setup_name,
-             "cycle": cycle, "setup_meta": setup_meta,
-             "in_registry": setup_meta is not None,
-             "is_active": bool(active and active[0] == cooldown),
-             "cooldown_error": cooldown_error,
-             "authority": authority, "snapshot_run": snapshot_run,
-             "latest_run": own_latest,
-             "state_rows": state_rows, "physical_rows": phys_rows,
-             "state_path": str(scqo_dir / STATE_FILE)},
-        )
+            request, "setup.html", _setup_context(device, cooldown, setup_name))
+
+    def _attachment(device: str, cooldown: str, setup_name: str, ext: str) -> dict:
+        """Content-Disposition for {device}_{cooldown}_{setup}.{ext}.
+        cooldown/setup are slug-gated by _setup_context; the DEVICE segment is
+        not (datastore validates only the last two) — sanitize it before it
+        enters an HTTP header."""
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", device)
+        return {"Content-Disposition":
+                f'attachment; filename="{safe}_{cooldown}_{setup_name}.{ext}"'}
+
+    def _data_uri(path: Path) -> str | None:
+        """Inline PNG for the self-contained export; None (skip) when unreadable."""
+        try:
+            payload = base64.b64encode(path.read_bytes()).decode("ascii")
+        except OSError:
+            return None
+        return "data:image/png;base64," + payload
+
+    def _embedded_runs(rows: list[dict], extra: list[dict | None]) -> list[dict]:
+        """Offline snapshots of every run the export links to: the rows'
+        crediting sources plus the caption records (latest/snapshot run).
+        run_ids are timestamp-prefixed, so sorted() reads chronologically.
+        A run missing from the index degrades to a found=False stub — the
+        anchor target stays alive, never a dead link."""
+        ids = {r["source"]["run_id"] for r in rows
+               if r.get("source") and r["source"].get("status") == "run"}
+        ids |= {rec["run_id"] for rec in extra if rec}
+        out = []
+        for rid in sorted(ids):
+            try:
+                loaded = store.load_run(rid)
+            except (KeyError, OSError, json.JSONDecodeError):
+                out.append({"run_id": rid, "found": False})
+                continue
+            figures = [uri for p in loaded["figures"]
+                       if (uri := _data_uri(Path(p))) is not None]
+            out.append({"run_id": rid, "found": True,
+                        "record": loaded["record"],
+                        "fit": (loaded.get("result") or {}).get("fit") or {},
+                        "figures": figures,
+                        "parameters": loaded.get("parameters") or {}})
+        return out
+
+    def _embedded_campaigns(rows: list[dict]) -> list[dict]:
+        """Offline snapshots of the campaigns credited by the rows' sources."""
+        ids = {r["source"]["campaign_id"] for r in rows
+               if r.get("source") and r["source"].get("status") == "campaign"}
+        out = []
+        for cid in sorted(ids):
+            try:
+                loaded = store.load_campaign(cid)
+            except (KeyError, OSError, json.JSONDecodeError):
+                out.append({"campaign_id": cid, "found": False})
+                continue
+            manifest = loaded["manifest"]
+            out.append({"campaign_id": cid, "found": True, "manifest": manifest,
+                        "stats_rows": campaign_statistics_rows(
+                            manifest.get("statistics") or {}),
+                        "png": _data_uri(Path(loaded["path"]) / STATISTICS_PNG)})
+        return out
+
+    def _embedded(ctx: dict) -> tuple[list[dict], list[dict]]:
+        """(runs, campaigns) referenced by one context's rows — the shared
+        payload of the two self-contained exports (html embeds, pdf redraws)."""
+        rows = ctx["state_rows"] + ctx["physical_rows"]
+        return (_embedded_runs(rows, [ctx["latest_run"], ctx["snapshot_run"]]),
+                _embedded_campaigns(rows))
+
+    def _exported_at() -> str:
+        return datetime.now().astimezone().isoformat(timespec="seconds")
+
+    @app.get("/setup/{device}/{cooldown}/{setup_name}/export.html")
+    def setup_export_html(device: str, cooldown: str, setup_name: str):
+        # A single self-contained file (anchors + data: URIs, no server or
+        # file:// links) — openable by a recipient with no data drive and no
+        # viewer. Served as an attachment: the artifact is a file to save and
+        # send, not a page to browse.
+        ctx = _setup_context(device, cooldown, setup_name)
+        runs, campaigns = _embedded(ctx)
+        html = templates.get_template("setup_export.html").render(
+            **ctx, embedded_runs=runs, embedded_campaigns=campaigns,
+            data_root=str(store.data_root), exported_at=_exported_at())
+        return HTMLResponse(
+            html, headers=_attachment(device, cooldown, setup_name, "html"))
+
+    @app.get("/setup/{device}/{cooldown}/{setup_name}/export.xlsx")
+    def setup_export_xlsx(device: str, cooldown: str, setup_name: str):
+        ctx = _setup_context(device, cooldown, setup_name)
+        try:
+            data = xlsx_bytes(ctx["state_rows"], ctx["physical_rows"])
+        except ImportError:
+            raise HTTPException(
+                503, "xlsx export needs openpyxl — reinstall the viewer "
+                     "extra: uv pip install -e <SCQO repo>[viewer]")
+        return Response(data, media_type=XLSX_MEDIA_TYPE,
+                        headers=_attachment(device, cooldown, setup_name, "xlsx"))
+
+    @app.get("/setup/{device}/{cooldown}/{setup_name}/export.pdf")
+    def setup_export_pdf(device: str, cooldown: str, setup_name: str):
+        # The offline html as a 16:9 PDF document — same sections, same
+        # embedded run/campaign payload, rendered by _export.pdf_bytes.
+        ctx = _setup_context(device, cooldown, setup_name)
+        runs, campaigns = _embedded(ctx)
+        data = pdf_bytes(ctx, runs, campaigns, exported_at=_exported_at())
+        return Response(data, media_type="application/pdf",
+                        headers=_attachment(device, cooldown, setup_name, "pdf"))
 
     def _chart_rows(rows: list[dict], *, with_context: bool
                     ) -> tuple[list[dict], list[int], list[dict]]:

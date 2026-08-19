@@ -359,6 +359,59 @@ def test_shaped_flux_pulse_refuses_a_duration_override():
                                   flux_pulse_shape="flattop_cosine")
 
 
+READOUT_SWEEPS = [
+    ("readout_power", "readout_amp", {"num_amp_points": 5}),
+    ("readout_frequency", "readout_freq_hz", {"num_freq_points": 5}),
+]
+
+
+@pytest.mark.parametrize("name,knob,params", READOUT_SWEEPS)
+def test_readout_sweeps_average_mode_drops_the_shot_axis(session, name, knob, params):
+    """readout_mode='average': the probe returns one FPGA-averaged I/Q point per
+    prepared state, so the dataset carries no shot axis at all and the contract's
+    alternative form is the one that conforms."""
+    cls = registry.get(name)
+    out = session.run(name, {"targets": ["q0"], "readout_mode": "average",
+                             "num_shots": 200, **params}, update="none")
+    assert out.get("error") is None, out.get("error")
+
+    ds = session.datastore.open_dataset(out["run_id"])
+    assert "shot_idx" not in ds.dims
+    assert set(ds["I"].dims) == {"target", *cls.Contract.sweeps}
+    cls.Contract.validate(ds)  # the averaged form is accepted, not tolerated
+    ds.close()
+
+
+@pytest.mark.parametrize("name,knob,params", READOUT_SWEEPS)
+def test_readout_sweeps_average_mode_optimizes_separation_not_fidelity(
+    session, name, knob, params
+):
+    """Nothing is fitted in average mode, so there IS no fidelity: the answer is
+    the largest blob separation, and the run record says so rather than quietly
+    reporting a fidelity it never measured."""
+    out = session.run(name, {"targets": ["q0"], "readout_mode": "average",
+                             "num_shots": 200, **params})
+    assert out.get("error") is None, out.get("error")
+
+    fit = out["fit"]["q0"]
+    assert math.isnan(fit["best_fidelity"])
+    assert math.isfinite(fit["best_separation"]) and fit["best_separation"] > 0
+    # the knob is still proposed — the sweep answered its question
+    assert ("q0_ro", knob) in {(s["entity"], s["field"]) for s in out["suggestions"]}
+
+
+@pytest.mark.parametrize("name,knob,params", READOUT_SWEEPS)
+def test_readout_sweeps_shot_mode_still_reports_a_fidelity(session, name, knob, params):
+    """The default path is unchanged: per-shot data, a mixture fit, a fidelity."""
+    out = session.run(name, {"targets": ["q0"], "num_shots": 300, **params})
+    assert out.get("error") is None, out.get("error")
+
+    fit = out["fit"]["q0"]
+    assert math.isfinite(fit["best_fidelity"]) and fit["best_fidelity"] > 0.5
+    assert math.isfinite(fit["best_separation"])
+    assert ("q0_ro", knob) in {(s["entity"], s["field"]) for s in out["suggestions"]}
+
+
 def test_single_shot_proposes_monitors_never_the_aggregate(session):
     """The core module proposes blob positions + per-state fidelities; the
     discriminator KNOBS (rotation/threshold) are a driver concern — a

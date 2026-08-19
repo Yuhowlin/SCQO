@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
 
 from ._backends import build_session, default_targets, ensure_demo_experiments
@@ -102,6 +103,87 @@ def _run_preview(sess, cfg, name, params, args, file_defaults) -> int:
     return 1 if result.get("error") else 0
 
 
+def _check_capability_flags(caps: list[str], name: str | None) -> None:
+    """Refuse contradictory --capability mixes BEFORE any session is built.
+
+    --capability filters the no-name catalog listing, so an experiment name is
+    a contradiction to name, not to ignore; and 'none' means the empty set, so
+    AND-ing it with a real capability can never match anything."""
+    from scqo.experiments._capabilities import CAPABILITY_SUMMARIES
+
+    if name:
+        raise SystemExit(
+            "--capability filters the catalog listing; drop the experiment "
+            "name (run takes exactly one experiment) or drop --capability")
+    valid = [*CAPABILITY_SUMMARIES, "none"]
+    unknown = sorted(set(caps) - set(valid))
+    if unknown:
+        raise SystemExit(
+            f"unknown capability: {', '.join(unknown)}; "
+            f"pick from: {', '.join(valid)}")
+    if "none" in caps and len(set(caps)) > 1:
+        raise SystemExit(
+            "--capability none means 'no capabilities at all'; it cannot "
+            "combine with other capabilities")
+
+
+def _columnize(cells: list[str], width: int) -> list[str]:
+    """Column-major layout (like ls): the alphabetical catalog reads DOWN each
+    column, so experiment families stay vertically adjacent."""
+    if not cells:
+        return []
+    col_w = max(len(c) for c in cells) + 2
+    ncols = max(1, width // col_w)
+    nrows = -(-len(cells) // ncols)
+    return ["".join(f"{c:<{col_w}}" for c in cells[row::nrows]).rstrip()
+            for row in range(nrows)]
+
+
+def _catalog_listing_lines(entries: list[dict], capabilities: list[str] | None = None,
+                           width: int | None = None) -> list[str]:
+    """The no-name `scqo run` listing: compact name columns + capability footer,
+    or the --capability-filtered subset. Names only by design — descriptions
+    live in `scqo run <name> --help` (per-name capability brackets overflowed
+    every column; the footer, the filter and the --help epilog carry them now).
+    Pure and renderer-free so tests read lines, not stdout."""
+    from scqo.experiments._capabilities import CAPABILITY_SUMMARIES
+
+    def cell(entry: dict) -> str:
+        contrib = " [contrib]" if entry.get("maturity") == "contrib" else ""
+        return entry["name"] + contrib
+
+    if capabilities:
+        wanted = list(dict.fromkeys(capabilities))
+        # ASCII only, like every CLI meta line: Windows consoles mangle wider glyphs
+        if wanted == ["none"]:
+            matched = [e for e in entries if not e.get("capabilities")]
+            what = "none - no capability mixin yet (legitimate for new experiments)"
+        else:
+            matched = [e for e in entries
+                       if all(w in e.get("capabilities", []) for w in wanted)]
+            what = " AND ".join(f"{w} - {CAPABILITY_SUMMARIES[w]}" for w in wanted)
+        n = len(matched)
+        header = f"# capability: {what}  [{n} experiment{'' if n == 1 else 's'}]"
+        return [header, *(cell(e) for e in matched)]
+
+    if width is None:
+        width = shutil.get_terminal_size().columns
+    lines = _columnize([cell(e) for e in entries], width)
+    counts = dict.fromkeys(CAPABILITY_SUMMARIES, 0)
+    none_count = 0
+    for entry in entries:
+        caps = entry.get("capabilities") or []
+        none_count += not caps
+        for cap in caps:
+            counts[cap] = counts.get(cap, 0) + 1
+    lines.append("# capabilities: "
+                 + " ".join(f"{cap}({n})" for cap, n in counts.items())
+                 + f" none({none_count})")
+    lines.append("# filter: scqo run --capability <name>    "
+                 "detail: scqo run <name> --help")
+    return lines
+
+
 def _schema_epilog(experiment: str, config_path: str | None) -> str:
     """Human-readable parameter list from the experiment's pydantic schema, with the
     lab's standing defaults (~/.scqo/parameters.toml) shown as the effective values."""
@@ -117,8 +199,8 @@ def _schema_epilog(experiment: str, config_path: str | None) -> str:
     schema = entry["parameters_schema"]
     required = set(schema.get("required", []))
     lines = [entry["description"]]
-    if entry.get("tags"):
-        lines.append("tags: " + ", ".join(entry["tags"]))
+    if entry.get("capabilities"):
+        lines.append("capabilities: " + ", ".join(entry["capabilities"]))
     lines += ["", "parameters (set with --set KEY=VALUE):"]
     for key, spec in schema.get("properties", {}).items():
         if key in file_defaults:
@@ -156,6 +238,11 @@ def run_experiment_cli(
     )
     if experiment is None:
         parser.add_argument("experiment", nargs="?", help="experiment name; omit to list the catalog")
+    parser.add_argument("--capability", action="append", default=[], metavar="NAME",
+                        dest="capabilities",
+                        help="filter the no-name catalog listing to experiments "
+                             "carrying this capability (repeatable = AND; "
+                             "'none' = experiments with no capabilities)")
     parser.add_argument("--params", help="parameters as a JSON file path or an inline JSON string")
     parser.add_argument("--targets", nargs="+",
                         help="components to measure (default: every qubit-like mode in the roster)")
@@ -215,6 +302,8 @@ def run_experiment_cli(
     if (args.preview or args.out or args.no_open
             or args.simulate_ns is not None or args.no_simulate):
         _check_preview_flags(args, name)  # fail fast: no session needed
+    if args.capabilities:
+        _check_capability_flags(args.capabilities, name)  # fail fast too
 
     sess, cfg = build_session(args.config)
 
@@ -222,11 +311,8 @@ def run_experiment_cli(
         print(f"# lab config: {cfg.source or 'built-in defaults (simulated, nothing saved)'}")
         print(f"# parameter defaults: {cfg.parameters_source or 'none (code defaults)'}")
         print(f"# user overlay: {cfg.user_source or 'none'}")
-        for entry in sess.catalog():
-            tag = " [contrib]" if entry.get("maturity") == "contrib" else ""
-            if entry.get("tags"):
-                tag += " [" + ",".join(entry["tags"]) + "]"
-            print(f"{entry['name'] + tag:32s} {entry['description']}")
+        for line in _catalog_listing_lines(sess.catalog(), args.capabilities):
+            print(line)
         return 0
 
     params: dict = {}
