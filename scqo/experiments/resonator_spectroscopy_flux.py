@@ -4,7 +4,7 @@ Port of :mod:`scqo.experiments.resonator_spectroscopy_flux`. The physics
 half is byte-for-byte; what moved is the device surface and the field
 spellings: the flux-transfer facts land on the target's FLUX CHANNEL
 under their new names (``v_offset_v`` -> ``flux_offset``,
-``v_per_phi0_v`` -> ``flux_per_phi0``), the sweet-spot operating point is
+``v_per_phi0_v`` -> ``flux_per_phi0``), the sweet-spot idle point is
 two channel knobs (``idle_flux`` on the flux channel, ``readout_freq_hz``
 on the readout channel), and the dispersive physics (``f_bare_hz``,
 ``g_hz``) goes on the attached RESONATOR mode.
@@ -375,7 +375,7 @@ class ResonatorSpectroscopyFluxResult(Result):
     ``assumed`` means f_bare_hz/g_hz are conditional on a placeholder detuning and are
     NOT proposed. ``update()`` proposes the
     physical facts on the qubit's flux channel (flux_offset/flux_per_phi0) and
-    resonator mode (f_bare_hz/g_hz), and two operating-point channel knobs:
+    resonator mode (f_bare_hz/g_hz), and two idle-point channel knobs:
     ``idle_flux`` on the flux channel (= flux_offset; park at the sweet spot) and
     ``readout_freq_hz`` on the readout channel (= sweet_spot_res_hz; read out at
     the resonator dip there)."""
@@ -393,10 +393,10 @@ class ResonatorSpectroscopyFlux(Experiment):
         "its flux dependence with a selectable model (analysis_method='dispersive' or "
         "'sine'); proposes the sweet-spot flux (flux_offset) + flux period "
         "(flux_per_phi0) as physical facts on the qubit's flux channel, and "
-        "sets the operating point at the sweet spot (the flux channel's "
+        "sets the idle point at the sweet spot (the flux channel's "
         "idle_flux = flux_offset, the readout channel's readout_freq_hz = "
         "resonator dip there). This is the BRING-UP seed for idle_flux, found "
-        "without needing a prior operating point; once the qubit answers, "
+        "without needing a prior idle point; once the qubit answers, "
         "qubit_spectroscopy_flux_pulse is the authority for that knob. "
         "Plus bare f_bare_hz and coupling g_hz on the attached resonator mode "
         "when the dispersive method ran against a MEASURED arch top, auto-sourced "
@@ -555,12 +555,12 @@ class ResonatorSpectroscopyFlux(Experiment):
         return result
 
     def update(self) -> None:
-        """Propose the flux-model quantities: physical facts + operating-point knobs.
+        """Propose the flux-model quantities: physical facts + idle-point knobs.
 
         Sweet-spot flux + flux period are always proposed (robust flux-periodicity,
         produced by every method) as ``flux_offset``/``flux_per_phi0`` on the
         qubit's flux CHANNEL (PHYSICAL facts). Two pushed channel knobs set the
-        operating point at the sweet spot: the flux channel's ``idle_flux`` =
+        idle point at the sweet spot: the flux channel's ``idle_flux`` =
         ``flux_offset`` (park at the upper sweet spot) and the readout channel's
         ``readout_freq_hz`` = ``sweet_spot_res_hz`` (read out at the resonator dip
         there — a later readout_frequency run refines it for fidelity).
@@ -591,7 +591,7 @@ class ResonatorSpectroscopyFlux(Experiment):
             for field in ("flux_offset", "flux_per_phi0"):
                 if field in fit:
                     setattr(flux_view, field, fit[field])
-            # Set up the operating point at the sweet spot — two pushed channel
+            # Set up the idle point at the sweet spot — two pushed channel
             # knobs: park the standing idle flux at the sweet-spot bias
             # (idle_flux = flux_offset on the flux channel), and read out at the
             # resonator dip there (readout_freq_hz = sweet_spot_res_hz on the

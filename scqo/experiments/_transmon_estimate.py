@@ -32,19 +32,19 @@ THE COUPLING RELATIONS (second half of this module)
 --------------------------------------------------
 ``g = c * sqrt(f_q * f_r)``, where ``c`` is a dimensionless GEOMETRY constant
 (capacitance ratios) and the frequencies are wherever the two modes actually sit.
-So ``g`` itself is only valid at one operating point, while ``c`` survives
+So ``g`` itself is only valid at one idle point, while ``c`` survives
 re-tuning, re-parking and cooldowns — which is why the catalog records both
 (``g_hz`` and ``g_coeff`` on the resonator mode).
 
 .. warning::
-   ``sqrt(f_q * f_r)`` holds BETWEEN transmon-regime operating points. It must
+   ``sqrt(f_q * f_r)`` holds BETWEEN transmon-regime idle points. It must
    NOT be extrapolated down a flux arch: applying ``g(phi) ~ sqrt(f_q(phi))``
    inside the dispersive flux model was tested against 13 real target-runs on
    2026-08-18 and REFUTED — the measured pull at the arch bottom does not
    vanish the way the scaling predicts (as E_J collapses the device leaves the
    transmon regime and the charge matrix element stops following sqrt(f_q)).
    See ``RELEASES.d/flux-design-g-seed-rescale.toml``. Rescale a coupling
-   BETWEEN sweet-spot-like operating points, never along the arch.
+   BETWEEN sweet-spot-like idle points, never along the arch.
 """
 
 from __future__ import annotations
@@ -161,10 +161,10 @@ def g_coeff_from_g(g_hz: float, f_q_hz: float, f_r_hz: float) -> float:
 
 
 def g_hz_from_coeff(coeff: float, f_q_hz: float, f_r_hz: float) -> float:
-    """Coupling g (Hz) predicted at an operating point from the coefficient.
+    """Coupling g (Hz) predicted at an idle point from the coefficient.
 
     The inverse of :func:`g_coeff_from_g`. Valid BETWEEN transmon-regime
-    operating points — see the module warning on not extrapolating down an arch.
+    idle points — see the module warning on not extrapolating down an arch.
     """
     c = float(coeff)
     product = float(f_q_hz) * float(f_r_hz)

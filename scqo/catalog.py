@@ -140,7 +140,7 @@ class ChannelKind:
 
 _TRANSMON_BASE: dict[str, FieldSpec] = {
     "f_01_hz": FieldSpec(
-        "Hz", "Qubit 0->1 frequency at the operating point (the drive_freq_hz "
+        "Hz", "Qubit 0->1 frequency at the idle point (the drive_freq_hz "
               "knob is its instrument twin; one fit writes both).",
         role="fact", design_ok=True),
     "anharmonicity_hz": FieldSpec(
@@ -206,7 +206,7 @@ MODES: dict[str, ModeKind] = {
         },
     ),
     "fluxonium": ModeKind(
-        doc="Fluxonium: EC/EL/EJ Hamiltonian vocabulary; operating sweet spot "
+        doc="Fluxonium: EC/EL/EJ Hamiltonian vocabulary; idle sweet spot "
             "at half a flux quantum where f_01 is MINIMUM — transmon arch "
             "estimators do not apply.",
         fields={
@@ -221,7 +221,7 @@ MODES: dict[str, ModeKind] = {
                     "constant, design.toml ONLY.",
                 role="fact", design_ok=True, design_only=True),
             "f_01_hz": FieldSpec(
-                "Hz", "Qubit 0->1 frequency at the operating bias.", role="fact"),
+                "Hz", "Qubit 0->1 frequency at the idle bias.", role="fact"),
             "anharmonicity_hz": FieldSpec(
                 "Hz", "Anharmonicity f_12 - f_01 (GHz-scale, positive).",
                 role="fact"),
@@ -263,7 +263,7 @@ MODES: dict[str, ModeKind] = {
                 role="fact", design_ok=True),
             "f_dress0_hz": FieldSpec(
                 "Hz", "Dressed resonator frequency with the qubit in |0> — the "
-                      "spectroscopy dip at the operating point (flux + qubit "
+                      "spectroscopy dip at the idle point (flux + qubit "
                       "state). This is what the readout tone is parked on, so "
                       "readout_freq_hz seeds from it.",
                 role="fact", design_ok=True),
@@ -277,7 +277,7 @@ MODES: dict[str, ModeKind] = {
                       "coupling/intrinsic split waits for a complex-S21 "
                       "estimator.", role="fact", design_ok=True),
             "g_hz": FieldSpec(
-                "Hz", "Qubit-resonator coupling AT THE CURRENT OPERATING POINT "
+                "Hz", "Qubit-resonator coupling AT THE CURRENT IDLE POINT "
                       "(the qubit frequency it was measured at). Written by the "
                       "dispersive flux fit and by a punchout that knows the "
                       "drive frequency. g = g_coeff sqrt(f_q f_bare), so this "
@@ -291,9 +291,9 @@ MODES: dict[str, ModeKind] = {
                     "constant: g_coeff = g_hz / sqrt(f_q f_bare_hz), the "
                     "capacitance-ratio factor. Unlike g_hz this survives "
                     "re-tuning, re-parking and cooldowns, so it is what a "
-                    "datasheet designs and what predicts g at a new operating "
+                    "datasheet designs and what predicts g at a new idle "
                     "point (g = g_coeff sqrt(f_q f_bare)). VALID BETWEEN "
-                    "transmon-regime operating points only — do NOT extrapolate "
+                    "transmon-regime idle points only — do NOT extrapolate "
                     "it down a flux arch (measured and refuted 2026-08-18; see "
                     "experiments/_transmon_estimate.py).",
                 role="fact", design_ok=True),
@@ -322,7 +322,7 @@ COMPOSITES: dict[str, CompositeKind] = {
             "operating points live here via the OP_KNOBS family.",
         fields={
             "zz_hz": FieldSpec(
-                "Hz", "Signed residual ZZ at the standing operating point.",
+                "Hz", "Signed residual ZZ at the standing idle point.",
                 role="fact"),
             "j_hz": FieldSpec(
                 "Hz", "Exchange coupling J.", role="fact", design_ok=True),
@@ -433,7 +433,7 @@ CHANNELS: dict[str, ChannelKind] = {
                        "drive_amp as a COUPLED change.", role="knob"),
             "parity_delta_f_hz": FieldSpec(
                 "Hz", "Charge-parity beat splitting |f_1 - f_2| of the Ramsey "
-                      "fringe at the operating point (qubit_ramsey's beat "
+                      "fringe at the idle point (qubit_ramsey's beat "
                       "model); the parity-switch monitors (continuous and "
                       "discrete) derive their fixed idle "
                       "1 / (2 x parity_delta_f_hz) from it. Drifts with the "

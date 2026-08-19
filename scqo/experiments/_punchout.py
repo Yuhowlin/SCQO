@@ -2,11 +2,11 @@
 
 `resonator_spectroscopy_power_amp` (fast amplitude sweep) and
 `..._chain` (careful chain-stepped sweep) are two MECHANISMS for one measurement,
-so the operating-point knobs they propose and the physics they extract are
+so the standing readout knobs they propose and the physics they extract are
 identical — only how the power axis is realized differs. This module owns the
 half that is the same, so the two carriers cannot drift apart.
 
-WHAT A PUNCHOUT MEASURES BEYOND THE OPERATING POINT: at low readout power the
+WHAT A PUNCHOUT MEASURES BEYOND THE READOUT SETTINGS: at low readout power the
 qubit stays in |0> and dresses its resonator, so the dip sits at ``f_dress0``.
 Driven hard enough the qubit saturates and stops dressing it, and the dip walks
 to the BARE resonator ``f_bare``. That makes the punchout the one experiment that
@@ -17,7 +17,7 @@ measures the bare frequency DIRECTLY — a dispersive flux fit can only trade
 The loop this closes runs both ways:
 ``power_amp -> flux -> power_amp``. The first punchout hands the flux map a
 measured ``f_bare_hz``; the flux map re-parks ``idle_flux`` at the sweet spot; a
-second punchout then measures ``f_dress0_hz`` at that NEW operating point.
+second punchout then measures ``f_dress0_hz`` at that NEW idle point.
 ``old_idle_flux`` recorded on each run is what tells the two apart — the dressed
 frequency is only meaningful together with the flux it was measured at, while
 ``f_bare_hz`` is flux-independent and durable.
