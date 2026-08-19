@@ -1,9 +1,0 @@
-name = "flux-design-g-seed-rescale"
-repos = { scqo = "2bf64c4" }
-kind = "additive"
-validated = "offline (flux suite 24 green incl. the new seed-rescale test) + the model-half rejection was gated on 13 real 2026-08-18 5Q4C target-runs."
-notes = """
-resonator_spectroscopy_flux: a DESIGN-tier g seed is rescaled to the chip's actual frequencies before seeding the dispersive fit — g ∝ sqrt(f_q·f_r) with a geometry-constant coefficient, so design.toml's g_hz is only valid at the design frequencies. Measured-tier g untouched; missing inputs degrade to the unscaled design value (seed of a FITTED parameter). Catalog g_hz doc now states the scaling law. SCQO-only, no scqat floor, no upgrade action.
-DO NOT RE-ATTEMPT without new evidence: scaling g WITH FLUX inside the dispersive model (g(phi) ∝ sqrt(f_q(phi))) was implemented and REJECTED by data — with the punchout f_bare pinned it fits 2-3x worse at the low sweet spot (the measured arch-bottom pull does NOT vanish; likely the charge matrix element leaves the transmon sqrt(f_q) scaling as E_J collapses), and with f_r0 free it is exactly degenerate with the constant-g model over a real window.
-OPEN TENSION (not resolved here): the flux maps prefer their bare asymptote 1.5-3 MHz ABOVE the punchout's f_bare_hz, and pinning costs 3-5x in rms (fitted g moves ~107 -> ~93 MHz when freed). Magnitude and sign are consistent with the beyond-two-level transmon correction (~g^2·E_C/Delta^2) that the two-level pull model dumps into f_r0. Candidate fixes: a multilevel-corrected pull model, or pinning f_r0 = f_bare + a fitted/derived offset.
-"""
