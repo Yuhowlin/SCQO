@@ -153,12 +153,16 @@ EXPECTED_CAPABILITIES = {
     "qubit_tomography": ["qubit_reset"],
     "qubit_drag_equator": ["qubit_reset"],
     "qubit_drag_alternating": ["qubit_reset"],
+    "broadband_qubit_spectroscopy": ["qubit_reset"],
     # explicitly capability-less: no qubit pulse at all, so nothing to reset and
     # no state to discriminate. Zero capabilities is a legitimate state, not an
     # error.
     "resonator_spectroscopy": ["readout_detuning"],
     "resonator_spectroscopy_power_amp": ["readout_detuning"],
     "resonator_spectroscopy_power_chain": ["readout_detuning"],
+    # the wideband SEARCH stays capability-less: its span is absolute Hz, not a
+    # detuning window around a known readout_freq_hz.
+    "broadband_resonator_spectroscopy": [],
 }
 
 

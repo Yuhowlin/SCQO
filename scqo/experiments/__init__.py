@@ -199,6 +199,12 @@ from .qubit_tomography import QubitTomography  # noqa: E402
 from .qubit_xyz_delay import QubitXyzDelay  # noqa: E402
 from .readout_frequency import ReadoutFrequency  # noqa: E402
 from .readout_power import ReadoutPower  # noqa: E402
+from .broadband_resonator_spectroscopy import (  # noqa: E402
+    BroadbandResonatorSpectroscopy,
+)
+from .broadband_qubit_spectroscopy import (  # noqa: E402
+    BroadbandQubitSpectroscopy,
+)
 from .resonator_spectroscopy import ResonatorSpectroscopy  # noqa: E402
 from .resonator_spectroscopy_flux import ResonatorSpectroscopyFlux  # noqa: E402
 from .resonator_spectroscopy_power_amp import (  # noqa: E402
@@ -215,6 +221,8 @@ __all__ = [
     "QubitResetParameters", "reset_wait_ns",
     "joint_state_labels", "joint_to_marginals", "member_order",
     "states_to_joint_population",
+    "BroadbandQubitSpectroscopy",
+    "BroadbandResonatorSpectroscopy",
     "PairSwapChevron", "PairSwapFluxMap",
     "PairZZCoupler", "QcNStarkAmp", "QcNSwapAmp", "QubitRamseyCryoscope", "QubitDeterministicBenchmarking", "QubitDragAlternating", "QubitDragEquator", "QubitEcho",
     "QubitEchoFluxPulse", "QubitParitySwitchContinuous", "QubitParitySwitchDiscrete",

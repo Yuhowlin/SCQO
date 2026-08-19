@@ -99,14 +99,15 @@ def test_real_catalog_flux_filter_matches_the_pinned_carriers():
     ]
 
 
-def test_real_catalog_none_bucket_is_empty_since_readout_detuning():
-    """The `none` filter still renders — an empty bucket is a legitimate
-    listing, not an error — and it IS empty: readout_detuning classified the
-    last three unclassified core experiments, which used to be this bucket.
+def test_real_catalog_none_bucket_is_the_wideband_resonator_search():
+    """The `none` filter still renders, and it holds exactly one experiment.
+    readout_detuning classified the three resonator sweeps that used to be this
+    bucket; the wideband resonator SEARCH took their place, because its span is
+    absolute Hz rather than a detuning window around a known readout_freq_hz.
     Zero capabilities stays legal for a NEW experiment (registry.catalog's own
     rule), so this pins today's registry, not a permanent property."""
     lines = _catalog_listing_lines(_core_entries(), capabilities=["none"])
-    assert lines[1:] == []
+    assert lines[1:] == ["broadband_resonator_spectroscopy"]
     entries = {e["name"]: e for e in _core_entries()}
     for name in ("resonator_spectroscopy", "resonator_spectroscopy_power_amp",
                  "resonator_spectroscopy_power_chain"):
