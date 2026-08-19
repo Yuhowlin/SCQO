@@ -246,3 +246,6 @@ class BroadbandQubitSpectroscopy(Experiment):
     def update(self) -> None:
         """Exploratory spectroscopy does not mutate state directly."""
         pass
+
+    def probe(self):  # pragma: no cover - driver half
+        raise NotImplementedError("a driver backend supplies probe()")

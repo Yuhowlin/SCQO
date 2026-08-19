@@ -98,9 +98,10 @@ def test_real_catalog_flux_filter_matches_the_pinned_carriers():
     ]
 
 
-def test_real_catalog_none_bucket_is_the_resonator_trio():
+def test_real_catalog_none_bucket_is_the_resonator_family():
     lines = _catalog_listing_lines(_core_entries(), capabilities=["none"])
     assert lines[1:] == [
+        "broadband_resonator_spectroscopy",
         "resonator_spectroscopy",
         "resonator_spectroscopy_power_amp",
         "resonator_spectroscopy_power_chain",

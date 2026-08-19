@@ -156,26 +156,18 @@ class BroadbandResonatorSpectroscopy(Experiment):
 
         s21 = baseline_mag * np.exp(1j * baseline_phase)
 
-        # Collect all chip resonator frequencies from roster/device/design
+        # Plant the candidate dips across the swept span. Like every other
+        # simulate() (resonator_spectroscopy is the sibling), the offline model
+        # invents its own physics from the sweep and the stable seed rather than
+        # reading device state: f_r_hz is a resonator-MODE fact, and a mode
+        # carries no knob view to read it through (device.component refuses one
+        # by name — knobs live on channels).
         sim_dips: list[tuple[float, float, float]] = []
-        roster = getattr(self.device, "roster", None)
-        if roster is not None:
-            res_modes = [
-                m.name for m in roster.modes().values() if getattr(m, "kind", None) == "resonator"
-            ]
-            for r_name in res_modes:
-                comp = getattr(self.device, "component", lambda n: None)(r_name)
-                fr = getattr(comp, "f_r_hz", None)
-                if fr is not None and np.isfinite(fr):
-                    sim_dips.append((float(fr), 3.5e6, 0.85))
-
-        if not sim_dips:
-            # Fallback to simulated candidate dips across the span
-            span = freqs[-1] - freqs[0]
-            n_dips = self.params.num_dips or max(2, len(targets))
-            for i in range(n_dips):
-                offset = freqs[0] + span * (0.15 + 0.7 * (i + 0.5) / n_dips)
-                sim_dips.append((offset, 4.0e6, 0.8))
+        span = freqs[-1] - freqs[0]
+        n_dips = self.params.num_dips or max(2, len(targets))
+        for i in range(n_dips):
+            offset = freqs[0] + span * (0.15 + 0.7 * (i + 0.5) / n_dips)
+            sim_dips.append((offset, 4.0e6, 0.8))
 
         for f0, kappa, depth in sim_dips:
             if freqs[0] <= f0 <= freqs[-1]:
