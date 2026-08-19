@@ -11,6 +11,8 @@ import pytest
 
 from scqo import ContractError, DatasetContract
 from scqo.experiments import (
+    BroadbandQubitSpectroscopy,
+    BroadbandResonatorSpectroscopy,
     PairSwapChevron,
     PairSwapFluxMap,
     QubitPowerRabi,
@@ -35,6 +37,16 @@ class _Res(ResonatorSpectroscopy):
         return None
 
 
+class _Broadband(BroadbandResonatorSpectroscopy):
+    def probe(self):
+        return None
+
+
+class _BroadbandQubit(BroadbandQubitSpectroscopy):
+    def probe(self):
+        return None
+
+
 class _Ram(QubitRamsey):
     def probe(self):
         return None
@@ -47,6 +59,8 @@ class _PR(QubitPowerRabi):
 
 CASES = [
     (_Res, "detuning_hz"),
+    (_Broadband, "frequency_hz"),
+    (_BroadbandQubit, "frequency_hz"),
     (_Ram, "idle_time_ns"),
     (_PR, "amp_prefactor"),
 ]

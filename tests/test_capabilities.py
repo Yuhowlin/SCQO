@@ -121,12 +121,14 @@ EXPECTED_CAPABILITIES = {
     "qubit_tomography": ["qubit_reset"],
     "qubit_drag_equator": ["qubit_reset"],
     "qubit_drag_alternating": ["qubit_reset"],
+    "broadband_qubit_spectroscopy": ["qubit_reset"],
     # explicitly capability-less: no qubit pulse at all, so nothing to reset and
     # no state to discriminate. Zero capabilities is a legitimate state, not an
     # error.
     "resonator_spectroscopy": [],
     "resonator_spectroscopy_power_amp": [],
     "resonator_spectroscopy_power_chain": [],
+    "broadband_resonator_spectroscopy": [],
 }
 
 
