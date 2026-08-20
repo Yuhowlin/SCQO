@@ -25,7 +25,8 @@ from scqo.testing import (
 RECORD_ONLY = {"qubit_sqrb", "qubit_tomography", "qubit_echo_flux_pulse",
                "qubit_relaxation_flux_pulse", "pair_swap_chevron", "pair_swap_flux_map",
                "qc_n_swap_amp", "qc_n_stark_amp", "qubit_t1_ade", "qubit_t1_bayesian",
-               "broadband_resonator_spectroscopy", "broadband_qubit_spectroscopy"}
+               "broadband_resonator_spectroscopy", "broadband_qubit_spectroscopy",
+               "qubit_parametric_drive"}
 
 
 #: the readout reference an accepted single_shot_readout would have left behind.
@@ -101,6 +102,31 @@ def test_record_only_experiments_propose_nothing(session, name):
     either leave the set or fail here."""
     assert name in CORE, f"{name} is not in the core catalog"
     assert _suggest(session, name, target=_pair_target(name)) == set()
+
+
+def test_parametric_drive_finds_the_seeded_resonance(session):
+    """The offline sim hides one sideband line inside the swept window; the
+    scqat point-cloud reduction must keep at least one peak and report the
+    strongest one INSIDE the swept windows (discriminated form — the dip sits
+    in the averaged population itself)."""
+    params = {"targets": ["q0"], "use_state_discrimination": True}
+    out = session.run("qubit_parametric_drive", params, update="none")
+    assert out.get("error") is None, out.get("error")
+    fit = out["fit"]["q0"]
+    assert fit["n_good"] >= 1
+    cls = registry.get("qubit_parametric_drive")
+    p = cls.Parameters(**params)
+    assert p.min_parametric_freq_hz <= fit["best_parametric_freq_hz"] <= p.max_parametric_freq_hz
+    assert p.min_parametric_amp_v <= fit["best_parametric_amp_v"] <= p.max_parametric_amp_v
+    # prepared |e> + transfer OUT of the qubit = a population DIP
+    assert fit["best_peak_amplitude"] < 0
+
+
+def test_parametric_drive_refuses_an_inverted_window(session):
+    out = session.run("qubit_parametric_drive",
+                      {"targets": ["q0"], "min_parametric_freq_hz": 300e6,
+                       "max_parametric_freq_hz": 50e6}, update="none")
+    assert "inverted" in str(out.get("error"))
 
 
 def test_qubit_spectroscopy_writes_channel_knob_and_mode_fact(session):

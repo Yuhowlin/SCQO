@@ -115,6 +115,11 @@ EXPECTED_CAPABILITIES = {
     "qubit_stark_phase_echo": ["state_readout", "qubit_reset"],
     "qubit_relaxation_flux_pulse": ["state_readout", "flux", "qubit_reset", "flux_pulse"],
     "qubit_echo_flux_pulse": ["state_readout", "flux", "qubit_reset", "flux_pulse"],
+    # parametric drive: state_readout + qubit_reset, but NO flux capability —
+    # the swept axes are the modulation TONE's own amplitude (absolute volts of
+    # a new RF drive, not a z-bias window) and its frequency (absolute Hz, not
+    # a detuning around a standing knob), so none of the sweep mixins apply.
+    "qubit_parametric_drive": ["state_readout", "qubit_reset"],
     # parity monitors: state_readout only — deliberately NO qubit_reset. In the
     # continuous variant the readout is the running XOR of the parity (each
     # shot inverts with the pole the last one left), so a reset would sever the

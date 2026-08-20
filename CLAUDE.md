@@ -346,6 +346,11 @@ scqo/
                                 #   relative_time_ns), triangle-overlap fit -> flux_delay_s
                                 #   (flux-channel knob, the line delay vs the drive line;
                                 #   written absolute = old + fitted). QM-only probe today
+    qubit_parametric_drive.py   # parametric-drive resonance map: pi pulse, then an RF tone on
+                                #   the qubit's OWN flux line (swept absolute amplitude x frequency,
+                                #   FIXED drive time); sideband transfer to a coupled component
+                                #   draws the resonance line(s) - record-only (peak-cloud summary
+                                #   in result.fit; QM-only probe today)
     pair_swap_chevron.py        # single-excitation swap chevron: flux amplitude (absolute V) x
                                 #   pulse duration on one member's flux line - record-only 2D map
                                 #   (scqat estimator draws the raw joint populations; no writeback)
