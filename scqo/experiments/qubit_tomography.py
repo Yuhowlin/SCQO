@@ -41,7 +41,11 @@ class TomographyContract(DatasetContract):
         tomo_vars = ["I_tomo", "Q_tomo"]
         train_vars = ["I_train", "Q_train"]
 
-        tomo_dims = {"target", "basis", "sym", "gate_count", "shot_idx"}
+        has_nc = "noise_condition" in ds.dims or "noise_condition" in ds.coords
+        if has_nc:
+            tomo_dims = {"target", "noise_condition", "basis", "sym", "gate_count", "shot_idx"}
+        else:
+            tomo_dims = {"target", "basis", "sym", "gate_count", "shot_idx"}
         train_dims = {"target", "prepared_state", "train_shot_idx"}
 
         for var in tomo_vars:
@@ -102,6 +106,11 @@ class QubitTomographyParameters(TargetSelection, AveragingParameters, QubitReset
                 except ValueError:
                     pass
         return val
+
+    interleave_noise: bool = Field(
+        True,
+        description="Whether to interleave Noise OFF (baseline) and Noise ON conditions within each shot."
+    )
     symmetrized_readout: bool = Field(
         True,
         description="Whether to perform symmetrized (inverted) readout for error mitigation."
@@ -111,9 +120,13 @@ class QubitTomographyParameters(TargetSelection, AveragingParameters, QubitReset
         description="Number of shots for training GMM classifier."
     )
 
+
 class QubitTomographyResult(Result):
     """Output of QubitTomography."""
-    pass
+
+    fit: dict[str, dict[str, Any]] = Field(
+        default_factory=dict, description="Per-qubit extracted quantities, keyed by qubit name."
+    )
 
 
 @register
@@ -128,8 +141,8 @@ class QubitTomography(Experiment):
     Parameters: ClassVar[type] = QubitTomographyParameters
     Result: ClassVar[type] = QubitTomographyResult
     Contract: ClassVar[DatasetContract] = TomographyContract(
-        sweeps=("basis", "sym", "gate_count", "shot_idx", "prepared_state", "train_shot_idx"),
-        sweep_units=("", "", "", "", "", ""),
+        sweeps=("noise_condition", "basis", "sym", "gate_count", "shot_idx", "prepared_state", "train_shot_idx"),
+        sweep_units=("", "", "", "", "", "", ""),
         variables=("I_tomo", "Q_tomo", "I_train", "Q_train")
     )
 
@@ -138,19 +151,30 @@ class QubitTomography(Experiment):
     required_operations: ClassVar[tuple[str, ...]] = ("rx", "readout")
 
     def define_sweep(self) -> dict[str, np.ndarray]:
-        return {
+        has_noise = any(
+            bool(cfg.get("noise_mode", False))
+            for cfg in self.params.qubit_configs.values()
+        )
+        sweeps = {}
+        if has_noise and self.params.interleave_noise:
+            sweeps["noise_condition"] = np.array(["off", "on"])
+        else:
+            sweeps["noise_condition"] = np.array(["off"])
+        sweeps.update({
             "basis": np.array(["x", "y", "z"]),
             "sym": np.array(["reg", "inv"]) if self.params.symmetrized_readout else np.array(["reg"]),
             "gate_count": np.array(self.params.gate_counts),
             "shot_idx": np.arange(self.params.num_averages),
             "prepared_state": np.array([0, 1]),
             "train_shot_idx": np.arange(self.params.num_training_shots)
-        }
+        })
+        return sweeps
 
     def simulate(self, coords: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         qubits = self.params.targets
         n_qubits = len(qubits)
 
+        noise_conds = coords.get("noise_condition", np.array(["off"]))
         bases = coords["basis"]
         syms = coords["sym"]
         gate_counts = coords["gate_count"]
@@ -170,46 +194,60 @@ class QubitTomography(Experiment):
                 Q_train[q_idx, s_idx] = rng.normal(0, 0.8, len(train_shot_idx))
 
         # 2. Simulate tomography data
-        I_tomo = np.empty((n_qubits, len(bases), len(syms), len(gate_counts), len(shot_idx)))
+        I_tomo = np.empty((n_qubits, len(noise_conds), len(bases), len(syms), len(gate_counts), len(shot_idx)))
         Q_tomo = np.empty_like(I_tomo)
 
         for q_idx, qubit in enumerate(qubits):
             config = self.params.qubit_configs.get(qubit, {"init_state": "0", "target_gate": "X"})
-            for b_idx, basis in enumerate(bases):
-                for s_idx, sym in enumerate(syms):
-                    for g_idx, gc in enumerate(gate_counts):
-                        if basis == "x":
-                            p = 0.5 + 0.5 * np.exp(-gc / 10.0) * np.cos(gc * 0.1)
-                        elif basis == "y":
-                            p = 0.5 + 0.5 * np.exp(-gc / 10.0) * np.sin(gc * 0.1)
-                        else:
-                            p = 0.5 - 0.5 * np.exp(-gc / 10.0)
+            for nc_idx, nc in enumerate(noise_conds):
+                decay_rate = 12.0 if nc == "off" else 9.0
+                xtalk_phase = 0.0 if nc == "off" else 0.05
+                for b_idx, basis in enumerate(bases):
+                    for s_idx, sym in enumerate(syms):
+                        for g_idx, gc in enumerate(gate_counts):
+                            if basis == "x":
+                                p = 0.5 + 0.5 * np.exp(-gc / decay_rate) * np.cos(gc * 0.1 + xtalk_phase * gc)
+                            elif basis == "y":
+                                p = 0.5 + 0.5 * np.exp(-gc / decay_rate) * np.sin(gc * 0.1 + xtalk_phase * gc)
+                            else:
+                                p = 0.5 - 0.5 * np.exp(-gc / decay_rate)
 
-                        if sym == "inv":
-                            p = 1.0 - p
+                            if sym == "inv":
+                                p = 1.0 - p
 
-                        actual_states = rng.binomial(1, p, len(shot_idx))
-                        cx = np.where(actual_states == 1, 4.0, 0.0)
-                        I_tomo[q_idx, b_idx, s_idx, g_idx] = cx + rng.normal(0, 0.8, len(shot_idx))
-                        Q_tomo[q_idx, b_idx, s_idx, g_idx] = rng.normal(0, 0.8, len(shot_idx))
+                            actual_states = rng.binomial(1, np.clip(p, 0.0, 1.0), len(shot_idx))
+                            cx = np.where(actual_states == 1, 4.0, 0.0)
+                            I_tomo[q_idx, nc_idx, b_idx, s_idx, g_idx] = cx + rng.normal(0, 0.8, len(shot_idx))
+                            Q_tomo[q_idx, nc_idx, b_idx, s_idx, g_idx] = rng.normal(0, 0.8, len(shot_idx))
 
         return {
-            "I_tomo": (("target", "basis", "sym", "gate_count", "shot_idx"), I_tomo),
-            "Q_tomo": (("target", "basis", "sym", "gate_count", "shot_idx"), Q_tomo),
+            "I_tomo": (("target", "noise_condition", "basis", "sym", "gate_count", "shot_idx"), I_tomo),
+            "Q_tomo": (("target", "noise_condition", "basis", "sym", "gate_count", "shot_idx"), Q_tomo),
             "I_train": (("target", "prepared_state", "train_shot_idx"), I_train),
             "Q_train": (("target", "prepared_state", "train_shot_idx"), Q_train)
         }
+
     def estimate(self) -> QubitTomographyResult:
         assert self.dataset is not None, "run() populates self.dataset before estimate()"
         from scqat.estimators.qubit_tomography import QubitTomographyEstimator
 
+        # Analyze only target qubits, skipping spectator noise-mode qubits
+        measured_targets = [
+            q for q in self.params.targets
+            if not bool(self.params.qubit_configs.get(q, {}).get("noise_mode", False))
+        ]
+        if not measured_targets:
+            measured_targets = list(self.params.targets)
+
+        ds_to_analyze = self.dataset.sel(target=measured_targets)
+
         # Split along qubit dimension and analyze
         results = per_qubit_results(
-            self.dataset, QubitTomographyEstimator(), artifact_dir=self.artifact_dir
+            ds_to_analyze, QubitTomographyEstimator(), artifact_dir=self.artifact_dir
         )
 
         result = QubitTomographyResult()
-        for qubit in self.params.targets:
+        for qubit in measured_targets:
             r = results.get(qubit, {})
             result.fit[qubit] = r
             result.outcomes[qubit] = Outcome.SUCCESSFUL if (r and r.get("success", False)) else Outcome.FAILED
