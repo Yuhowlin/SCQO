@@ -20,6 +20,7 @@ from ._capabilities.state_readout import (
     POPULATION_ALT,
     StateReadoutParameters,
     readout_vars,
+    signal_rename,
     population_row,
 )
 from ._sim import stable_seed
@@ -146,10 +147,12 @@ class QubitSQRB(Experiment):
         assert self.dataset is not None, "run() populates self.dataset before estimate()"
         from scqat.estimators.qubit_sqrb import QubitSQRBEstimator
 
-        # No rename needed: the scqat estimator natively prefers a `state` data var
-        # and falls back to `I`/`signal` itself.
+        # scqat's contract: a raw `I` quadrature, or the pre-reduced `signal` a
+        # discriminated probe's averaged `population` becomes. The estimator picks
+        # between them itself; only the discriminated name needs the rename.
+        prepared = self.dataset.rename(signal_rename(self.dataset))
         results = per_qubit_results(
-            self.dataset, QubitSQRBEstimator(), artifact_dir=self.artifact_dir
+            prepared, QubitSQRBEstimator(), artifact_dir=self.artifact_dir
         )
 
         result = QubitSQRBResult()
