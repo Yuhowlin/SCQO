@@ -248,6 +248,11 @@ scqo/
                                 #   kappa_tot_hz (fact) x depletion_factor -> the
                                 #   readout channel's readout_depletion_s knob, exactly
                                 #   as t1_s -> thermalization_time_s
+    _distortion_hint.py         # the cryoscopes' operator hint: the taps are FACTS, so
+                                #   the command that writes them into the VENDOR config
+                                #   comes from the backend (duck-typed hook
+                                #   distortion_apply_command) and is printed on stderr
+                                #   at writeback; no hook = the manual step, named
     _drive_power.py             # shared recorded set->revert drive_power_dbm boundary
     _flux_component.py          # kind-agnostic foreign flux source mixin (record-only guard)
     _sim.py                     # shared helpers for the offline simulators

@@ -40,6 +40,7 @@ from ..experiment import Experiment
 from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
 from ._capabilities.qubit_reset import QubitResetParameters
+from ._distortion_hint import print_apply_hint, run_id_of
 from ._capabilities.state_readout import (
     POPULATION_ALT,
     StateReadoutParameters,
@@ -270,16 +271,22 @@ class QubitRamseyCryoscope(Experiment):
         measured. Both arrays are written through the one flux-channel view so the
         accept batches them together — the paired-length invariant is checked at
         accept, not here. Nothing is pushed to the vendor (facts): applying the
-        taps to the instrument's output filter is a manual vendor-config step.
+        taps to the instrument's output filter is a manual vendor-config step, so
+        the proposal is followed on stderr by the command that performs it — the
+        backend's own (``_distortion_hint``).
         """
         if self.result is None:
             return
+        proposed: list[str] = []
         for qubit, fit in self.result.fit.items():
             if self.result.outcomes[qubit] is not Outcome.SUCCESSFUL:
                 continue
             flux_view = self.device.channel(qubit, "flux")
             flux_view.distortion_amp = [float(a) for a in fit["distortion_amp"]]
             flux_view.distortion_tau_s = [float(t) for t in fit["distortion_tau_s"]]
+            proposed.append(qubit)
+        print_apply_hint(self.name, self.backend, proposed,
+                         run_id_of(self.artifact_dir))
 
     def probe(self):  # pragma: no cover - driver half
         raise NotImplementedError("a driver backend supplies probe()")

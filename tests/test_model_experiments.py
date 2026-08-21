@@ -720,6 +720,53 @@ def test_spectroscopy_cryoscope_accept_roundtrips_paired_facts(session):
     assert len(physical["distortion_amp"]) == len(physical["distortion_tau_s"]) > 0
 
 
+def test_cryoscope_apply_hint_comes_from_the_backend_hook():
+    """The vendor command is BACKEND knowledge (SCQO knows no OPX): the hint asks
+    the duck-typed distortion_apply_command hook, names the manual step when a
+    backend declares none, and degrades a BROKEN hook to a line — a hint may
+    never take a measurement's writeback down with it."""
+    from pathlib import Path
+
+    from scqo.experiments._distortion_hint import apply_hint_lines, run_id_of
+
+    hooked = SimpleNamespace(
+        distortion_apply_command=lambda t, run: f"vendor-apply {t} {run}")
+    assert any("q0: vendor-apply q0 run-7" in line for line in
+               apply_hint_lines("qubit_ramsey_cryoscope", hooked, ["q0"], "run-7"))
+
+    bare = "\n".join(apply_hint_lines("qubit_ramsey_cryoscope", SimpleNamespace(), ["q0"]))
+    assert "declares no distortion_apply_command" in bare
+    assert "distortion_amp + distortion_tau_s into its output filter by hand" in bare
+
+    def boom(target, run_id):
+        raise RuntimeError("no state loaded")
+
+    broken = apply_hint_lines("qubit_ramsey_cryoscope",
+                              SimpleNamespace(distortion_apply_command=boom), ["q0"])
+    assert any("RuntimeError: no state loaded" in line for line in broken)
+
+    # nothing proposed (every target failed) -> nothing printed
+    assert apply_hint_lines("qubit_ramsey_cryoscope", hooked, []) == []
+    # the run id is the run FOLDER's name; no artifacts (--skip-artifacts) = none
+    assert run_id_of(None) is None
+    assert run_id_of(Path("data") / "chipT" / "2026-08-21" / "RUN-1" / "analysis") == "RUN-1"
+
+
+def test_cryoscope_prints_the_apply_hint_on_writeback(session, capsys, monkeypatch):
+    """Both cryoscopes print the hint when they propose taps: on STDERR (stdout
+    stays parseable JSON), one line per SUCCESSFUL target, carrying the backend's
+    command addressed to this very run."""
+    monkeypatch.setattr(session.backend, "distortion_apply_command",
+                        lambda target, run_id: f"vendor-apply {target} {run_id}",
+                        raising=False)
+    for name in ("qubit_ramsey_cryoscope", "qubit_spectroscopy_cryoscope"):
+        out = session.run(name, {"targets": ["q0"]})
+        captured = capsys.readouterr()
+        assert f"# {name}: the fitted taps are FACTS" in captured.err
+        assert f"vendor-apply q0 {out['run_id']}" in captured.err
+        assert "vendor-apply" not in captured.out
+
+
 def test_spectroscopy_cryoscope_window_and_drive_len_validation():
     """The detuning window is the drive_detuning capability's explicit
     [start, end] range (asymmetric allowed, edges in either order, axis always

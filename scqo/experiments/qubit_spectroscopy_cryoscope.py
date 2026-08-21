@@ -103,6 +103,7 @@ from ._capabilities.state_readout import (
     signal_rename,
     population_row,
 )
+from ._distortion_hint import print_apply_hint, run_id_of
 from ._sim import iq_from_population, stable_seed
 from . import register
 
@@ -471,16 +472,22 @@ class QubitSpectroscopyCryoscope(Experiment):
         REPLACE semantics, identical to qubit_ramsey_cryoscope: the two cryoscopes
         are independent full measurements of the same step response (short vs long
         timescale), so the newer accepted run overwrites the taps rather than
-        composing them. Nothing is pushed to the vendor (facts).
+        composing them. Nothing is pushed to the vendor (facts), so the proposal is
+        followed on stderr by the backend's own command for writing them into the
+        vendor config (``_distortion_hint``).
         """
         if self.result is None:
             return
+        proposed: list[str] = []
         for qubit, fit in self.result.fit.items():
             if self.result.outcomes[qubit] is not Outcome.SUCCESSFUL:
                 continue
             flux_view = self.device.channel(qubit, "flux")
             flux_view.distortion_amp = [float(a) for a in fit["distortion_amp"]]
             flux_view.distortion_tau_s = [float(t) for t in fit["distortion_tau_s"]]
+            proposed.append(qubit)
+        print_apply_hint(self.name, self.backend, proposed,
+                         run_id_of(self.artifact_dir))
 
     def probe(self):  # pragma: no cover - driver half
         raise NotImplementedError("a driver backend supplies probe()")
