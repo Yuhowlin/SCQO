@@ -14,9 +14,9 @@ duck-typed hook — the ``power_context`` / ``preview`` pattern:
 
 Return the exact shell command, or None when this backend has no one-command
 path. Declaring nothing at all is not an error: the taps are recorded either way
-and the hint then names the manual step instead (Qblox today — its
-``to_qblox_distortion`` yields a config BLOCK a human keys into hw_config.json,
-not a command).
+and the hint then names the manual step instead. Both shipped backends return
+their ``apply_distortion`` operator CLI (``scqo_qm.backend.apply_distortion`` /
+``scqo_qblox.backend.apply_distortion``), run-addressed when the run id is known.
 
 Lines take the CLI meta shape — ASCII, ``#``-prefixed, on STDERR — so a
 ``scqo run ... | jq`` pipeline keeps parsing.

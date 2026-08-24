@@ -25,7 +25,9 @@ vendor: applying them to the instrument's output filter (e.g. the OPX
 ``exponential_filter``) stays a manual vendor-config step. Semantics are REPLACE
 — each accepted run records the full step response measured that run.
 
-QM-only today: the base ``probe()`` raises, and only LCHQMDriver supplies one.
+The base ``probe()`` raises; both drivers supply one (scqo-qm bakes the 1-16 ns
+segments, scqo-qblox composes each duration from a voltage-offset segment plus a
+1-3 ns remainder waveform).
 """
 
 from __future__ import annotations
@@ -149,8 +151,8 @@ class QubitRamseyCryoscope(Experiment):
         "cryo-wiring transient; applying them to the instrument's output filter is "
         "a manual vendor step. The flux-pulse amplitude is a volts parameter "
         "RELATIVE to idle_flux and only sets SNR (the response is tail-normalized). "
-        "Prerequisite: calibrated x90 (spectroscopy, power_rabi, Ramsey). QM-only "
-        "probe today."
+        "Prerequisite: calibrated x90 (spectroscopy, power_rabi, Ramsey). Probes "
+        "on both backends (QM, Qblox)."
     )
     Parameters: ClassVar[type] = QubitRamseyCryoscopeParameters
     Result: ClassVar[type] = QubitRamseyCryoscopeResult

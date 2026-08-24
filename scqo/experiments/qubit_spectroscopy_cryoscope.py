@@ -73,7 +73,8 @@ one overwrites the other's taps (last-writer-wins), it does NOT compose them.
 Nothing is pushed to the vendor: applying the taps to the instrument's output
 filter stays a manual vendor-config step.
 
-QM-only today: the base ``probe()`` raises, and only LCHQMDriver supplies one.
+The base ``probe()`` raises; both drivers supply one (the Qblox probe realizes
+``drive_shape='square'`` only and refuses the smooth envelopes by name).
 """
 
 from __future__ import annotations
@@ -305,7 +306,8 @@ class QubitSpectroscopyCryoscope(Experiment):
         "(REPLACE, not composed). Band-limited v1: the drive is centered on the "
         "arch-predicted parked detuning without an LO shift, so keep the excursion "
         "modest. Prerequisite: a rough arch (qubit_spectroscopy_flux_pulse) for "
-        "accurate centering. QM-only probe today."
+        "accurate centering. Probes on both backends (QM; Qblox is square-drive "
+        "only)."
     )
     Parameters: ClassVar[type] = QubitSpectroscopyCryoscopeParameters
     Result: ClassVar[type] = QubitSpectroscopyCryoscopeResult
