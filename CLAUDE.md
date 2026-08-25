@@ -19,9 +19,17 @@ The word **"protocol" is retired**; use these names across all repos.
 
 The scqo stack uses this vocabulary throughout — **scqat** (`estimators/`, `tools/`, `BaseEstimator`), **SCQO** (`Experiment`, `scqo.experiments`, `probe()`, `estimate()`), and the drivers **scqo-qblox** + **scqo-qm** (`probe()`-only experiments). scqat's estimator keeps its own orchestrator method `analyze()` (a different layer). scqo-qm's vendored official qualibrate nodes keep qualibrate's own `node` framework and never import scqo (its scqo surface is the `scqo_qm` package). (QBLOX_training documents Qblox's *own* `Experiment` ABC — a different class from this `Experiment`.)
 
-## The two source repos (reference implementations)
+## Where the two backends started (historical)
 
-| | LCHQMDriver | QBLOX_training |
+**This section is history, not the current picture** — for the repos as they are today see
+**Reference backends** near the end. SCQO was extracted from two lab drivers that did the same
+physics on different hardware: `LCHQMDriver`, now **[scqo-qm](https://github.com/shiau109/scqo-qm)**,
+and `LCHQBDriver`, now **[scqo-qblox](https://github.com/shiau109/scqo-qblox)**. Neither old name
+exists any more. The Qblox column below is drawn from `QBLOX_training`, the read-only vendor
+example repo the Qblox driver was written against — it is a *reference*, not an ancestor, and it
+documents Qblox's own `Experiment` ABC, a different class from this one.
+
+| | QM side (was LCHQMDriver) | Qblox side (QBLOX_training reference) |
 |---|---|---|
 | Instrument | Quantum Machines OPX1000 (MW-FEM + LF-FEM) | Qblox Cluster (QCM / QCM-RF / QRM-RF) |
 | Low-level API | `qm-qua` (QUA DSL) | `qblox_scheduler` (`Schedule` + `Operations`) |
@@ -193,9 +201,12 @@ scqo/
                     #   qubit_reset.py = reset_method 'thermal'|'active' + the thermal
                     #   wait, resolved for both drivers by the ONE helper
                     #   reset_wait_ns; a backend that cannot realize a method must
-                    #   REFUSE it by name, never downgrade — 'active' is realized on
-                    #   BOTH backends for the four coherent-drive carriers, and every
-                    #   other experiment refuses by name,
+                    #   REFUSE it by name, never downgrade. The opt-in set is NOT
+                    #   symmetric across backends and must not be assumed: Qblox opts
+                    #   in 4 coherent-drive carriers, QM 7 (those four plus
+                    #   qubit_ramsey_phasor and both T1 trackers). Each driver's
+                    #   census test is the authority; every other experiment refuses
+                    #   by name,
                     #   amplitude.py = the swept amplitude window + the ABSOLUTE amplitude
                     #   behind it. AmplitudeSweepParameters owns min/max_amp_factor +
                     #   num_amp_points on ONE axis, AMP_AXIS = `amp_prefactor` (scqat and
@@ -242,6 +253,13 @@ scqo/
                     #   unclassifiable); CAPABILITY_SUMMARIES = the curated one-liner
                     #   per capability behind `scqo run --capability` (keys pinned to
                     #   the derived set by test_capabilities)
+    _gate_target.py             # which drag knob a target_gate selects (drag_knob)
+    _overlap.py                 # the concurrent-tone timing shared by the overlap probe
+    _punchout.py                # the two punchouts' shared branch/plateau extraction
+    _time_grid.py               # the shared swept-TIME axes. log_time_axis_ns SHRINKS:
+                                #   points snap to the 4 ns grid and de-duplicate, so the
+                                #   realized length is < num_points - read axis.size
+    _transmon_estimate.py       # shared transmon arithmetic behind the flux map + punchouts
     _depletion.py               # the post-readout photon-depletion wait: THE precedence
                                 #   helper depletion_wait_ns + the kappa->wait formula.
                                 #   The readout twin of qubit_reset one level over -
@@ -256,119 +274,41 @@ scqo/
     _drive_power.py             # shared recorded set->revert drive_power_dbm boundary
     _flux_component.py          # kind-agnostic foreign flux source mixin (record-only guard)
     _sim.py                     # shared helpers for the offline simulators
-    resonator_spectroscopy.py   # frequency sweep, Lorentzian/circle fit -> readout_freq_hz
-                                #   (readout channel) + f_dress0_hz/kappa_tot_hz (resonator facts)
-    qubit_spectroscopy.py       # two-tone peak search -> coarse drive_freq_hz (drive channel)
-                                #   + f_01_hz (mode fact) (bring-up step 2)
-    qubit_ramsey.py             # time sweep, decaying-cosine fit -> drive_freq_hz (drive
-                                #   channel) + f_01_hz/t2_star_s (mode facts)
-    qubit_power_rabi.py         # amplitude sweep, cosine fit -> pi_amp (drive channel)
-    qubit_relaxation.py         # pi + swept wait, exp-decay fit -> t1_s (mode fact)
-    qubit_echo.py               # Hahn echo, exp-envelope fit -> t2_echo_s (mode fact)
-    qubit_spectroscopy_flux_pulse.py  # 2D flux x detuning arch, window RELATIVE to
-                                #   idle_flux -> ej_sum_hz/f_q_max_hz (mode facts) +
-                                #   flux_offset/flux_per_phi0 (flux-channel facts, absolute
-                                #   after re-referencing) + idle_flux (the one knob: accepting
-                                #   re-parks at the sweet spot, so the next map centres on 0).
-                                #   THE authority for idle_flux on a flux-tunable qubit
-    single_shot_readout.py      # per-shot IQ blobs (prepared_state x shot_idx) ->
-                                #   fidelity_g/fidelity_e monitors + pos_* blob centers on the
-                                #   readout channel; a discriminating driver also proposes
-                                #   readout_rotation_rad/readout_threshold/readout_rus_threshold.
-                                #   The leftover population is reported BOTH ways and they are
-                                #   NOT one quantity by two methods, so they never share a key
-                                #   (scqat's own multi-method rule): p_e_given_g/p_g_given_e are
-                                #   COUNTED (nearest-center assignment = population + overlap
-                                #   error), pop_e_prep_g/pop_g_prep_e are the FITTED blob weights
-                                #   (population alone, from scqat's gaussian_norms - amplitudes
-                                #   only, centers/widths pinned). Their difference ~ the
-                                #   discrimination error
-    single_shot_readout_gef.py  # the QUTRIT sibling: prepared_state [0,1,2] -> 3x3 confusion
-                                #   (counted + fitted twins) + fidelity_g/e/f and pos_{g,e,f}_*
-                                #   monitors. Proposes NO discriminator - a scalar threshold on
-                                #   one rotated quadrature has no 3-state analogue, so
-                                #   single_shot_readout stays THE authority for
-                                #   readout_rotation_rad/readout_threshold. QM-ONLY probe
-                                #   (needs a calibrated EF_x180 + anharmonicity; Qblox has the
-                                #   <q>.12 clock but no gate targets it)
-    qubit_thermal_population.py # prepare |g> ONLY, split the cloud against the readout channel's
-                                #   STORED pos_* centers (pinned user_mean, width re-fit) ->
-                                #   pop_e_prep_g -> the mode fact n_th (its first writer).
-                                #   REFUSES without an accepted single_shot_readout (one state
-                                #   cannot locate |e>) and refuses active reset (it would remove
-                                #   the population being counted)
-    qubit_parity_switch_continuous.py  # y90 - fixed idle (1/(2 x parity_delta_f_hz)) - x90,
-                                #   N single shots back-to-back, depletion-only between shots
-                                #   (deliberately NO qubit reset; no reset_method): the readout
-                                #   is the RUNNING XOR of the parity, the consecutive-pair
-                                #   difference is the telegraph -> PSD Lorentzian knee ->
-                                #   parity_rate_hz (mode fact, rate = pi x corner). Fed by
-                                #   qubit_ramsey's beat model (the drive-channel
-                                #   parity_delta_f_hz monitor); REQUIRES accepted
-                                #   single_shot_readout (I/Q path) + resonator_spectroscopy
-                                #   (readout_depletion_s = the shot cadence / telegraph timebase)
-    qubit_parity_switch_discrete.py  # the two-measurement sibling: per cycle M1 - depletion -
-                                #   x90 - idle - y90 - M2 - pad at fixed cycle_period_ns;
-                                #   parity = m1 XOR m2 WITHIN each cycle (M1 re-projects, so a
-                                #   SLOW period is T1-safe — the point of the variant; two
-                                #   acquisition bins per cycle), p_intercycle_flip = QND-chain
-                                #   health; same idle derivation/requirements/writeback ->
-                                #   parity_rate_hz
-    resonator_spectroscopy_flux.py   # 2D resonator flux map -> idle_flux + readout_freq_hz
-                                #   at the sweet spot; flux_offset/flux_per_phi0 (flux-channel
-                                #   facts) + f_bare_hz/g_hz (resonator facts)
-    readout_power.py            # vs amp prefactor -> readout_amp. TWO readout modes:
-                                #   'shot' = per-shot IQ + mixture fit -> max FIDELITY;
-                                #   'average' = one FPGA-averaged point per prepared
-                                #   state, no fit -> max blob SEPARATION (fast, but
-                                #   blind to measurement-induced transitions)
-    readout_frequency.py        # the same two modes vs readout detuning -> readout_freq_hz
-    resonator_spectroscopy_power_amp.py  # FAST punchout: set-top -> one-program FPGA amplitude
-                                #   sweep down -> revert; absolute-dBm window -> readout_power_dbm + readout_freq_hz
-    resonator_spectroscopy_power_chain.py  # CAREFUL punchout: steps the output chain per point
-                                #   (amp ~0.5 for SNR; wide, cross-backend) -> readout_power_dbm + readout_freq_hz
-    qubit_pi_pulse_error.py     # pi-amplitude error amplification -> pi_amp (drive channel)
-    qubit_drag_equator.py       # 3-line symmetric DRAG calibration -> drag_beta, or
-                                #   drag_beta_x90 with target_gate="x90" (drive channel;
-                                #   knob picked by _gate_target.drag_knob)
-    qubit_drag_alternating.py   # alternating-pulse DRAG calibration -> same
-                                #   target_gate-selected drag knob (drive channel)
-    qubit_relaxation_flux_pulse.py  # T1 vs swept z PULSE (idle-relative) - record-only
-                                #   diagnostic (per-flux fits in result.fit)
-    qubit_echo_flux_pulse.py    # T2_echo vs swept z PULSE (idle-relative) - record-only
-    qubit_sqrb.py               # single-qubit randomized benchmarking - record-only gate fidelities
-    qubit_t1_ade.py             # T1 vs LAB TIME by 3-delay Analytical Decay Estimation
-                                #   (arXiv:2602.11912: on-FPGA closed form + analytic sigma,
-                                #   SPAM cancels; host bootstrap cross-check) - record-only
-                                #   tracking (qubit_relaxation stays the t1_s authority);
-                                #   QM-only probe
-    qubit_t1_bayesian.py        # T1 vs LAB TIME by per-shot adaptive Bayes (arXiv:2506.09576,
-                                #   u = 1/k so k grows past fixed-point range; tau = c*T1_est;
-                                #   interleaved classical-decay validation; needs discriminator
-                                #   + confusion matrix) - record-only tracking; QM-only probe
-    qubit_tomography.py         # state tomography (custom contract) - record-only
-    qubit_xyz_delay.py          # slide XY x180 vs same-length Z pulse (prepared_state x
-                                #   relative_time_ns), triangle-overlap fit -> flux_delay_s
-                                #   (flux-channel knob, the line delay vs the drive line;
-                                #   written absolute = old + fitted). QM-only probe today
-    qubit_parametric_drive.py   # parametric-drive resonance map: pi pulse, then an RF tone on
-                                #   the qubit's OWN flux line (swept absolute amplitude x frequency,
-                                #   FIXED drive time); sideband transfer to a coupled component
-                                #   draws the resonance line(s) - record-only (peak-cloud summary
-                                #   in result.fit; QM-only probe today)
-    pair_swap_chevron.py        # single-excitation swap chevron: flux amplitude (absolute V) x
-                                #   pulse duration on one member's flux line - record-only 2D map
-                                #   (scqat estimator draws the raw joint populations; no writeback)
-    pair_swap_flux_map.py       # fixed-duration coupler-flux x member-flux swap spot - record-only
-                                #   (same raw-population map estimator in scqat).
-                                #   Both precede pair_zz_coupler at bring-up: find where the pair
-                                #   swaps, then where it decouples
-    pair_zz_coupler.py          # residual ZZ vs coupler bias (echo fringe per bias) -> idle_flux
-                                #   on the COUPLER's flux channel (ZZ-off point) + zz_hz (pair fact)
+    <name>.py                   # ONE module per registered experiment - the physics half
+                                #   (define_sweep/simulate/estimate/update); a driver adds
+                                #   only probe(). The full list is the census below; each
+                                #   one's description lives in the registry, read it with
+                                #   `scqo run <name> --help`
 tests/test_model_run.py         # catalog -> run -> suggest -> accept, no hardware
 tests/test_datastore.py         # run folders + index + tags + reindex, no hardware
 tests/test_campaign.py          # the pure aggregator + run_campaign orchestration
 ```
+
+### The registered experiments
+
+<!-- BEGIN generated: experiments -->
+**41 registered experiments.** This list is GENERATED from the registry
+(`scqo.catalog()`) - refresh it with `python scripts/update_docs.py`. Descriptions are
+catalog-quality and live in the registry, never here: read one with
+`scqo run <name> --help`, or browse by capability with `scqo run --capability <name>`.
+
+```
+broadband_qubit_spectroscopy        qubit_parity_switch_discrete        qubit_t1_ade
+broadband_resonator_spectroscopy    qubit_pi_pulse_error                qubit_t1_bayesian
+pair_swap_chevron                   qubit_power_rabi                    qubit_thermal_population
+pair_swap_flux_map                  qubit_ramsey                        qubit_tomography
+pair_zz_coupler                     qubit_ramsey_cryoscope              qubit_xyz_delay
+qc_n_stark_amp                      qubit_ramsey_phasor                 readout_frequency
+qc_n_swap_amp                       qubit_relaxation                    readout_power
+qubit_deterministic_benchmarking    qubit_relaxation_flux_pulse         resonator_spectroscopy
+qubit_drag_alternating              qubit_spectroscopy                  resonator_spectroscopy_flux
+qubit_drag_equator                  qubit_spectroscopy_cryoscope        resonator_spectroscopy_power_amp
+qubit_echo                          qubit_spectroscopy_flux_pulse       resonator_spectroscopy_power_chain
+qubit_echo_flux_pulse               qubit_spectroscopy_overlap          single_shot_readout
+qubit_parametric_drive              qubit_sqrb                          single_shot_readout_gef
+qubit_parity_switch_continuous      qubit_stark_phase_echo
+```
+<!-- END generated: experiments -->
 
 ### Datastore (the "find my measurement data" layer)
 `Session(backend, data_root=...)` persists **every** run — raw dataset (`dataset.nc`),
@@ -448,13 +388,13 @@ so reindex heals any skipped write); multi-PC writers need per-PC data_roots.
 Parameters, Result, `estimate`, `simulate` and `update` are inherited unchanged.
 
 ### Testing discipline — run only what the edit can break
-Default for a localized change (from `D:\github\SCQO`): `uv run pytest tests/test_model_experiments.py -k ramsey -q`.
+Default for a localized change (from the repo root): `uv run pytest tests/test_model_experiments.py -k ramsey -q`.
 Selection map for experiment work (`scqo/experiments/<name>.py`) — always the first row, plus any that apply:
 
 | Also changed | Add to the run |
 |---|---|
 | *always* | `tests/test_model_experiments.py -k <stem>` |
-| a capability mixin (`_capabilities/`) | `tests/test_capabilities.py` **+ `tests/test_model_experiments.py` UNFILTERED** — drop the `-k`: a mixin edit is shared-core for every experiment that subclasses it, and only the full every-experiment sweep catches the ones you didn't think of (~50 s, 30 tests) |
+| a capability mixin (`_capabilities/`) | `tests/test_capabilities.py` **+ `tests/test_model_experiments.py` UNFILTERED** — drop the `-k`: a mixin edit is shared-core for every experiment that subclasses it, and only the full every-experiment sweep catches the ones you didn't think of |
 | a time axis (`idle_time_ns`-style grid) | `tests/test_time_grid.py -k <stem>` |
 | `Contract` / `define_sweep` | `tests/test_contract.py` (small — run whole) |
 | a `*_method` Literal | `tests/test_estimator_method_sync.py` |
@@ -466,33 +406,48 @@ Selection map for experiment work (`scqo/experiments/<name>.py`) — always the 
 `-k` takes the **distinctive stem, not the registered name**: `-k ramsey` matches both
 `test_every_experiment_runs_clean[qubit_ramsey]` and `test_ramsey_writes_drive_freq_fact_twin_and_t2`,
 while `-k qubit_ramsey` misses the second. **0 collected means the filter was wrong** — widen it, never skip.
-Leave `test_cli_*.py` (20 subprocess spawns), `test_index_scale.py` (100k rows) and `test_viewer.py` alone
+Leave `test_cli_*.py` (many subprocess spawns), `test_index_scale.py` (100k rows) and `test_viewer.py` alone
 unless the edit is in `scqo/cli/`, `scqo/datastore.py` or `scqo/viewer/` respectively.
 
-The **full suite** (`uv run pytest -q`) costs **771 tests / ~15 min** — the `test_cli_*.py` subprocess
-tests dominate it (`test_cli_cooldown` alone is 42 s, three `test_cli_run` cases 23–30 s each). It is
-for exactly two cases: (1) cutting a release, and (2) an edit to
-shared core, where the blast radius is everything — `catalog.py`, `entities.py`, `roster.py`, `stores.py`,
-`device.py`, `experiment.py`, `session.py`. Otherwise **report the exact command run** and offer the
-full-suite command instead of spending the minutes unasked.
+The **full suite** (`uv run pytest -q`) takes minutes, dominated by the `test_cli_*.py` subprocess
+tests. It is for exactly two cases: (1) cutting a release, and (2) an edit to **shared core**, which
+means one of `catalog.py`, `entities.py`, `roster.py`, `stores.py`, `device.py`, `experiment.py`,
+`session.py` — **or a `_capabilities/` mixin**, whose blast radius is every experiment that
+subclasses it (the row above says so; this list is the same claim, not a narrower one).
+Otherwise **report the exact command run** and offer the full-suite command instead of spending the
+minutes unasked.
 
-### Experiment governance (3 tiers) + promotion checklist
-1. **Students** use the `scqo` command (`scqo run` / `scqo find` / `scqo user`) with
-   `~/.scqo/config.toml`; they change nothing in the governed repos.
-2. **Advanced users** prototype new experiments + estimators in the sandbox repo
-   `D:\github\scqo-contrib` (github.com/shiau109/scqo-contrib; entry-point group
-   `scqo.experiments.contrib`, tagged `maturity: contrib` in the catalog; template:
-   `qubit_relaxation`). Contrib runs persist to the same datastore, so prove-out is evaluable.
-3. **The manager promotes** a proven experiment into the system. Checklist:
+No test or timing counts are quoted here on purpose: they rotted two releases deep last time
+(771 was the v2.1.0 number, still printed at v3.1.0 when the real figure was 868). Each release
+records the per-repo counts it actually validated — see the `OFFLINE-VALIDATED` line in the
+matching [RELEASES.toml](RELEASES.toml) block.
+
+### Experiment governance + promotion checklist
+Three roles, distinguished by ACCESS rather than seniority:
+
+1. **Operators** use the `scqo` command (`scqo run` / `scqo find` / `scqo user`) with
+   `~/.scqo/config.toml`; they change nothing in these repos.
+2. **Contributors** prototype a new experiment + estimator **in a fork** and open pull
+   requests back — [CONTRIBUTING.md](CONTRIBUTING.md) has the layout, the branch/merge
+   order across repos, and what a PR must prove. (The `scqo-contrib` sandbox that used to
+   be this tier is **retired**: it is private, pinned at v0.12.0, excluded from every combo
+   since greenfield, and its template imports a `QubitSelection` that greenfield renamed to
+   `TargetSelection` — so it fails on import and cannot even be copied from. Do not route
+   anyone there.)
+3. **A maintainer merges** the promotion — someone with push rights on these repos, which on
+   a fork PR means the reviewer. Checklist, which is also what a PR is reviewed against:
    - [ ] `DatasetContract` declared; probe output validated against it on the real instrument.
    - [ ] `simulate()` implemented -> offline end-to-end test in `tests/`.
    - [ ] Estimator lives in scqat with metadata (+ figures) outputs.
    - [ ] `update()` writes only catalogued fields (extend the kind catalog in `catalog.py` first if needed).
-   - [ ] Ran repeatedly via contrib with findable data; results reviewed via `find_runs`.
+   - [ ] Ran repeatedly with findable data; results reviewed via `find_runs`. State plainly
+         whether that was on hardware or offline — a PR records this as
+         `offline` / `hardware <chip> <date>` / `unverified`.
    - [ ] `description` is catalog-quality (an AI reads it to decide).
-   - [ ] Physics half moved to `scqo/experiments/`; driver `probe()` subclasses registered
-         under the core `scqo.experiments` group; contrib copy deleted (then directly
-         runnable via `scqo run <name>`).
+   - [ ] Physics half in `scqo/experiments/`; driver `probe()` subclasses registered under
+         the core `scqo.experiments` group (then directly runnable via `scqo run <name>`).
+   - [ ] `python scripts/update_docs.py` re-run, so the experiment census in this file
+         includes it — `tests/test_docs_current.py` fails otherwise.
 
 **`scqo run <name>` is the single CLI entry point** — never add wrappers, launcher stubs,
 or per-command shims. `scqo campaign <plan.toml>` is not an exception: it is a different
@@ -529,10 +484,18 @@ portable; chain-fraction = non-portable, twin or catalogued scale);
 (6) rest = vendor config, catalogued with kind realizer/candidate/vendor/unique —
 unique locks experiments to that instrument.
 
-### Reference backends
-- `D:\github\scqo-qm` (formerly LCHQMDriver) — Quantum Machines (qm-qua / quam / qualibrate); the scqo surface is the `scqo_qm` package (backend/ + experiments/, one fused file per experiment); the qualibrate GUI serves the vendored OFFICIAL nodes only (the LCH shells are retired; `customized/` is a frozen archive); `quam_config/my_quam.py` stays the QUAM entrypoint.
-- `D:\github\scqo-qblox` (formerly LCHQBDriver) — Qblox (qblox-scheduler); the `scqo_qblox` package, independent of the QM stack.
-- `D:\github\QBLOX_training` — read-only Qblox reference docs (`docs/applications/superconducting/single_qubit_experiment_helpers/experiment.py`, `cal*.py`, `custom_elements.py`).
+### The sibling repos
+All four are public. They must be cloned as **siblings under one parent directory, under
+their own names** — `pyproject.toml` resolves `scqat` as `{ path = "../scqat" }` and each
+driver resolves `scqo` as `{ path = "../SCQO" }`, so a renamed or nested folder breaks the
+install. [CONTRIBUTING.md](CONTRIBUTING.md) has the layout.
+
+- **[scqat](https://github.com/shiau109/scqat)** — the analysis half: every estimator and
+  fitter SCQO lazy-imports from `estimate()`. A hard dependency, and the one repo whose
+  version SCQO pins a floor against (see `RELEASES.toml`).
+- **[scqo-qm](https://github.com/shiau109/scqo-qm)** (was LCHQMDriver) - Quantum Machines (qm-qua / quam / qualibrate); the scqo surface is the `scqo_qm` package (backend/ + experiments/, one fused file per experiment); the qualibrate GUI serves the vendored OFFICIAL nodes only (the LCH shells are retired; `customized/` is a frozen archive); `quam_config/my_quam.py` stays the QUAM entrypoint.
+- **[scqo-qblox](https://github.com/shiau109/scqo-qblox)** (was LCHQBDriver) - Qblox (qblox-scheduler); the `scqo_qblox` package, independent of the QM stack.
+- **QBLOX_training** - the vendor's read-only Qblox example repo (`docs/applications/superconducting/...`). It is a LOCAL reference checkout on the lab machine, not part of this project and not needed to build or test anything here.
 
 ## Status
 Current published release: **v3.1.0** — see `RELEASES.toml` for the combo manifest and required upgrade actions. Release history lives in git tags + `RELEASES.toml`, not here.

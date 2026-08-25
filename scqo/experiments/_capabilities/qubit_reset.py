@@ -39,12 +39,15 @@ AND: a backend or experiment that cannot realize the requested method must
 REFUSE IT BY NAME — never silently downgrade to thermal. A method the caller
 asked for and did not get is the one failure this field cannot survive: the run
 completes, the data looks plausible, and only the wall clock disagrees.
-``"active"`` is realized on BOTH backends, on the four coherent-drive carriers
-whose readout condition is fixed for the whole run; everything else raises. Which
-carriers, and the per-backend envelope (Qblox plays a fixed number of
-ConditionalResets, QM runs QUAM's repeat-until-success loop), are documented at
-each refusal site, not here — this module owns the vocabulary, not the
-per-backend policy.
+``"active"`` is realized on both backends for coherent-drive carriers whose
+readout condition is fixed for the whole run; everything else raises. **The
+opt-in set is not symmetric and must never be assumed equal** — a carrier may
+ship on both backends and opt in on only one (``qubit_ramsey_phasor`` opts in on
+QM and is denied on Qblox pending its hardware run). Which carriers, and the
+per-backend envelope (Qblox plays a fixed number of ConditionalResets, QM runs
+QUAM's repeat-until-success loop), are documented at each refusal site and pinned
+by each driver's own census test, not here — this module owns the vocabulary, not
+the per-backend policy.
 """
 
 from __future__ import annotations

@@ -1,9 +1,23 @@
 # Cross-platform proof: the whole scqo stack (incl. scqat estimators + datastore)
-# must pass offline on Windows, macOS, and Linux. scqat is checked out as a sibling
-# (public repo) exactly like the on-disk lab layout.
+# must pass offline on Windows, macOS, and Linux. scqat is checked out as a sibling,
+# exactly like the on-disk lab layout.
+#
+# FORK PAIRING. A change often spans scqat and SCQO, and there are no compatibility
+# shims in this stack, so the two halves must be tested TOGETHER or the result is
+# meaningless. This workflow therefore resolves which scqat to check out instead of
+# hardcoding one:
+#
+#   1. the workflow_dispatch inputs, if given (a maintainer forcing a pairing); else
+#   2. <head-owner>/scqat at a branch matching this run's branch name - the same
+#      "one branch name across every repo" convention CONTRIBUTING.md asks for; else
+#   3. shiau109/scqat at its default branch.
+#
+# The resolved choice is written to the run summary, so a green tick is never ambiguous
+# about what it actually proved. This stays on `pull_request`, never
+# `pull_request_target`, so fork code runs without access to secrets.
 #
 # Note for private-repo billing: macOS runner minutes count 10x against the free
-# quota — this workflow runs only on pushes to main / PRs / manual dispatch.
+# quota - this workflow runs only on pushes to main / PRs / manual dispatch.
 name: tests
 
 on:
@@ -11,6 +25,15 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      scqat_repo:
+        description: "owner/scqat to test against (blank = auto-resolve)"
+        required: false
+        default: ""
+      scqat_ref:
+        description: "scqat branch or SHA (blank = auto-resolve)"
+        required: false
+        default: ""
 
 jobs:
   test:
@@ -29,18 +52,66 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: SCQO
+
+      - name: Resolve which scqat to test against
+        id: scqat
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_REPO: ${{ inputs.scqat_repo }}
+          INPUT_REF: ${{ inputs.scqat_ref }}
+          HEAD_OWNER: ${{ github.event.pull_request.head.repo.owner.login || github.repository_owner }}
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
+        run: |
+          set -u
+          repo="$INPUT_REPO"
+          ref="$INPUT_REF"
+          why="workflow_dispatch input"
+
+          if [ -z "$repo" ]; then
+            if [ "$HEAD_OWNER" != "shiau109" ] && gh repo view "$HEAD_OWNER/scqat" >/dev/null 2>&1; then
+              repo="$HEAD_OWNER/scqat"; why="fork owned by $HEAD_OWNER"
+            else
+              repo="shiau109/scqat"; why="upstream (no fork found for $HEAD_OWNER)"
+            fi
+          fi
+
+          if [ -z "$ref" ]; then
+            if gh api "repos/$repo/branches/$HEAD_BRANCH" >/dev/null 2>&1; then
+              ref="$HEAD_BRANCH"; why="$why, branch matched"
+            else
+              ref=""; why="$why, default branch (no '$HEAD_BRANCH' there)"
+            fi
+          fi
+
+          echo "repo=$repo" >> "$GITHUB_OUTPUT"
+          echo "ref=$ref"   >> "$GITHUB_OUTPUT"
+          {
+            echo "### scqat paired with this run"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| repository | \`$repo\` |"
+            echo "| ref | \`${ref:-<default branch>}\` |"
+            echo "| resolved by | $why |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - uses: actions/checkout@v4
         with:
-          repository: shiau109/scqat
+          repository: ${{ steps.scqat.outputs.repo }}
+          ref: ${{ steps.scqat.outputs.ref }}
           path: scqat
+
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+
       - name: Install scqat then scqo (editable, sibling layout)
         run: |
           python -m pip install --upgrade pip
           pip install -e ./scqat
           pip install -e "./SCQO[viewer]" pytest httpx
+
       - name: Run the offline test suite
         working-directory: SCQO
         run: python -m pytest -q
