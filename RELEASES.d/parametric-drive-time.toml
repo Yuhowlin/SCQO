@@ -1,0 +1,48 @@
+name = "parametric-drive-time"
+repos = { scqat = "8782812", scqo = "bc17701", scqo-qm = "b96724d" }
+kind = "breaking"
+coupling = """
+scqo needs scqat >= 8782812: qubit_parametric_drive_time is the first orchestrated \
+consumer of the parametric_drive_decoherence estimator, and that commit is what \
+gives it per-figure isolation (render_figures). Below it the estimator returns a \
+plain dict of pre-built figures, so a crash in the pure-fit decoherence_params \
+panel takes SCQO's whole artifact set down with it — the run keeps its data and \
+silently loses every PNG, including the raw-carrying rho11_fits. Silent-failure \
+floor: nothing raises, the figures are simply absent.\
+"""
+validated = "offline"
+notes = """
+UPGRADE REQUIRES: the experiment `qubit_parametric_drive` is renamed \
+`qubit_parametric_drive_amp` — update saved parameter files, campaign plans and \
+any `scqo run` scripts naming it. No alias is provided (no-backward-compatibility \
+rule). Old run folders keep the old experiment name and stay findable under it.
+
+NEW EXPERIMENT `qubit_parametric_drive_time` (QM only, record-only): the \
+parametric-drive chevron. Fixes `parametric_amp_v` and sweeps \
+frequency x `drive_time_ns`, so each frequency row is an oscillating rho_11(t); \
+scqat's existing `parametric_drive_decoherence` estimator reports gamma, lambda, \
+Delta and the EP metric 8*lambda^2/gamma^2 per drive frequency. It is the \
+time-domain characterization that FOLLOWS `qubit_parametric_drive_amp`'s \
+resonance finder, so its default frequency window is a narrow ZOOM (180-220 MHz), \
+not a band scan — a window too wide for its time window yields a chevron narrower \
+than one frequency step. Run it with `use_state_discrimination` ON: on raw I/Q \
+the fit still runs and reports unphysical rates.
+
+BEHAVIOR CHANGE: `qubit_parametric_drive_amp`'s `best_peak_amplitude` is \
+documented as POLARITY-NORMALIZED rather than signed. scqat's `fit_peaks` picks \
+the stronger polarity per slice and inverts a dip trace before fitting, so a \
+well-fit resonance reports a POSITIVE amplitude whether it is a dip or a peak; a \
+negative value signals a badly-conditioned fit, not a dip. The old Result \
+docstring claimed the opposite and the offline test asserted it — that test \
+passed on a 100 MHz-wide artifact fit 119 MHz away from the planted line. Nothing \
+in the fit dict changed shape; only the claim about it, and the test now gates on \
+linewidth. Anyone reading the sign of `best_peak_amplitude` from stored runs \
+should stop.
+
+STILL OWED (hardware): both parametric-drive shells are offline-only. \
+`qubit_parametric_drive_amp` carries forward the population run owed since \
+v3.1.0 (its gateway preview was verified on 5Q4C q1 2026-08-20; no acquisition \
+run yet), and `qubit_parametric_drive_time` has had no hardware run at all — \
+neither its real-time swept `play(duration=)` nor its gateway preview has been \
+exercised against an instrument. Qblox: not realized for either.
+"""
