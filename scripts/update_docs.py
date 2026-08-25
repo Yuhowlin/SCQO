@@ -29,11 +29,25 @@ COLUMNS = 3
 
 
 def experiment_names() -> list[str]:
-    """Every registered experiment name, from the registry itself."""
-    sys.path.insert(0, str(REPO_ROOT))
-    import scqo
+    """Every CORE experiment name, taken from the EXPORTED classes.
 
-    return sorted(entry["name"] for entry in scqo.catalog())
+    Deliberately not `scqo.catalog()`: several test modules `@register`
+    deliberately-broken fixture experiments at import time, so under the full suite
+    the live registry is wider than the shipped one (46 vs 41 when this was written,
+    which is how CI caught it while an isolated run passed). Selection is by TYPE,
+    matching `tests/test_model_experiments.py`'s `CORE` and `test_capabilities` -
+    `__all__` also re-exports the registry functions and the driver-facing capability
+    surface, and a name-exclusion list would need editing every time one is added.
+    """
+    sys.path.insert(0, str(REPO_ROOT))
+    import scqo.experiments as registry
+    from scqo.experiment import Experiment
+
+    return sorted(
+        obj.name
+        for obj in (getattr(registry, n) for n in registry.__all__)
+        if isinstance(obj, type) and issubclass(obj, Experiment)
+    )
 
 
 def render_block(names: list[str]) -> str:
