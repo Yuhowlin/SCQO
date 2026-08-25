@@ -88,9 +88,28 @@ CASES = [
     # fix — widen to 200 ns to keep this case honest.
     ("pair_swap_chevron", {"min_swap_time_ns": 1.0, "max_swap_time_ns": 200.0,
                            "num_time_points": 100}),
+    ("qubit_parametric_drive_time", {}),
 ]
 #: pair_swap_flux_map is deliberately ABSENT: its duration is a fixed Parameter,
 #: not a swept axis, so it declares no *_ns axis for these rows to check.
+
+#: axes built on a COARSER grid than the neutral 1 ns, and why. Whole nanoseconds
+#: stay the floor (the rows above still check it) — this pins the extra promise.
+COARSE_GRID = {
+    # QM-only: play(duration=) counts 4 ns clock cycles and the probe sweeps that
+    # count as a real-time QUA variable, so the stored axis IS what played and no
+    # round-and-re-declare step stands between them.
+    ("qubit_parametric_drive_time", "drive_time_ns"): 4,
+}
+
+
+@pytest.mark.parametrize("key,grid_ns", sorted(COARSE_GRID.items()))
+def test_coarse_grid_axes_land_on_their_instrument_grid(key, grid_ns):
+    name, axis_name = key
+    axis = _sweep(name, {})[axis_name]
+    assert off_grid_ns(axis, grid_ns=grid_ns) <= TOL_NS, (
+        f"{name}.{axis_name} must sit on the {grid_ns} ns grid")
+    assert axis.min() >= 16.0, "16 ns is the shortest playable pulse"
 
 
 def _sweep(name, params):
@@ -138,6 +157,8 @@ def _raw_window(name, p):
         return 16, p.max_idle_time_ns, p.num_time_points
     if name == "pair_swap_chevron":
         return p.min_swap_time_ns, p.max_swap_time_ns, p.num_time_points
+    if name == "qubit_parametric_drive_time":
+        return p.min_drive_time_ns, p.max_drive_time_ns, p.num_time_points
     # the flux-swept coherence pair, in EITHER frame: they name their time axis
     # num_wait_points, unlike the plain coherence experiments' num_points
     if name.endswith(("_flux", "_flux_pulse")):

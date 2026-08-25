@@ -26,7 +26,7 @@ RECORD_ONLY = {"qubit_sqrb", "qubit_tomography", "qubit_echo_flux_pulse",
                "qubit_relaxation_flux_pulse", "pair_swap_chevron", "pair_swap_flux_map",
                "qc_n_swap_amp", "qc_n_stark_amp", "qubit_t1_ade", "qubit_t1_bayesian",
                "broadband_resonator_spectroscopy", "broadband_qubit_spectroscopy",
-               "qubit_parametric_drive"}
+               "qubit_parametric_drive_amp", "qubit_parametric_drive_time"}
 
 
 #: the readout reference an accepted single_shot_readout would have left behind.
@@ -45,6 +45,19 @@ REFERENCE_BLOBS = {"pos_g_i": 0.0, "pos_g_q": 0.0, "pos_e_i": 4.0, "pos_e_q": 0.
 PARITY_DEFAULTS = {"qubit_parity_switch_continuous": {"record_time_s": 0.4},
                    "qubit_parity_switch_discrete": {"record_time_s": 0.4}}
 
+#: qubit_parametric_drive_time runs scqat's three-stage EP pipeline ONCE PER DRIVE
+#: FREQUENCY, so the real 21-point default costs ~15 s per offline run and this
+#: file runs it three times. Shrink the sweep for the offline suite rather than
+#: weakening the default. The window narrows WITH the point count on purpose: the
+#: simulated chevron's linewidth is drawn from the frequency STEP, so holding the
+#: step at 2 MHz is what keeps the seeded resonance resolvable at 9 points.
+PARAMETRIC_TIME_DEFAULTS = {"qubit_parametric_drive_time": {
+    "num_freq_points": 9, "min_parametric_freq_hz": 190e6,
+    "max_parametric_freq_hz": 206e6, "num_time_points": 61}}
+
+#: what the module fixture runs on; _fresh_parity_session keeps the parity-only set.
+OFFLINE_DEFAULTS = {**PARITY_DEFAULTS, **PARAMETRIC_TIME_DEFAULTS}
+
 
 @pytest.fixture(scope="module")
 def session(tmp_path_factory):
@@ -56,7 +69,7 @@ def session(tmp_path_factory):
                 scqo_dir=tmp / "scqo", data_root=tmp / "data",
                 device_name="chipT", setup_name="sim",
                 cooldown_id="cd1",
-                parameter_defaults=PARITY_DEFAULTS)
+                parameter_defaults=OFFLINE_DEFAULTS)
     s.set_values({f"{q}_ro.{field}": value
                   for q in ("q0", "q1")
                   for field, value in REFERENCE_BLOBS.items()})
@@ -104,29 +117,63 @@ def test_record_only_experiments_propose_nothing(session, name):
     assert _suggest(session, name, target=_pair_target(name)) == set()
 
 
-def test_parametric_drive_finds_the_seeded_resonance(session):
+def test_parametric_drive_amp_finds_the_seeded_resonance(session):
     """The offline sim hides one sideband line inside the swept window; the
     scqat point-cloud reduction must keep at least one peak and report the
     strongest one INSIDE the swept windows (discriminated form — the dip sits
     in the averaged population itself)."""
     params = {"targets": ["q0"], "use_state_discrimination": True}
-    out = session.run("qubit_parametric_drive", params, update="none")
+    out = session.run("qubit_parametric_drive_amp", params, update="none")
     assert out.get("error") is None, out.get("error")
     fit = out["fit"]["q0"]
     assert fit["n_good"] >= 1
-    cls = registry.get("qubit_parametric_drive")
+    cls = registry.get("qubit_parametric_drive_amp")
     p = cls.Parameters(**params)
     assert p.min_parametric_freq_hz <= fit["best_parametric_freq_hz"] <= p.max_parametric_freq_hz
     assert p.min_parametric_amp_v <= fit["best_parametric_amp_v"] <= p.max_parametric_amp_v
-    # prepared |e> + transfer OUT of the qubit = a population DIP
-    assert fit["best_peak_amplitude"] < 0
+    # The strongest kept peak must be a real LINE, not a window-wide artifact:
+    # the seeded FWHM is a few frequency steps (~6-12 % of the span). This is the
+    # assertion with teeth — `best_peak_amplitude` cannot carry it, because
+    # scqat's fit_peaks normalizes polarity per slice (it inverts a dip trace and
+    # fits a positive lorentzian), so a well-fit dip reports a POSITIVE amplitude
+    # and a negative one signals a badly-conditioned fit, not a dip.
+    span = p.max_parametric_freq_hz - p.min_parametric_freq_hz
+    assert 0.0 < fit["best_fwhm_hz"] < 0.25 * span
 
 
-def test_parametric_drive_refuses_an_inverted_window(session):
-    out = session.run("qubit_parametric_drive",
+def test_parametric_drive_amp_refuses_an_inverted_window(session):
+    out = session.run("qubit_parametric_drive_amp",
                       {"targets": ["q0"], "min_parametric_freq_hz": 300e6,
                        "max_parametric_freq_hz": 50e6}, update="none")
     assert "inverted" in str(out.get("error"))
+
+
+def test_parametric_drive_time_finds_the_seeded_sideband(session):
+    """The offline sim hides one sideband inside the swept window and the chevron
+    oscillates around it; the scqat EP pipeline must converge on most drive
+    frequencies and place the most COHERENT one (largest 8*lambda^2/gamma^2) on
+    the seeded line — which the sim puts in the middle 40 % of the window, so an
+    estimator that latched onto a window-edge artifact fails here."""
+    params = {"targets": ["q0"], "use_state_discrimination": True}
+    out = session.run("qubit_parametric_drive_time", params, update="none")
+    assert out.get("error") is None, out.get("error")
+    fit = out["fit"]["q0"]
+    assert 1 <= fit["n_decoh_ok"] <= fit["n_freq"]
+    p = registry.get("qubit_parametric_drive_time").Parameters(
+        **{**params, **PARAMETRIC_TIME_DEFAULTS["qubit_parametric_drive_time"]})
+    lo, hi = p.min_parametric_freq_hz, p.max_parametric_freq_hz
+    assert lo + 0.15 * (hi - lo) <= fit["best_parametric_freq_hz"] <= hi - 0.15 * (hi - lo)
+    # a loss rate and a coupling rate, both real and positive
+    assert fit["best_gamma_hz"] > 0
+    assert fit["best_lambda_hz"] > 0
+
+
+def test_parametric_drive_time_refuses_an_inverted_window(session):
+    out = session.run("qubit_parametric_drive_time",
+                      {"targets": ["q0"], "min_parametric_freq_hz": 300e6,
+                       "max_parametric_freq_hz": 50e6}, update="none")
+    assert "inverted" in str(out.get("error"))
+
 
 
 def test_qubit_sqrb_discriminated_end_to_end(session):

@@ -1,4 +1,4 @@
-"""Parametric-drive resonance map — flux-modulation frequency x amplitude, record-only.
+"""Parametric-drive resonance map — flux-modulation frequency x AMPLITUDE, record-only.
 
 Excite the qubit with a pi pulse, then MODULATE its own flux (z) line with an RF
 tone of swept frequency and amplitude for a FIXED, user-given driving time, and
@@ -12,9 +12,12 @@ locates the coupling condition and its amplitude dependence (drift + growing
 width/depth) locates a usable operating amplitude for a parametric gate or
 reset.
 
-The drive time is deliberately NOT a sweep axis: this is the parameter-FINDING
-map (where is the resonance, how hard can I drive it), run before any
-time-domain characterization of the induced coupling.
+The drive time is deliberately NOT a sweep axis here — it is the fixed scalar,
+and the swept second axis is the AMPLITUDE (hence the ``_amp`` name). This is
+the parameter-FINDING map: where is the resonance, and how hard can I drive it.
+Its sibling ``qubit_parametric_drive_time`` mirrors the split — it fixes the
+amplitude and sweeps the driving TIME — and is the time-domain
+characterization of the coupling this map locates, run second.
 
 RECORD-ONLY for the DEVICE: there is no ``update()`` and nothing lands on the
 device surface; the per-map summary lives in ``result.fit``. The scqat
@@ -48,7 +51,7 @@ from ..experiment import Experiment
 from . import register
 
 
-class QubitParametricDriveParameters(TargetSelection, AveragingParameters,
+class QubitParametricDriveAmpParameters(TargetSelection, AveragingParameters,
                                      StateReadoutParameters, QubitResetParameters):
     """Inputs for the parametric-drive resonance map.
 
@@ -79,23 +82,29 @@ class QubitParametricDriveParameters(TargetSelection, AveragingParameters,
         2000, ge=16,
         description="FIXED parametric driving time (ns) — user-given, not a sweep axis. "
                     "Longer drives narrow the resonance features and deepen weak ones. "
-                    "The QM backend requires a multiple of 4 ns and refuses otherwise.")
+                    "The QM backend requires a multiple of 4 ns and refuses otherwise. "
+                    "Sweep this axis instead with qubit_parametric_drive_time.")
 
 
-class QubitParametricDriveResult(Result):
+class QubitParametricDriveAmpResult(Result):
     """``fit[target]``: the pooled peak-cloud counts (``n_peaks`` / ``n_good`` /
     ``n_outlier``) and, when at least one resonance was kept, the STRONGEST kept
     peak's coordinates — ``best_parametric_freq_hz`` / ``best_parametric_amp_v``
-    plus its ``best_fwhm_hz`` and ``best_peak_amplitude`` (signed: negative =
-    a population dip, the prepared-excited signature). Record-only: no
+    plus its ``best_fwhm_hz`` and ``best_peak_amplitude``. That amplitude is
+    POLARITY-NORMALIZED, not signed physics: scqat's ``fit_peaks`` picks the
+    stronger polarity per slice and inverts a dip trace before fitting, so a
+    well-fit resonance reports a POSITIVE amplitude whether it is a dip or a
+    peak (the dip-ness lives in that fitter's ``inverted`` flag, which the
+    tracker does not propagate). Rank and gate on ``best_fwhm_hz`` instead — a
+    real line is a small fraction of the swept window. Record-only: no
     ``update()``, nothing written to the device."""
 
 
 @register
-class QubitParametricDrive(Experiment):
+class QubitParametricDriveAmp(Experiment):
     """Backend-agnostic parametric-drive map. ``probe()`` is supplied by a driver."""
 
-    name: ClassVar[str] = "qubit_parametric_drive"
+    name: ClassVar[str] = "qubit_parametric_drive_amp"
     description: ClassVar[str] = (
         "Parametric-drive resonance map: excite the qubit, then modulate its own flux (z) "
         "line with an RF tone of swept frequency and amplitude for a FIXED user-given "
@@ -108,15 +117,15 @@ class QubitParametricDrive(Experiment):
         "Record-only diagnostic: the per-map peak summary lands in result.fit and nothing "
         "is written back to the device."
     )
-    Parameters: ClassVar[type] = QubitParametricDriveParameters
-    Result: ClassVar[type] = QubitParametricDriveResult
+    Parameters: ClassVar[type] = QubitParametricDriveAmpParameters
+    Result: ClassVar[type] = QubitParametricDriveAmpResult
     Contract: ClassVar[DatasetContract] = DatasetContract(
         sweeps=("parametric_amp_v", "parametric_freq_hz"), sweep_units=("V", "Hz"),
         variables=("I", "Q"), alt_variables=POPULATION_ALT,
     )
     required_operations: ClassVar[tuple[str, ...]] = ("rx", "readout", "flux_bias")
 
-    params: QubitParametricDriveParameters
+    params: QubitParametricDriveAmpParameters
 
     def define_sweep(self) -> dict[str, np.ndarray]:
         p = self.params
@@ -152,7 +161,7 @@ class QubitParametricDrive(Experiment):
         a = coords["parametric_amp_v"]
         f = coords["parametric_freq_hz"]
         targets = self.params.targets
-        rng = np.random.default_rng(stable_seed("qubit_parametric_drive", *targets))
+        rng = np.random.default_rng(stable_seed("qubit_parametric_drive_amp", *targets))
         use_state = self.params.use_state_discrimination
         f_span = float(np.ptp(f)) or 1.0
         f_step = f_span / max(f.size - 1, 1)
@@ -180,7 +189,7 @@ class QubitParametricDrive(Experiment):
                 q_data[k] = q_row.reshape(population.shape)
         return readout_vars(use_state, state, i_data, q_data)
 
-    def estimate(self) -> QubitParametricDriveResult:
+    def estimate(self) -> QubitParametricDriveAmpResult:
         assert self.dataset is not None, "run() populates self.dataset before estimate()"
         from scqat.estimators.parametric_drive_resonance import (
             ParametricDriveResonanceEstimator,
@@ -200,7 +209,7 @@ class QubitParametricDrive(Experiment):
         results = per_qubit_results(prepared, ParametricDriveResonanceEstimator(),
                                     artifact_dir=self.artifact_dir)
 
-        result = QubitParametricDriveResult()
+        result = QubitParametricDriveAmpResult()
         for qubit in self.params.targets:
             r = results[qubit]
             good = np.asarray(r["good"], dtype=bool)

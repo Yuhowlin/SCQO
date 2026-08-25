@@ -178,7 +178,8 @@ from .qubit_drag_alternating import QubitDragAlternating  # noqa: E402
 from .qubit_drag_equator import QubitDragEquator  # noqa: E402
 from .qubit_echo import QubitEcho  # noqa: E402
 from .qubit_echo_flux_pulse import QubitEchoFluxPulse  # noqa: E402
-from .qubit_parametric_drive import QubitParametricDrive  # noqa: E402
+from .qubit_parametric_drive_amp import QubitParametricDriveAmp  # noqa: E402
+from .qubit_parametric_drive_time import QubitParametricDriveTime  # noqa: E402
 from .qubit_parity_switch_continuous import QubitParitySwitchContinuous  # noqa: E402
 from .qubit_parity_switch_discrete import QubitParitySwitchDiscrete  # noqa: E402
 from .qubit_pi_pulse_error import QubitPiPulseError  # noqa: E402
@@ -227,7 +228,7 @@ __all__ = [
     "BroadbandResonatorSpectroscopy",
     "PairSwapChevron", "PairSwapFluxMap",
     "PairZZCoupler", "QcNStarkAmp", "QcNSwapAmp", "QubitRamseyCryoscope", "QubitRamseyPhasor", "QubitDeterministicBenchmarking", "QubitDragAlternating", "QubitDragEquator", "QubitEcho",
-    "QubitEchoFluxPulse", "QubitParametricDrive",
+    "QubitEchoFluxPulse", "QubitParametricDriveAmp", "QubitParametricDriveTime",
     "QubitParitySwitchContinuous", "QubitParitySwitchDiscrete",
     "QubitPiPulseError", "QubitPowerRabi", "QubitRamsey",
     "QubitRelaxation", "QubitRelaxationFluxPulse", "QubitSQRB",
