@@ -1,0 +1,51 @@
+name = "qm-dependency-pins"
+repos = { scqo-qm = "d904dc7" }
+kind = "additive"
+coupling = ""
+validated = "offline"
+notes = """
+scqo-qm's two vendor git dependencies were UNPINNED - bare
+`git+https://...quam-builder.git` and `...qualibration-libs.git` with no ref - so a
+pyproject-driven install resolved whatever the vendor's default branch held that day, with
+no record of which code you got. Both are now pinned, and pyproject agrees with
+requirements-qm.lock.txt for the first time.
+
+quam-builder -> v0.5.0, in BOTH pin authorities. It was the one genuine disagreement:
+pyproject asked for v0.5.0 while the lockfile and the live .venv-qm were on v0.4.0
+(9717df09), so a lockfile-built env and a pyproject-built env silently ran different vendor
+code. qualibration-libs -> 09fc7357, the commit the lockfile already named. Deliberately a
+SHA and not a tag there: the package reports version 0.2.1 and upstream does have a v0.2.1
+tag, but that tag is 30f2f95b and 09fc7357 is a LATER commit still reporting 0.2.1 -
+pinning the tidier-looking tag would have silently rolled the code back from what this
+environment was built against.
+
+THE LOCKFILE REGENERATION IS ONE LINE, and that is the correct regeneration rather than a
+shortcut. requirements-qm.lock.txt is a pip freeze of an environment that was built and
+validated: its 176 `==` pins record what worked, they are not constraints anyone chose. A
+fresh re-resolve would move every one of them to whatever is latest that day - qm-qua,
+quam, qiskit, numpy and roughly 170 more - in a single unvalidated step, which is a stack
+upgrade, not a quam-builder bump. The check that settled it: quam-builder v0.4.0 and v0.5.0
+declare BYTE-IDENTICAL dependency lists (same seven entries, same bounds), so moving
+between them implies no transitive change at all.
+
+VERIFIED, NOT ASSUMED: a throwaway venv was built from the new lockfile plus the three
+editables exactly as INSTALL.md prescribes, the LIVE shared .venv-qm was never touched,
+quam-builder was confirmed at 0.5.0 / a3e3903 through its own direct_url.json rather than
+inferred, and the full suite ran there - 346 passed, matching the count this repo reported
+at the v3.1.0 cut.
+
+UPGRADE REQUIRES: rebuild the shared .venv-qm from this lockfile, and do it ALONGSIDE A
+HARDWARE PASS, not before one. The evidence here is OFFLINE ONLY - scqo-qm's suite is
+builder, parameter and AST checks, so it proves v0.5.0 does not break the QUAM tree or
+program construction and proves nothing about the OPX1000. Until that rebuild the live
+.venv-qm keeps v0.4.0, which is why both authorities were made to agree first: whenever the
+rebuild happens it can no longer land a surprise.
+
+WORTH KNOWING BEFORE THAT REBUILD: the live .venv-qm is NOT currently a pure lockfile build
+- it carries four packages the lockfile does not (netcdf4, cftime, qctss-client,
+websocket-client), so a rebuild is not a no-op. netcdf4's absence from the lockfile is NOT a
+defect: the lockfile ships h5netcdf 1.8.1, and a dataset carrying a string qubit coord was
+verified to write a genuine HDF5/netCDF4 file and round-trip through it. SCQO's pyproject
+warns against the SCIPY netCDF3 fallback, which is a different engine and is not the one
+that gets used.
+"""
