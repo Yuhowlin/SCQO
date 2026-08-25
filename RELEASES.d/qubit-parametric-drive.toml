@@ -1,6 +1,0 @@
-name = "qubit-parametric-drive"
-repos = { scqo = "1f1a1da", scqo-qm = "bfa08c6" }
-kind = "additive"
-coupling = ""  # estimate() lazy-imports scqat.estimators.parametric_drive_resonance, which long predates the current v0.18.0 floor - no new floor
-validated = "offline + gateway preview 5Q4C q1 2026-08-20 (simulated waveforms verified: per-point IF stepping, tone-on-bias, sequence timing); qubit-population run on hardware still owed"
-notes = "New record-only experiment qubit_parametric_drive: pi pulse, then an RF tone on the qubit's own flux (z) line (swept absolute amplitude x frequency, fixed user-given drive_time_ns) reading the qubit back - the parametric-coupling operating-parameter map; QM-only probe (patches the generated config with a z-element oscillator via its acquire callable; preview compiles via the new QMBackend patch_preview_config hook), Qblox not realized."

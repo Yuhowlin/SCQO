@@ -1,6 +1,0 @@
-name = "cryoscope-apply-hint"
-repos = { scqo = "ba42ec4", scqo-qm = "c7f3e27" }
-kind = "additive"
-coupling = ""  # no scqat floor; an scqo-qm older than c7f3e27 just degrades the hint to its named manual-step line (the hook is duck-typed, absence is legal)
-validated = "offline (SCQO cryoscope + capability/contract selections, scqo-qm full suite 346 passed); the command the hint prints is the pre-existing apply_distortion CLI, unchanged"
-notes = "Both cryoscopes (qubit_ramsey_cryoscope, qubit_spectroscopy_cryoscope) now print on stderr, right after proposing distortion_amp/distortion_tau_s, the command that writes those taps into the VENDOR config - the taps are facts and scqo pushes nothing. The command comes from the backend through the new duck-typed hook backend.distortion_apply_command(target, run_id); QM answers with 'python -m scqo_qm.backend.apply_distortion --target <q> [--run <id>]' (run-addressed when the run is known), Qblox declares none and the hint names the manual hw_config.json step instead."

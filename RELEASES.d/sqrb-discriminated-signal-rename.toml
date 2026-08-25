@@ -1,6 +1,0 @@
-name = "sqrb-discriminated-signal-rename"
-repos = { scqo = "ca0f75d" }
-kind = "fix"
-coupling = ""
-validated = "offline"
-notes = "qubit_sqrb with use_state_discrimination=true had never worked: estimate() handed the dataset to the scqat estimator unrenamed, so the discriminated probe's `population` variable — none of the 'I'/'state'/'signal' names the estimator accepts — failed every run with \"SQRB estimator requires an 'I', 'state', or 'signal' data variable\". It now routes through signal_rename like every other discriminated carrier. Analog (I/Q) SQRB was never affected. Re-run any discriminated SQRB that failed this way; nothing recorded is invalidated, since the failing runs produced no fit."

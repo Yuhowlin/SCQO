@@ -1,6 +1,6 @@
 [project]
 name = "scqo"
-version = "3.0.0"
+version = "3.1.0"
 description = "Superconducting Qubit Orchestration — instrument-agnostic experiment API shared by QM and Qblox backends"
 readme = "CLAUDE.md"
 requires-python = ">=3.10,<3.13"
@@ -24,6 +24,14 @@ dependencies = [
                         # pass method= to the readout_fidelity estimator (derived from readout_mode),
                         # which an older scqat refuses by name — loud ValueError at estimate, and only
                         # for those two experiments. See RELEASES.toml [v2-2-0].
+                        # As of v3.1.0 the floor is scqat v0.20.0, two ways and both loud:
+                        # qubit_ramsey_phasor lazy-imports scqat.estimators.ramsey_phasor
+                        # (ImportError below it), and that same commit is the first to
+                        # REGISTER get_fitter('stretched_exp') and export lockin_phasor from
+                        # scqat.tools — both modules sat in the tree unwired, so the factory
+                        # raised ValueError until then. qubit_tomography independently needs
+                        # the noise_condition dimension (IndexError below it), which v3.0.0's
+                        # scqat v0.19.0 floor already covered. See RELEASES.toml [v3-1-0].
     "netcdf4>=1.6",     # datastore: dataset.nc has a string qubit coord (needs netCDF4, not the scipy netCDF3 fallback)
     "tomli>=2.0; python_version<'3.11'",  # labconfig TOML parsing on py3.10
 ]
