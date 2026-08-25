@@ -127,7 +127,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
 
     cfg = load_lab_config(args.config)
     if cfg.data_root is None:
-        raise SystemExit(f"no data_root configured in {cfg.source or 'the lab config'} — nothing is saved")
+        raise SystemExit(f"no data_root configured in {cfg.source or 'the lab config'} - nothing is saved")
     store = DataStore(cfg.data_root, device_name=cfg.device or "device")
 
     if args.campaign is not None:

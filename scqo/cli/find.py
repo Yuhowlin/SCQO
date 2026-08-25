@@ -31,7 +31,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
     parser.add_argument("--device", help="filter by device (sample) name")
     parser.add_argument("--operator", help="filter by who ran it (OS login name)")
     parser.add_argument("--cooldown", help="filter by cooldown-cycle id, e.g. cd8")
-    parser.add_argument("--setup", help="filter by setup name (unique per cycle only — "
+    parser.add_argument("--setup", help="filter by setup name (unique per cycle only - "
                                         "combine with --cooldown)")
     parser.add_argument("--campaign", metavar="CAMPAIGN_ID",
                         help="filter to one campaign's children (see scqo campaign --list)")
@@ -44,7 +44,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
 
     cfg = load_lab_config(args.config)
     if cfg.data_root is None:
-        raise SystemExit(f"no data_root configured in {cfg.source or 'the lab config'} — nothing is being saved")
+        raise SystemExit(f"no data_root configured in {cfg.source or 'the lab config'} - nothing is being saved")
     store = DataStore(cfg.data_root, device_name=cfg.device or "device")
 
     if args.show:

@@ -88,7 +88,7 @@ def _setup_checks(cfg, backends: dict) -> list[tuple[str, str, str]]:
         else:
             provider, venv = SERVED_BY[backend]
             out.append((FAIL, "backend", f"{backend!r} driver not registered here - wrong venv "
-                                         f"(activate D:\\github\\{venv}) or {provider} needs "
+                                         f"(activate the {venv} environment) or {provider} needs "
                                          "`uv pip install -e` (entry points register at INSTALL time)"))
     # The OTHER setups of the cycle (any account may select them): folder existence only.
     for other, s in cycle.get("setup", {}).items():

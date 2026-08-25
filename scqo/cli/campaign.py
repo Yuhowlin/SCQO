@@ -179,7 +179,7 @@ def _dry_run(sess, plan, cfg) -> int:
                  if plan.period_s else ""))
     problems = sess.check_campaign(plan)
     if problems:
-        print("\nREFUSED — fix these before running:", file=sys.stderr)
+        print("\nREFUSED - fix these before running:", file=sys.stderr)
         for problem in problems:
             print(f"  {problem}", file=sys.stderr)
         return 2
@@ -206,7 +206,7 @@ def _read_only(args) -> int:
     cfg = load_lab_config(args.config)
     if cfg.data_root is None:
         raise SystemExit(
-            f"no data_root configured in {cfg.source or 'the lab config'} — nothing is being saved")
+            f"no data_root configured in {cfg.source or 'the lab config'} - nothing is being saved")
     store = DataStore(cfg.data_root, device_name=cfg.device or "device")
 
     if args.show:

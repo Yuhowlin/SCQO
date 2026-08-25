@@ -66,9 +66,9 @@ note = {note}
 #   [{cid}.setup.<name>]      # the name IS the setup's identity
 #   backend = "qblox"         # qblox | qm | simulated
 #   note = "..."              # optional
-# No path keys: the vendor-config folder is DERIVED from the keys —
+# No path keys: the vendor-config folder is DERIVED from the keys -
 #   <device>/{cid}/<name>/backend_config/  (create it and copy the vendor files in
-#   under canonical names — qblox: dut_config.json + hw_config.json; qm: state.json +
+#   under canonical names - qblox: dut_config.json + hw_config.json; qm: state.json +
 #   wiring.json; simulated needs no folder). SCQO writes its own state + physics to
 #   the sibling <device>/{cid}/<name>/scqo/ (auto-created).
 # Users pick one with: scqo user --setup <name>
@@ -77,10 +77,10 @@ note = {note}
 
 def _device(cfg) -> str:
     if cfg.device is None:
-        raise SystemExit('no device selected — set yours first:  scqo user --device <name>   '
+        raise SystemExit('no device selected - set yours first:  scqo user --device <name>   '
                          "(`scqo device list` shows the menu)")
     if cfg.data_root is None:
-        raise SystemExit("no data_root configured — cooldown registries live under <data_root>/<device>/")
+        raise SystemExit("no data_root configured - cooldown registries live under <data_root>/<device>/")
     return cfg.device
 
 
@@ -114,8 +114,8 @@ def _list(cfg) -> int:
     print(f"# user overlay: {cfg.user_source or 'none'}")
 
     if cfg.data_root is None:
-        print("\nno data_root configured — no device registries to list; runs use the "
-              "built-in simulated demo and are NOT saved (see INSTALL §2)")
+        print("\nno data_root configured - no device registries to list; runs use the "
+              "built-in simulated demo and are NOT saved (see INSTALL section 2)")
         return 0
 
     root = Path(cfg.data_root)
@@ -124,7 +124,7 @@ def _list(cfg) -> int:
         known.add(cfg.device)
 
     if not known:
-        print("\nno devices known yet — create one:  scqo device add <name>")
+        print("\nno devices known yet - create one:  scqo device add <name>")
         return 0
 
     print(f"\n{'device':12s} {'cooldown':22s} {'setup':16s} {'backend':11s} "
@@ -164,29 +164,29 @@ def _existing_names(cfg) -> set[str]:
 def _add(cfg, name: str, description: str) -> int:
     if cfg.data_root is None:
         raise SystemExit(
-            f"no data_root configured in {cfg.source or 'the lab config'} — "
+            f"no data_root configured in {cfg.source or 'the lab config'} - "
             "a sample needs somewhere for its data to land"
         )
     device_dir = Path(cfg.data_root) / name
     if device_dir.exists() or name in _existing_names(cfg):
-        print(f"note: {name!r} is already known to this lab (folder/registry/index) — "
+        print(f"note: {name!r} is already known to this lab (folder/registry/index) - "
               "steps below anyway, skip what exists\n", file=sys.stderr)
     device_dir.mkdir(parents=True, exist_ok=True)  # the command's ONLY write
 
     print(f"created {device_dir}\n")
     print("=" * 72)
-    print("1. Record the first cooldown cycle (manager) — an EMPTY cycle, no setups yet:\n")
+    print("1. Record the first cooldown cycle (manager) - an EMPTY cycle, no setups yet:\n")
     print("   scqo device cooldown start cd1 --fridge <name> --packaging <text>")
     print("\n" + "=" * 72)
     print(f"2. PASTE one block per measurement setup into "
           f"{device_dir / COOLDOWNS_FILE}:\n")
     print("[cd1.setup.qblox_main]")
     print('backend = "qblox"                # qblox | qm | simulated')
-    print("\n   (no path keys — the vendor folder is DERIVED from the keys: for real")
+    print("\n   (no path keys - the vendor folder is DERIVED from the keys: for real")
     print("    backends create <device>/cd1/qblox_main/backend_config/ and copy the vendor")
     print("    config files in under canonical names: qblox dut_config.json +")
     print("    hw_config.json; qm state.json + wiring.json. SCQO keeps its own state +")
-    print("    physics in the sibling cd1/qblox_main/scqo/ — auto-created.)")
+    print("    physics in the sibling cd1/qblox_main/scqo/ - auto-created.)")
     print("\n" + "=" * 72)
     print(f"3. PASTE into {Path(cfg.data_root) / 'devices.toml'} (optional sample facts):\n")
     print(f"[{name}]")
@@ -216,7 +216,7 @@ def _show(cfg) -> int:
         cid, cycle = active
         setups = cycle.get("setup", {})
         if not setups:
-            print(f"\n{cid} has no setups yet — hand-add [{cid}.setup.<name>] blocks "
+            print(f"\n{cid} has no setups yet - hand-add [{cid}.setup.<name>] blocks "
                   "(backend [+ note]) to the registry; runs refuse until one exists")
             return 0
         print(f"\nsetups of {cid} (users pick one with `scqo user --setup <name>`):")
@@ -236,7 +236,7 @@ def _start(cfg, cid: str, fridge: str, packaging: str, note: str) -> int:
     cycles = load_cooldowns(cfg.data_root, device)
     active = active_cooldown(cycles)
     if active:
-        raise SystemExit(f"cycle {active[0]!r} is still open — run `scqo device cooldown end` first")
+        raise SystemExit(f"cycle {active[0]!r} is still open - run `scqo device cooldown end` first")
     twin = next((c for c in cycles if c.casefold() == cid.casefold()), None)
     if twin is not None:  # casefold: [cd2] and [CD2] would alias one folder tree on Windows
         raise SystemExit(f"cycle {twin!r} already exists in {path}"
@@ -258,8 +258,8 @@ def _start(cfg, cid: str, fridge: str, packaging: str, note: str) -> int:
             path.unlink(missing_ok=True)
         else:
             path.write_text(original, encoding="utf-8")
-        raise SystemExit(f"start produced an invalid registry — {path} restored: {err}")
-    print(f"started {cid} in {path} — hand-add its setups as [{cid}.setup.<name>] blocks; "
+        raise SystemExit(f"start produced an invalid registry - {path} restored: {err}")
+    print(f"started {cid} in {path} - hand-add its setups as [{cid}.setup.<name>] blocks; "
           "runs refuse until one exists")
     return 0
 
@@ -287,7 +287,7 @@ def _end(cfg) -> int:
             inserted = True
             break
     if not inserted:
-        raise SystemExit(f"could not locate the start line of [{cid}] in {path} — add `end = ...` by hand")
+        raise SystemExit(f"could not locate the start line of [{cid}] in {path} - add `end = ...` by hand")
     backup = path.with_suffix(".toml.bak")
     shutil.copy2(path, backup)
     path.write_text("".join(lines), encoding="utf-8")
@@ -295,8 +295,8 @@ def _end(cfg) -> int:
         load_cooldowns(cfg.data_root, device)  # re-parse: never leave a broken registry
     except ValueError as err:
         shutil.copy2(backup, path)
-        raise SystemExit(f"edit produced an invalid file — restored from {backup}: {err}")
-    print(f"ended {cid} ({date.today().isoformat()}) in {path} — runs refuse until the next "
+        raise SystemExit(f"edit produced an invalid file - restored from {backup}: {err}")
+    print(f"ended {cid} ({date.today().isoformat()}) in {path} - runs refuse until the next "
           f"`scqo device cooldown start`")
     return 0
 
@@ -322,7 +322,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
     if argv and not argv[0].startswith("-"):
         verb, rest = argv[0], argv[1:]
         if verb not in _VERBS:
-            print(f"unknown verb {verb!r} — one of: {', '.join(_VERBS)} "
+            print(f"unknown verb {verb!r} - one of: {', '.join(_VERBS)} "
                   f"(see `{prog} --help`)", file=sys.stderr)
             return 2
     else:

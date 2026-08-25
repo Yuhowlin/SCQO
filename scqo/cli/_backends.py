@@ -131,14 +131,14 @@ def resolve_device_setup(cfg: LabConfig) -> tuple[str, str, dict] | None:
         if cfg.setup:
             raise SystemExit(
                 f"setup {cfg.setup!r} is selected in {cfg.user_source or 'the user overlay'} "
-                "but no device is — a setup belongs to a device's cooldown cycle. Select the "
+                "but no device is - a setup belongs to a device's cooldown cycle. Select the "
                 "device first:\n  scqo user --device <name> [--setup <name>]"
             )
         return None
     if cfg.data_root is None:
         raise SystemExit(
             f"device {cfg.device!r} is selected but no data_root is configured in "
-            f"{cfg.source or 'the lab config'} — the device's cooldown registry lives under it"
+            f"{cfg.source or 'the lab config'} - the device's cooldown registry lives under it"
         )
 
     from scqo.datastore import (
@@ -158,7 +158,7 @@ def resolve_device_setup(cfg: LabConfig) -> tuple[str, str, dict] | None:
                  f"   (device {cfg.device!r})")
     if not cycles:
         raise SystemExit(
-            f"device {cfg.device!r} has no cooldown registry yet — the manager runs:\n"
+            f"device {cfg.device!r} has no cooldown registry yet - the manager runs:\n"
             f"  {start_fix}\n"
             f"then hand-adds a [cd1.setup.<name>] block (backend [+ note]) to\n"
             f"  {registry}"
@@ -166,7 +166,7 @@ def resolve_device_setup(cfg: LabConfig) -> tuple[str, str, dict] | None:
     active = active_cooldown(cycles)
     if active is None:
         raise SystemExit(
-            f"device {cfg.device!r} has no ACTIVE cooldown cycle — start the next one:\n  {start_fix}"
+            f"device {cfg.device!r} has no ACTIVE cooldown cycle - start the next one:\n  {start_fix}"
         )
     cid, cycle = active
     try:
@@ -174,7 +174,7 @@ def resolve_device_setup(cfg: LabConfig) -> tuple[str, str, dict] | None:
     except SetupResolutionError as err:
         if err.reason == "none":
             raise SystemExit(
-                f"cycle {cid!r} of device {cfg.device!r} has no setups yet — runs need one.\n"
+                f"cycle {cid!r} of device {cfg.device!r} has no setups yet - runs need one.\n"
                 f"Hand-add a named setup block to {registry}:\n\n"
                 f"  [{cid}.setup.<name>]\n"
                 f'  backend = "qblox"                # qblox | qm | simulated\n\n'
@@ -191,7 +191,7 @@ def resolve_device_setup(cfg: LabConfig) -> tuple[str, str, dict] | None:
             ) from None
         raise SystemExit(  # reason == "unknown": a stale/mistyped selection
             f"setup {cfg.setup!r} (selected in {cfg.user_source or 'the user overlay'}) does "
-            f"not exist in the ACTIVE cycle {cid!r} of device {cfg.device!r} — available: "
+            f"not exist in the ACTIVE cycle {cid!r} of device {cfg.device!r} - available: "
             f"{', '.join(err.available) or 'none'}\n"
             f"fix:  scqo user --setup <name>    (or scqo user --clear-setup for auto-selection)"
         ) from None
@@ -229,7 +229,7 @@ def build_session(config_path: str | None = None) -> tuple[Session, LabConfig]:
     raise SystemExit(
         f"device {cfg.device!r} is on backend {family!r} (cycle {cid}, setup {name!r}), "
         f"and that driver is not registered in this environment.\n"
-        f"- wrong venv? activate D:\\github\\{venv} (the one that has {provider})\n"
+        f"- wrong venv? activate the {venv} environment (the one that has {provider})\n"
         f"- already in {venv}? then {provider} was never (re)installed here: entry points\n"
-        f"  register at INSTALL time — re-run its `uv pip install -e` line (INSTALL §1/§5)"
+        f"  register at INSTALL time - re-run its `uv pip install -e` line (INSTALL section 1/section 5)"
     )

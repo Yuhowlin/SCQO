@@ -49,7 +49,7 @@ def _overlay_target() -> Path | None:
 def _show(config_path: str | None) -> int:
     target = _overlay_target()
     if target is None:
-        print(f"user overlay: disabled (${USER_ENV_VAR}=none) — selections cannot be saved "
+        print(f"user overlay: disabled (${USER_ENV_VAR}=none) - selections cannot be saved "
               "in this shell")
     else:
         exists = "" if target.is_file() else "  (not created yet)"
@@ -66,11 +66,11 @@ def _show(config_path: str | None) -> int:
     except (ValueError, FileNotFoundError):
         overlay = {}
     if cfg.device is None:
-        print("device: (none — runs use the built-in simulated demo, nothing saved)")
+        print("device: (none - runs use the built-in simulated demo, nothing saved)")
     else:
         source = "user.toml" if overlay.get("device") else f"[lab] default ({cfg.source})"
         print(f"device: {cfg.device}   (from {source})")
-    print(f"setup:  {cfg.setup or '(none — auto: a single-setup cycle selects itself)'}")
+    print(f"setup:  {cfg.setup or '(none - auto: a single-setup cycle selects itself)'}")
 
     try:
         resolved = resolve_device_setup(cfg)
@@ -80,7 +80,7 @@ def _show(config_path: str | None) -> int:
     if resolved is None:
         return 0
     cid, name, setup = resolved
-    how = "selected in user.toml" if cfg.setup else f"auto — the only setup of {cid}"
+    how = "selected in user.toml" if cfg.setup else f"auto - the only setup of {cid}"
     folder = setup.get("instrument_config", "(built-in)")
     print(f"\nresolves to: cycle {cid}, setup {name!r} ({how}), "
           f"backend {setup['backend']}, config {folder}")
@@ -109,14 +109,14 @@ def _validate_setup(cfg, device: str, setup: str) -> None:
     active = active_cooldown(cycles)
     if active is None:
         raise SystemExit(
-            f"device {device!r} has no ACTIVE cooldown cycle — a setup selection needs one "
+            f"device {device!r} has no ACTIVE cooldown cycle - a setup selection needs one "
             "(manager: scqo device cooldown start ...)"
         )
     cid, cycle = active
     setups = cycle.get("setup", {})
     if setup not in setups:
         raise SystemExit(
-            f"setup {setup!r} does not exist in the ACTIVE cycle {cid!r} of {device!r} — "
+            f"setup {setup!r} does not exist in the ACTIVE cycle {cid!r} of {device!r} - "
             f"available: {', '.join(setups) or 'none (hand-add a [' + cid + '.setup.<name>] block first)'}"
         )
 
@@ -132,7 +132,7 @@ def _edit_overlay(target: Path, sets: dict[str, str], clears: list[str]) -> None
         try:
             _load_user_overlay()  # pre-validate: never line-edit an already-broken file
         except (ValueError, FileNotFoundError) as err:
-            raise SystemExit(f"cannot edit {target}: {err} — fix it by hand first")
+            raise SystemExit(f"cannot edit {target}: {err} - fix it by hand first")
         lines = target.read_text(encoding="utf-8").splitlines(keepends=True)
     else:
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -162,9 +162,9 @@ def _edit_overlay(target: Path, sets: dict[str, str], clears: list[str]) -> None
     except (ValueError, FileNotFoundError) as err:
         if backup is not None:
             shutil.copy2(backup, target)
-            raise SystemExit(f"edit produced an invalid file — restored from {backup}: {err}")
+            raise SystemExit(f"edit produced an invalid file - restored from {backup}: {err}")
         target.unlink(missing_ok=True)
-        raise SystemExit(f"edit produced an invalid file — removed {target}: {err}")
+        raise SystemExit(f"edit produced an invalid file - removed {target}: {err}")
 
 
 def _load_without_overlay(config_path: str | None):
@@ -198,7 +198,7 @@ def _set(args) -> int:
     target = _overlay_target()
     if target is None:
         raise SystemExit(
-            f"the per-user overlay is disabled in this shell (${USER_ENV_VAR}=none) — unset "
+            f"the per-user overlay is disabled in this shell (${USER_ENV_VAR}=none) - unset "
             "it (or point it at a file) before selecting a device/setup"
         )
     cfg = _cfg_for_write(args.config, target)  # loud on a malformed overlay/base config
@@ -213,13 +213,13 @@ def _set(args) -> int:
     if args.device:
         if cfg.data_root is None:
             raise SystemExit(
-                f"no data_root configured in {cfg.source or 'the lab config'} — device "
+                f"no data_root configured in {cfg.source or 'the lab config'} - device "
                 "registries live under it; selecting a device needs one"
             )
         known = _known_devices(cfg)
         if args.device not in known:
             raise SystemExit(
-                f"unknown device {args.device!r} — known: {', '.join(sorted(known)) or 'none'} "
+                f"unknown device {args.device!r} - known: {', '.join(sorted(known)) or 'none'} "
                 "(managers create one with: scqo device add <name>)"
             )
         sets["device"] = args.device
@@ -235,16 +235,16 @@ def _set(args) -> int:
 
     if args.setup:
         if effective_device is None:
-            hint = ("clearing your device leaves no device to validate against — the lab "
+            hint = ("clearing your device leaves no device to validate against - the lab "
                     "config has no default" if args.clear_device else
                     "select one first (or in the same command)")
             raise SystemExit(
-                f"a setup belongs to a device — {hint}:\n"
+                f"a setup belongs to a device - {hint}:\n"
                 "  scqo user --device <name> --setup <name>"
             )
         if cfg.data_root is None:
             raise SystemExit(
-                f"no data_root configured in {cfg.source or 'the lab config'} — device "
+                f"no data_root configured in {cfg.source or 'the lab config'} - device "
                 "registries live under it; selecting a setup needs one"
             )
         _validate_setup(cfg, effective_device, args.setup)
@@ -271,13 +271,13 @@ def _set(args) -> int:
                     ok = active is not None and standing in active[1].get("setup", {})
                 except ValueError as err:
                     print(f"warning: could not validate standing setup {standing!r} against "
-                          f"{effective_device!r} (broken registry: {err}) — keeping it",
+                          f"{effective_device!r} (broken registry: {err}) - keeping it",
                           file=sys.stderr)
                     ok = True
                 if not ok:
                     clears.append("setup")
                     print(f"cleared setup {standing!r} (not in {effective_device!r}'s active "
-                          "cycle) — pick one:  scqo user --setup <name>", file=sys.stderr)
+                          "cycle) - pick one:  scqo user --setup <name>", file=sys.stderr)
 
     if not target.is_file() and os.environ.get(USER_ENV_VAR):
         # An explicit env target is explicit intent — create it, but say so.

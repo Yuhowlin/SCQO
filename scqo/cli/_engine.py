@@ -53,7 +53,7 @@ def _check_preview_flags(args, name: str | None) -> None:
     ] if on]
     if conflicts:
         raise SystemExit(
-            f"--preview builds and renders only — it never runs, saves or "
+            f"--preview builds and renders only - it never runs, saves or "
             f"updates, so {', '.join(conflicts)} cannot apply here; drop "
             f"{'it' if len(conflicts) == 1 else 'them'} or drop --preview")
 
@@ -76,7 +76,7 @@ def _run_preview(sess, cfg, name, params, args, file_defaults) -> int:
         while out_dir.exists():  # same-second rerun
             out_dir = out_dir.with_name(f"{name}_{stamp}-{n}")
             n += 1
-    print(f"# preview: building {name} — no hardware, nothing saved",
+    print(f"# preview: building {name} - no hardware, nothing saved",
           file=sys.stderr)
     options: dict = {}
     if args.simulate_ns is not None:
@@ -260,7 +260,7 @@ def run_experiment_cli(
         "preview", "render the built sequence to files instead of running it")
     preview_group.add_argument("--preview", action="store_true",
                                help="build + compile only: render the vendor-native sequence "
-                                    "(pulse diagram / QUA script) to files — no hardware, "
+                                    "(pulse diagram / QUA script) to files - no hardware, "
                                     "nothing saved, no updates")
     preview_group.add_argument("--out", metavar="DIR",
                                help="preview output directory "
@@ -273,7 +273,7 @@ def run_experiment_cli(
                                     "tried automatically and skipped with a "
                                     "warning when unreachable)")
     preview_group.add_argument("--no-simulate", action="store_true",
-                               help="QM: skip the gateway simulator — script "
+                               help="QM: skip the gateway simulator - script "
                                     "dump only, guaranteed fully offline")
     # Repeating ONE experiment is still running one experiment, so it lives here
     # rather than in a wrapper. An ordered BUNDLE of experiments is a different
@@ -386,11 +386,11 @@ def run_experiment_cli(
         if "run_id" in result:
             review_interactively(sess, result["run_id"], result["suggestions"])
         elif result.get("datastore_error"):  # data_root IS configured; saving failed
-            print("\nsuggested updates (saving the run FAILED — NOT stored, nothing to "
+            print("\nsuggested updates (saving the run FAILED - NOT stored, nothing to "
                   "accept later; see datastore_error above):", file=sys.stderr)
             print(format_table(result["suggestions"]), file=sys.stderr)
         else:  # no data_root: nothing stored, so there is no later — apply now or lose it
-            print("\nsuggested updates (no data_root configured — NOT stored; "
+            print("\nsuggested updates (no data_root configured - NOT stored; "
                   "rerun with --accept to apply at run time):", file=sys.stderr)
             print(format_table(result["suggestions"]), file=sys.stderr)
     return 1 if result.get("error") else 0

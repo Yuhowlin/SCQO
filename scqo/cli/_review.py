@@ -102,7 +102,7 @@ def format_summary(summary: dict) -> str:
         lines.append(
             f"  SKIPPED  {item['entity']}.{item['field']}: suggested from "
             f"{_fmt_value(item['before'])} but the current value is "
-            f"{_fmt_value(item['current'])} (stale — --force to apply anyway)"
+            f"{_fmt_value(item['current'])} (stale - --force to apply anyway)"
         )
     for err in summary.get("errors", []):
         lines.append(f"  ERROR    {err}")
