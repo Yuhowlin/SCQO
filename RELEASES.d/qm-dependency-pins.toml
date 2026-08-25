@@ -34,18 +34,22 @@ quam-builder was confirmed at 0.5.0 / a3e3903 through its own direct_url.json ra
 inferred, and the full suite ran there - 346 passed, matching the count this repo reported
 at the v3.1.0 cut.
 
-UPGRADE REQUIRES: rebuild the shared .venv-qm from this lockfile, and do it ALONGSIDE A
-HARDWARE PASS, not before one. The evidence here is OFFLINE ONLY - scqo-qm's suite is
-builder, parameter and AST checks, so it proves v0.5.0 does not break the QUAM tree or
-program construction and proves nothing about the OPX1000. Until that rebuild the live
-.venv-qm keeps v0.4.0, which is why both authorities were made to agree first: whenever the
-rebuild happens it can no longer land a surprise.
+UPGRADE REQUIRES: on the LAB MACHINE this is already DONE - the shared .venv-qm was \
+recreated from this lockfile on 2026-08-25 and verified: 178 packages matching exactly after \
+name normalisation, quam-builder 0.5.0 at a3e3903, qualibration-libs at 09fc7357, and the \
+full suite green there (346 passed). Any OTHER machine still on the old env rebuilds the same \
+way. What is NOT done is the HARDWARE PASS: all of the above is OFFLINE evidence - scqo-qm's \
+suite is builder, parameter and AST checks, so it proves v0.5.0 does not break the QUAM tree \
+or program construction and proves NOTHING about the OPX1000. Treat the first real run on \
+v0.5.0 as the validation step and watch it. Making both pin authorities agree BEFORE the \
+rebuild is what kept that rebuild from landing a surprise.
 
-WORTH KNOWING BEFORE THAT REBUILD: the live .venv-qm is NOT currently a pure lockfile build
-- it carries four packages the lockfile does not (netcdf4, cftime, qctss-client,
-websocket-client), so a rebuild is not a no-op. netcdf4's absence from the lockfile is NOT a
-defect: the lockfile ships h5netcdf 1.8.1, and a dataset carrying a string qubit coord was
-verified to write a genuine HDF5/netCDF4 file and round-trip through it. SCQO's pyproject
-warns against the SCIPY netCDF3 fallback, which is a different engine and is not the one
-that gets used.
+WHAT THE REBUILD REMOVED, and why that is correct: the OLD .venv-qm carried four packages \
+this lockfile does not - netcdf4, cftime, qctss-client, websocket-client - so it had drifted \
+beyond the lockfile and the rebuild was never a no-op. None is needed. No repo code imports \
+any of them and nothing declares qctss-client as a requirement. netcdf4's absence in \
+particular is NOT a defect: the lockfile ships h5netcdf 1.8.1, and a dataset carrying a \
+string qubit coord was verified to write a genuine HDF5/netCDF4 file (magic 89 48 44 46) and \
+round-trip through it. SCQO's pyproject warns against the SCIPY netCDF3 fallback, which is a \
+different engine and is not the one xarray selects here.
 """
