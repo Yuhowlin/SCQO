@@ -58,7 +58,7 @@ def roster_checks(roster: Roster) -> list[Check]:
     if unreachable:
         out.append(Check(
             WARN, "wiring",
-            f"mode(s) {unreachable} carry no channel — nothing can address "
+            f"mode(s) {unreachable} carry no channel - nothing can address "
             f"them (add a rider on the line that serves them)"))
 
     # A tunable-coupler pair whose coupler cannot be biased is a pair whose
@@ -68,7 +68,7 @@ def roster_checks(roster: Roster) -> list[Check]:
             if (coupler, "flux") not in roster.defaults:
                 out.append(Check(
                     WARN, "wiring",
-                    f"{name}: coupler {coupler!r} has no flux channel — its "
+                    f"{name}: coupler {coupler!r} has no flux channel - its "
                     f"bias points cannot be set"))
 
     # Declared operations that carry no knob values are fine (they gate
@@ -91,7 +91,7 @@ def design_checks(roster: Roster, design: Design,
     declared = sum(len(fields) for fields in design.values.values())
     if not declared:
         return [Check(WARN, "design",
-                      "design.toml declares nothing — bring-up sweeps have "
+                      "design.toml declares nothing - bring-up sweeps have "
                       "no anchor and the design-vs-measured column is empty")]
     out.append(Check(OK, "design",
                      f"{declared} target(s) over {len(design.values)} "
@@ -103,7 +103,7 @@ def design_checks(roster: Roster, design: Design,
         if m.kind != "resonator" and not design.values.get(name))
     if bare:
         out.append(Check(WARN, "design",
-                         f"no design targets for {bare} — bring-up sweeps "
+                         f"no design targets for {bare} - bring-up sweeps "
                          f"there need a standing value first"))
     if physical:
         rows = design.compare(physical)
@@ -118,7 +118,7 @@ def design_checks(roster: Roster, design: Design,
                 out.append(Check(
                     WARN, "design",
                     f"{entity}.{field}: measured {actual:.6g} is >50% off "
-                    f"the design target {designed:.6g} — check the roster "
+                    f"the design target {designed:.6g} - check the roster "
                     f"names against the chip"))
     return out
 
@@ -136,7 +136,7 @@ def lock_checks(roster: Roster, device_dir) -> list[Check]:
 
     if load(device_dir) is None:
         return [Check(OK, "lock",
-                      "device is in the TRIAL phase (no components.lock) — "
+                      "device is in the TRIAL phase (no components.lock) - "
                       "names are freely editable; `scqo device freeze` cuts "
                       "to append-only")]
     out = [Check(FAIL, "lock", str(d)) for d in drift]
@@ -155,7 +155,7 @@ def vendor_checks(roster: Roster, inventory: dict | None) -> list[Check]:
     (name -> ComponentInfo); None = the backend declares none."""
     if inventory is None:
         return [Check(WARN, "vendor",
-                      "backend declares no inventory — roster names cannot "
+                      "backend declares no inventory - roster names cannot "
                       "be cross-checked against the instrument")]
     expected = {name for name, e in roster.entities.items()
                 if isinstance(e, (Channel, Composite))}
@@ -165,14 +165,14 @@ def vendor_checks(roster: Roster, inventory: dict | None) -> list[Check]:
     if missing:
         out.append(Check(
             WARN, "vendor",
-            f"roster entit(y|ies) the backend does not realize: {missing} — "
+            f"roster entit(y|ies) the backend does not realize: {missing} - "
             f"their knobs cannot be pushed (wiring gap, or roster names "
             f"that do not match the vendor config)"))
     extra = sorted(realized - expected)
     if extra:
         out.append(Check(
             WARN, "vendor",
-            f"backend realizes {extra}, absent from the roster — the roster "
+            f"backend realizes {extra}, absent from the roster - the roster "
             f"is the authority; declare them or ignore them"))
     # Kind disagreement is a hard mismatch: the same name meaning different
     # things on the two sides corrupts pushes.
@@ -198,7 +198,7 @@ def wiring_checks(roster: Roster,
     not supplied (the drivers add it at the Phase-6 cutover)."""
     if ports is None:
         return [Check(WARN, "wiring",
-                      "setup declares no line->port annotation — shared-line "
+                      "setup declares no line->port annotation - shared-line "
                       "claims cannot be witnessed against the instrument")]
     out: list[Check] = []
     unknown = sorted(set(ports) - set(roster.lines()))
@@ -226,7 +226,7 @@ def wiring_checks(roster: Roster,
             out.append(Check(
                 WARN, "wiring",
                 f"line {line_name!r} carries {sorted(kinds)} channels but "
-                f"declares {len(outputs)} output(s) — a combined wire needs "
+                f"declares {len(outputs)} output(s) - a combined wire needs "
                 f"one per function"))
         # Same-kind channels sharing a wire are multiplexed: one output,
         # distinct intermediate frequencies.
@@ -236,7 +236,7 @@ def wiring_checks(roster: Roster,
                 out.append(Check(
                     WARN, "wiring",
                     f"line {line_name!r} multiplexes {same} but declares "
-                    f"{len(outputs)} outputs — multiplexed channels share "
+                    f"{len(outputs)} outputs - multiplexed channels share "
                     f"ONE output with distinct IFs"))
     if not out:
         out.append(Check(OK, "wiring",
@@ -260,7 +260,7 @@ def capability_checks(roster: Roster, inventory: dict | None) -> list[Check]:
                 out.append(Check(
                     FAIL, "capability",
                     f"backend realizes flux channel {name!r} for "
-                    f"{target!r}, which the roster gives no flux channel — "
+                    f"{target!r}, which the roster gives no flux channel - "
                     f"a fixed-frequency qubit with a live z element"))
     return out
 
@@ -283,7 +283,7 @@ def all_checks(roster: Roster, *, design: Design | None = None,
 
 # ------------------------------------------------------------- environment
 
-_SSH_NOTE = ("INSTALL §1 SSH-server note (shared UV_PYTHON_INSTALL_DIR + "
+_SSH_NOTE = ("INSTALL section 1 SSH-server note (shared UV_PYTHON_INSTALL_DIR + "
              "explicit patch-dir interpreter)")
 
 
@@ -356,7 +356,7 @@ def profile_residency_checks(*, base: str | Path | None = None,
                else f"{owner}'s profile (you are {me})")
         out.append(Check(
             WARN, "venv base",
-            f"{src}: {base} — inside {who}: every account that cannot traverse "
+            f"{src}: {base} - inside {who}: every account that cannot traverse "
             f"that profile dies before Python starts ('uv trampoline failed to "
             f"spawn Python child process'); fix per {_SSH_NOTE}"))
     for topic, p in (("lab config", config_source), ("data_root", data_root)):
@@ -364,7 +364,7 @@ def profile_residency_checks(*, base: str | Path | None = None,
         if owner is not None and os.path.normcase(owner) != os.path.normcase(me):
             out.append(Check(
                 WARN, topic,
-                f"{p} lives in {owner}'s profile (you are {me}) — one-account "
+                f"{p} lives in {owner}'s profile (you are {me}) - one-account "
                 f"wiring: it resolves only while that profile is traversable; "
                 f"move it outside user profiles ({_SSH_NOTE})"))
     return out

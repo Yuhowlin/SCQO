@@ -36,42 +36,42 @@ def _setup_checks(cfg, backends: dict) -> list[tuple[str, str, str]]:
 
     from ._backends import SERVED_BY
 
-    fix = ("scqo device cooldown start cd1 [--fridge <name>] — then hand-add "
+    fix = ("scqo device cooldown start cd1 [--fridge <name>] - then hand-add "
            "[cd1.setup.<name>] blocks (backend [+ note])")
     try:
         cycles = load_cooldowns(cfg.data_root, cfg.device)
     except ValueError as err:
         return [(FAIL, "cooldowns", str(err))]
     if not cycles:
-        return [(FAIL, "cooldowns", f"device {cfg.device!r} has no cycle registry — runs will "
+        return [(FAIL, "cooldowns", f"device {cfg.device!r} has no cycle registry - runs will "
                                     f"refuse; the manager runs: {fix}")]
     active = active_cooldown(cycles)
     if active is None:
-        return [(FAIL, "cooldowns", f"{len(cycles)} cycle(s), none ACTIVE — runs will refuse; "
+        return [(FAIL, "cooldowns", f"{len(cycles)} cycle(s), none ACTIVE - runs will refuse; "
                                     f"start the next one: {fix}")]
     cid, cycle = active
     try:
         name, setup = resolve_setup(cycle, cfg.setup or None)
     except SetupResolutionError as err:
         if err.reason == "none":
-            return [(FAIL, "cooldowns", f"cycle {cid!r} ACTIVE but has NO setups — runs will "
+            return [(FAIL, "cooldowns", f"cycle {cid!r} ACTIVE but has NO setups - runs will "
                                         f"refuse; hand-add [{cid}.setup.<name>] blocks "
                                         "(backend [+ note]) to its cooldowns.toml")]
         if err.reason == "ambiguous":
             return [(FAIL, "cooldowns", f"cycle {cid!r} has {len(err.available)} setups and none "
-                                        f"is selected — runs will refuse for this account; pick "
+                                        f"is selected - runs will refuse for this account; pick "
                                         f"one: scqo user --setup <name> "
                                         f"(available: {', '.join(err.available)})")]
         return [(FAIL, "cooldowns", f"selected setup {cfg.setup!r} is not in ACTIVE cycle "
                                     f"{cid!r} (available: {', '.join(err.available) or 'none'}) "
-                                    "— scqo user --setup <name>")]
+                                    "- scqo user --setup <name>")]
     how = "selected" if cfg.setup else "auto"
-    out = [(OK, "cooldowns", f"{cfg.device}: {cid} ACTIVE — setup {name!r} ({how}), "
+    out = [(OK, "cooldowns", f"{cfg.device}: {cid} ACTIVE - setup {name!r} ({how}), "
                              f"backend={setup['backend']}")]
 
     backend = setup["backend"]
     if backend == "simulated":
-        out.append((OK, "backend", "'simulated' — built into scqo (demo qubits, synthetic data)"))
+        out.append((OK, "backend", "'simulated' - built into scqo (demo qubits, synthetic data)"))
     else:
         folder = Path(setup["instrument_config"])
         if not folder.is_dir():
@@ -79,7 +79,7 @@ def _setup_checks(cfg, backends: dict) -> list[tuple[str, str, str]]:
         else:
             missing = [n for n in _EXPECTED_FILES[backend] if not (folder / n).is_file()]
             if missing:
-                out.append((FAIL, "instr config", f"{folder}: missing {', '.join(missing)} — copy "
+                out.append((FAIL, "instr config", f"{folder}: missing {', '.join(missing)} - copy "
                                                   "the vendor files there under canonical names"))
             else:
                 out.append((OK, "instr config", str(folder)))
@@ -87,7 +87,7 @@ def _setup_checks(cfg, backends: dict) -> list[tuple[str, str, str]]:
             out.append((OK, "backend", f"{backend!r} -> {backends[backend]} (entry point)"))
         else:
             provider, venv = SERVED_BY[backend]
-            out.append((FAIL, "backend", f"{backend!r} driver not registered here — wrong venv "
+            out.append((FAIL, "backend", f"{backend!r} driver not registered here - wrong venv "
                                          f"(activate D:\\github\\{venv}) or {provider} needs "
                                          "`uv pip install -e` (entry points register at INSTALL time)"))
     # The OTHER setups of the cycle (any account may select them): folder existence only.
@@ -190,7 +190,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
 
     if cfg is not None:
         if cfg.source is None:
-            checks.append((WARN, "lab config", "none found — built-in defaults (simulated, NOTHING SAVED); see INSTALL §2"))
+            checks.append((WARN, "lab config", "none found - built-in defaults (simulated, NOTHING SAVED); see INSTALL section 2"))
         else:
             checks.append((OK, "lab config", str(cfg.source)))
         checks.append((OK, "user overlay", str(cfg.user_source) if cfg.user_source else "none"))
@@ -200,15 +200,15 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
         if cfg.device:
             checks.append((OK, "device", cfg.device))
         elif cfg.setup:  # a setup selection with no device refuses every run
-            checks.append((FAIL, "device", f"setup {cfg.setup!r} is selected but no device is — "
+            checks.append((FAIL, "device", f"setup {cfg.setup!r} is selected but no device is - "
                                            "runs will refuse; scqo user --device <name> "
                                            "(or scqo user --clear-setup)"))
         else:
-            checks.append((WARN, "device", "none selected — built-in simulated demo, NOTHING "
+            checks.append((WARN, "device", "none selected - built-in simulated demo, NOTHING "
                                            "SAVED; select one: scqo user --device <name>"))
 
         if cfg.data_root is None:
-            checks.append((WARN, "data_root", "not configured — runs are NOT saved"))
+            checks.append((WARN, "data_root", "not configured - runs are NOT saved"))
         elif not Path(cfg.data_root).is_dir():
             checks.append((WARN, "data_root", f"{cfg.data_root} does not exist yet (created on first run)"))
         elif not os.access(cfg.data_root, os.W_OK):
@@ -233,7 +233,7 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
 
             n = len(catalog())
             checks.append((OK if n else FAIL, "catalog",
-                           f"{n} experiment(s)" if n else "EMPTY — no driver entry points registered"))
+                           f"{n} experiment(s)" if n else "EMPTY - no driver entry points registered"))
         except Exception as err:
             checks.append((FAIL, "catalog", f"{type(err).__name__}: {err}"))
 

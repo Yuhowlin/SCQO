@@ -175,7 +175,7 @@ def test_profile_resident_base_warns_even_for_the_current_account(tmp_path):
     assert str(base) in check.message                        # names the path
     assert "uv trampoline failed to spawn" in check.message  # names the symptom
     # points at the documented fix
-    assert "INSTALL §1" in check.message and "UV_PYTHON_INSTALL_DIR" in check.message
+    assert "INSTALL section 1" in check.message and "UV_PYTHON_INSTALL_DIR" in check.message
 
 
 def test_foreign_profile_base_warns_naming_the_owner(tmp_path):
