@@ -71,3 +71,42 @@ def time_axis_ns(start_ns: float, stop_ns: float, num_points: int,
             f"{max(1, int(span // grid_ns) + 1)}"
         )
     return start + step * np.arange(num_points, dtype=float)
+
+
+def log_time_axis_ns(min_ns: float, max_ns: float, num_points: int,
+                     *, grid_ns: int = 4, floor_ns: int = 16) -> np.ndarray:
+    """A LOG-spaced time axis in ns, snapped to ``grid_ns`` and de-duplicated.
+
+    Non-uniform on purpose, and only for estimators that do not differentiate
+    along the axis: a log axis spans the nanosecond transients and the
+    microsecond tails in one sweep, which is what makes a stretch exponent
+    measurable at all (inside a fraction of one decay time every exponent fits
+    equally well). The Ramsey cryoscope's Savitzky-Golay derivative is the
+    counter-example — it needs the uniform axis :func:`time_axis_ns` builds.
+
+    ``floor_ns`` is the instrument's minimum realizable wait (QM plays
+    ``xy.wait`` in 4 ns cycles and refuses anything under 16 ns), applied before
+    snapping so no point can land under it.
+
+    THE AXIS SHRINKS: after snapping, neighbouring log points collide at the
+    dense end and ``np.unique`` drops the duplicates, so the realized length is
+    ``<= num_points``. Callers must read ``axis.size``, never ``num_points`` —
+    duplicated x-values would otherwise reach the fit as repeated samples.
+    """
+    num_points = int(num_points)
+    grid_ns = int(grid_ns)
+    floor_ns = int(floor_ns)
+    if num_points < 1:
+        raise ValueError(f"num_points={num_points} must be >= 1")
+    if grid_ns < 1:
+        raise ValueError(f"grid_ns={grid_ns} must be >= 1")
+    lo = max(floor_ns, int(min_ns))
+    hi = int(max_ns)
+    if hi < lo:
+        raise ValueError(
+            f"max_ns={max_ns} is below the {floor_ns} ns instrument floor "
+            f"(effective minimum {lo} ns)"
+        )
+    raw = np.logspace(np.log10(lo), np.log10(hi), num_points)
+    snapped = np.maximum(floor_ns, (np.round(raw / grid_ns) * grid_ns).astype(int))
+    return np.unique(snapped).astype(float)

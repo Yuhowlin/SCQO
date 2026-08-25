@@ -18,7 +18,7 @@ import pytest
 
 from scqo.cli._backends import ensure_demo_experiments
 from scqo.experiments import get
-from scqo.experiments._time_grid import time_axis_ns
+from scqo.experiments._time_grid import log_time_axis_ns, time_axis_ns
 from scqo.testing import SimulatedBackend, demo_device
 
 #: qblox_scheduler's GRID_TIME_TOLERANCE_TIME. Compared ABSOLUTELY — np.allclose's
@@ -143,3 +143,47 @@ def _raw_window(name, p):
     if name.endswith(("_flux", "_flux_pulse")):
         return p.min_wait_ns, p.max_wait_ns, p.num_wait_points
     return p.min_wait_ns, p.max_wait_ns, p.num_points
+
+
+# --- log_time_axis_ns -------------------------------------------------------
+# The log axis is for estimators that do NOT differentiate along it (the phasor
+# Ramsey reads a decay envelope; the Ramsey cryoscope's Savitzky-Golay step is
+# the counter-example that still needs the uniform axis above).
+
+
+def test_log_axis_is_whole_nanoseconds_on_its_grid():
+    axis = log_time_axis_ns(16, 200_000, 60)
+    assert off_grid_ns(axis, 4) < TOL_NS
+    assert np.all(axis == np.round(axis))
+
+
+def test_log_axis_is_strictly_increasing_after_dedup():
+    axis = log_time_axis_ns(16, 4000, 101)
+    assert np.all(np.diff(axis) > 0)
+
+
+def test_log_axis_shrinks_and_callers_must_read_the_realized_size():
+    """Snapping collides neighbouring log points at the dense end, so the
+    realized length is <= num_points. A caller that trusted num_points would
+    hand the fit repeated x-values."""
+    axis = log_time_axis_ns(16, 4000, 101)
+    assert axis.size < 101
+    assert axis.size == np.unique(axis).size
+
+
+def test_log_axis_honours_the_instrument_floor():
+    axis = log_time_axis_ns(1, 10_000, 40)
+    assert axis[0] >= 16
+
+
+def test_log_axis_spans_decades():
+    axis = log_time_axis_ns(16, 200_000, 60)
+    assert axis[0] == 16
+    assert axis[-1] == pytest.approx(200_000, rel=1e-3)
+    # log-spaced, not linear: the last step dwarfs the first
+    assert np.diff(axis)[-1] > 100 * np.diff(axis)[0]
+
+
+def test_log_axis_refuses_a_window_under_the_floor():
+    with pytest.raises(ValueError, match="instrument floor"):
+        log_time_axis_ns(1, 8, 10)

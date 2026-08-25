@@ -105,28 +105,13 @@ from ._capabilities.state_readout import (
     population_row,
 )
 from ._distortion_hint import print_apply_hint, run_id_of
+from ._time_grid import log_time_axis_ns
 from ._sim import iq_from_population, stable_seed
 from . import register
 
 #: the wait axis crossing the probe <-> estimator boundary (the detuning axis
 #: is the drive_detuning capability's DETUNING_AXIS, imported above).
 WAIT_AXIS = "wait_time_ns"
-
-
-def _log_time_ns(min_ns: int, max_ns: int, num_points: int, *, grid_ns: int = 4) -> np.ndarray:
-    """Log-spaced wait times in ns, snapped to the QM grid (>= 16 ns, a multiple
-    of ``grid_ns``) and de-duplicated.
-
-    Non-uniform on purpose: the estimator fits exponentials (no derivative, unlike
-    the Ramsey cryoscope's Savitzky-Golay step), so a log axis can span the ns
-    transients and the microsecond tails in one sweep. The QM 4 ns / 16 ns wait
-    floor still binds — the probe plays ``xy.wait`` in cycles — so the axis is
-    kept integer ns.
-    """
-    lo = max(16, int(min_ns))
-    raw = np.logspace(np.log10(lo), np.log10(int(max_ns)), int(num_points))
-    snapped = np.maximum(16, (np.round(raw / grid_ns) * grid_ns).astype(int))
-    return np.unique(snapped).astype(float)
 
 
 class QubitSpectroscopyCryoscopeParameters(
@@ -359,7 +344,7 @@ class QubitSpectroscopyCryoscope(Experiment):
     def define_sweep(self) -> dict[str, np.ndarray]:
         # the mixin normalises the edges to an ascending axis, which peak_fit's
         # (un-abs'd) gamma bound requires — see _capabilities/detuning.py.
-        wait = _log_time_ns(
+        wait = log_time_axis_ns(
             self.params.min_wait_ns, self.params.max_wait_ns, self.params.num_wait_points
         )
         return {**drive_detuning_sweep(self.params), WAIT_AXIS: wait}

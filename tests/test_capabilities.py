@@ -98,6 +98,7 @@ EXPECTED_CAPABILITIES = {
     # flux-pulse amplitude is a scalar parameter, not a swept window, so it does
     # not subclass the flux mixins; the swept axis is the pulse duration.
     "qubit_ramsey_cryoscope": ["state_readout", "qubit_reset"],
+    "qubit_ramsey_phasor": ["state_readout", "qubit_reset"],
     # spectroscopy cryoscope: same flux reasoning — the flux amplitude is a
     # scalar parked excursion, not a swept window; the swept axes are the drive
     # detuning (the drive_detuning window, origin refined to the parked drive)

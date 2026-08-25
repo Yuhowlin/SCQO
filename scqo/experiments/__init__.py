@@ -172,6 +172,7 @@ from .pair_zz_coupler import PairZZCoupler  # noqa: E402
 from .qc_n_stark_amp import QcNStarkAmp  # noqa: E402
 from .qc_n_swap_amp import QcNSwapAmp  # noqa: E402
 from .qubit_ramsey_cryoscope import QubitRamseyCryoscope  # noqa: E402
+from .qubit_ramsey_phasor import QubitRamseyPhasor  # noqa: E402
 from .qubit_deterministic_benchmarking import QubitDeterministicBenchmarking  # noqa: E402
 from .qubit_drag_alternating import QubitDragAlternating  # noqa: E402
 from .qubit_drag_equator import QubitDragEquator  # noqa: E402
@@ -225,7 +226,7 @@ __all__ = [
     "BroadbandQubitSpectroscopy",
     "BroadbandResonatorSpectroscopy",
     "PairSwapChevron", "PairSwapFluxMap",
-    "PairZZCoupler", "QcNStarkAmp", "QcNSwapAmp", "QubitRamseyCryoscope", "QubitDeterministicBenchmarking", "QubitDragAlternating", "QubitDragEquator", "QubitEcho",
+    "PairZZCoupler", "QcNStarkAmp", "QcNSwapAmp", "QubitRamseyCryoscope", "QubitRamseyPhasor", "QubitDeterministicBenchmarking", "QubitDragAlternating", "QubitDragEquator", "QubitEcho",
     "QubitEchoFluxPulse", "QubitParametricDrive",
     "QubitParitySwitchContinuous", "QubitParitySwitchDiscrete",
     "QubitPiPulseError", "QubitPowerRabi", "QubitRamsey",
