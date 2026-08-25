@@ -10,6 +10,15 @@ macOS/Linux equivalents follow where they differ.
 
 ## 1. The Python environments
 
+> **About the paths in this document.** `D:\github`, `D:\qpu_data`, `D:\uv` and
+> `D:\scqo` are **this lab's machine**, not a requirement — substitute your own parent
+> directory anywhere you see them. The one thing that IS required is the *shape*: the
+> repos as siblings under one parent (below), because `pyproject.toml` resolves them by
+> relative path. The exception is **§5**, where the layout is a deliberate contract for
+> a multi-account server and the specific drive letter is part of the point.
+> Contributing rather than deploying? [CONTRIBUTING.md](CONTRIBUTING.md) has a shorter,
+> machine-independent setup.
+
 **Policy: every environment is a plain venv managed by `uv`.** Conda is retired: an
 audit (2026-07-05) showed the lab's conda envs used conda only as a Python installer
 (all 180+ scientific/vendor packages came from pip) — uv does that job faster, with
@@ -21,9 +30,9 @@ actually running a measurement.**
 
 | venv | prompt | contents | activate when you… |
 |---|---|---|---|
-| `D:\github\.venv-view` | `(view)` | scqo `[viewer]` + scqat + datasette + pytest — **no instrument libraries** | look at data (the common case): run-viewer, SQL browser, `scqo find`, `scqo tag`. Works identically on an analysis-only laptop/Mac. |
-| `D:\github\.venv-qblox` | `(qblox)` | the view stack + scqo-qblox + `qblox-scheduler==1.0.0b4` (hardware-proven) | measure on the Qblox cluster: `scqo run`, `scqo state` |
-| `D:\github\.venv-qm` | `(.venv-qm)` | pinned QM stack, py3.11 (`scqo-qm\requirements-qm.lock.txt`) + scqo/scqat/scqo-qm editables | measure on the OPX1000 or use qualibrate — `qm.bat` activates it for you |
+| `<parent>\.venv-view` | `(view)` | scqo `[viewer]` + scqat + datasette + pytest — **no instrument libraries** | look at data (the common case): run-viewer, SQL browser, `scqo find`, `scqo tag`. Works identically on an analysis-only laptop/Mac. |
+| `<parent>\.venv-qblox` | `(qblox)` | the view stack + scqo-qblox + `qblox-scheduler==1.0.0b6` (hardware-proven) | measure on the Qblox cluster: `scqo run`, `scqo state` |
+| `<parent>\.venv-qm` | `(.venv-qm)` | pinned QM stack, py3.11 (`scqo-qm\requirements-qm.lock.txt`) + scqo/scqat/scqo-qm editables | measure on the OPX1000 or use qualibrate — `qm.bat` activates it for you |
 
 All three import scqo/scqat from the same editable checkouts, so they never drift on
 the neutral layer. `uv` creates standard venvs and downloads Python itself if the
@@ -38,17 +47,16 @@ git clone https://github.com/shiau109/SCQO.git
 git clone https://github.com/shiau109/scqat.git
 git clone https://github.com/shiau109/scqo-qblox.git    # only if this machine drives the Qblox cluster
 git clone https://github.com/shiau109/scqo-qm.git    # only if this machine drives the OPX1000
-git clone https://github.com/shiau109/scqo-contrib.git   # optional sandbox - see the note below before installing it
 ```
 
 (A repo that is still **private** answers `Repository not found` when the active
 GitHub credential cannot see it — sign in with an account that has access.)
 
-> **scqo-contrib is NOT part of the current release.** Its sandbox experiments
-> still import the device model that v0.13 deleted, so it is pinned at v0.12.0
-> and must not be installed into a v0.13 environment — the install lines below
-> deliberately omit it. Clone it if you want to read or re-point it; check
-> `RELEASES.toml` before adding it back to any env.
+> **scqo-contrib is retired and deliberately not cloned above.** It is private, pinned
+> at v0.12.0, excluded from every release combo since greenfield, and its template still
+> imports a `QubitSelection` that greenfield renamed to `TargetSelection` — so it fails on
+> import and cannot even be copied from. Prototype new experiments in a **fork** instead:
+> see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 **Windows: install uv once per machine** (no admin needed):
 
@@ -101,7 +109,7 @@ uv pip install --python .venv-view\Scripts\python.exe -e ".\SCQO[viewer]" -e .\s
 # qblox — measurement env for the Qblox cluster
 uv venv .venv-qblox --python 3.12 --prompt qblox
 uv pip install --python .venv-qblox\Scripts\python.exe -e ".\SCQO[viewer]" -e .\scqat -e .\scqo-qblox datasette pytest httpx
-uv pip install --python .venv-qblox\Scripts\python.exe "qblox-scheduler==1.0.0b4"   # exact hardware-proven build (see note)
+uv pip install --python .venv-qblox\Scripts\python.exe "qblox-scheduler==1.0.0b6"   # exact hardware-proven build (see note)
 
 # qm — measurement env for the OPX1000 (pinned, py3.11)
 uv venv .venv-qm --python 3.11
@@ -116,10 +124,13 @@ whole Tier-1 surface (`scqo run/find/accept/suggest/set/tag/state/user/device/do
 works from any directory. `[viewer]` pulls the run-viewer's web extras —
 fastapi/uvicorn/jinja2/python-multipart —
 for `python -m scqo.viewer`; `datasette` powers the SQL browser `python -m scqo.browse`.
-**qblox-scheduler pin:** scqo-qblox's pyproject floors it at `>=1.0.0b4` because PyPI's
+**qblox-scheduler pin:** scqo-qblox's pyproject floors it at `>=1.0.0b6` because PyPI's
 only non-prerelease is an empty 0.0.0 placeholder that fails to build; the explicit
-`==1.0.0b4` line then holds the env at the exact build proven on the cluster — bump it
-deliberately after re-validation, never by accidental rebuild.)
+`==1.0.0b6` line then holds the env at the exact build proven on the cluster — bump it
+deliberately after re-validation, never by accidental rebuild. The floor is not cosmetic:
+b4 and b6 *disagree about whether a schedule is legal*, and on 2026-07-26 a probe compiled
+clean offline on one and died on the cluster with the other. Keep this line, the driver's
+pyproject and its CI pin on the same version.)
 
 **macOS / Linux** — install uv once with `brew install uv` (or
 `curl -LsSf https://astral.sh/uv/install.sh | sh`). An analysis-only machine needs
@@ -660,7 +671,7 @@ writes at the server's data — §5):
    A single-setup cycle auto-selects, so no `scqo user --setup` is needed. Every
    run is now stamped with (cycle, setup name) + operator, and `simulated` setups
    always persist their state (push is forced — §2).
-5. **Verify offline**: `cd D:\github\SCQO; python -m pytest -q` (§3 — all green, no
+5. **Verify offline**: from the SCQO repo root, `python -m pytest -q` (§3 — all green, no
    instrument).
 6. **First run + look at it** (any directory — the `scqo` command needs no repo):
 
@@ -697,16 +708,16 @@ for writing, and nothing lands in your real data_root.
 folder holding `dut_config*.json` + `hw_config*.json`:
 
 ```powershell
-cd D:\github\scqo-qblox
-python scripts\check_real_config.py D:\qpu_data\SQ_demo\QBLOX_config
+cd <your>\scqo-qblox
+python scripts\check_real_config.py <folder with dut_config*.json + hw_config*.json>
 ```
 
 **QM / OPX1000** — needs the qm env (`.venv-qm\Scripts\Activate.ps1`). Point it at
 any folder holding `state.json` + `wiring.json`:
 
 ```powershell
-cd D:\github\scqo-qm
-python scripts\check_real_config.py D:\qpu_data\SQ_demo\QM_OPX1000_config
+cd <your>\scqo-qm
+python scripts\check_real_config.py <folder with state.json + wiring.json>
 ```
 
 Expected output: 5 numbered steps, each OK, ending in a `PASS - scqo works against

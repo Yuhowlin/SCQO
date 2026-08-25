@@ -238,7 +238,7 @@ at small counts, and the real run is unaffected.
 
 ```bash
 scqo run qubit_ramsey --targets q1 --preview                       # look, don't touch
-scqo run qubit_ramsey --preview --out D:\tmp\ramsey_check          # pinned folder, overwrites
+scqo run qubit_ramsey --preview --out <folder>                     # pinned folder, overwrites
 ```
 
 One more distinction worth knowing: **instrument settings vs sample physics** —
@@ -839,9 +839,11 @@ with the error noted on it, so you can decide again once the cause is fixed.
    `parameters.toml` and `user.toml` — and the device/setup selection goes through
    `scqo user` (it writes your user.toml, validated). The repos and the shared
    registries are read-only for you.
-2. **Advanced users**: prototype new experiments + estimators in the sandbox
-   (`scqo-contrib`, entry-point group `scqo.experiments.contrib`) — your runs land
-   in the same datastore, so your evidence is findable.
+2. **Advanced users**: prototype new experiments + estimators in a **fork** of the
+   repos and open pull requests back — [CONTRIBUTING.md](CONTRIBUTING.md) has the
+   layout and the branch/merge order. Your runs land in the same datastore either
+   way, so your evidence stays findable. (The old `scqo-contrib` sandbox is retired:
+   private, pinned at v0.12.0, and broken on import since greenfield.)
 3. **The manager** owns the shared registries — cooldown cycles
    (`scqo device cooldown start`/`end`), the hand-added `[<cycle>.setup.<name>]`
    blocks in each device's `cooldowns.toml`, each device's `components.toml`
