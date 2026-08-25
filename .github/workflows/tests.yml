@@ -86,6 +86,9 @@ jobs:
 
           echo "repo=$repo" >> "$GITHUB_OUTPUT"
           echo "ref=$ref"   >> "$GITHUB_OUTPUT"
+          # stdout too, not just the summary: the summary is for humans in the UI,
+          # this line is what `gh run view --log` can show when a pairing looks wrong.
+          echo "PAIRED scqat: $repo @ ${ref:-<default branch>}  ($why)"
           {
             echo "### scqat paired with this run"
             echo ""
