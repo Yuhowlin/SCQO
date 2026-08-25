@@ -1,0 +1,50 @@
+name = "qblox-probes-and-calibrations"
+repos = { scqo-qblox = "35bf341" }
+kind = "additive"
+coupling = ""
+validated = "offline"
+notes = """
+NEW ON QBLOX (six probes, no SCQO/scqat change — every shell already existed): \
+`broadband_qubit_spectroscopy`, `broadband_resonator_spectroscopy`, \
+`qubit_deterministic_benchmarking`, `qubit_drag_equator`, `qubit_sqrb`, \
+`qubit_tomography`. Five of the six were QM-only until now. Contributed as \
+scqo-qblox PR #12 (Yuhowlin), based on v3.0.0 and brought forward onto v3.2.0 \
+with the correctness fixes below.
+
+NEW KNOB ON QBLOX: `drag_beta` is REALIZED on `element.rxy.beta` (view in ns, \
+vendor in seconds) now that `qubit_drag_equator` calibrates it. It is \
+deliberately NOT the same quantity as QM's `DragCosinePulse.alpha` — the catalog \
+already marks `drag_beta` `portable=False` so each backend may define it in its \
+own convention. `pi_amp_x90` and `drag_beta_x90` stay Unrealized here: `rxy` \
+carries ONE beta and X90 is DERIVED from `rxy.amp180`, so binding them would let \
+a pi/2 calibration overwrite the calibrated pi gate. \
+`qubit_deterministic_benchmarking` therefore REFUSES `target_gate=x90` by name on \
+Qblox — benchmark a pi gate here, or run it on QM.
+
+BEHAVIOR CHANGE: `broadband_qubit_spectroscopy` measures ONE target on Qblox and \
+refuses a second by name (it steps a single drive port-clock's LO). The QM half \
+multiplexes an acquisition stream per target and is unaffected. \
+`broadband_resonator_spectroscopy` legitimately reports the same feedline trace \
+for every target on both backends.
+
+Fixes carried in the same merge, each a SILENT-wrong-data failure in the \
+contributed branch: benchmarking swept the x180 amplitude regardless of \
+`target_gate` while estimate()/update() used the x90 knob (issue #24 item 2, \
+recurring on Qblox — it now reads `amp_reference_field()`); broadband tiled \
+`targets[0]`'s trace across every other target; the vendor's \
+`GRID_TIME_TOLERANCE_TIME` was relaxed process-wide and never restored (now a \
+scoped context manager); four hand-rolled acquisition timeouts used magic shot \
+periods and ignored thermalization (issue #24 item 1, recurring inside the \
+self-acquiring probes — now `chunk_timeout_s`, which counts the real reset); and \
+the compile census silently skipped `qubit_drag_equator` and `qubit_tomography` \
+while claiming full coverage (both now expose schedule builders that \
+`SELF_ACQUIRING_BUILDS` compiles, with a census test that fails any probe missing \
+from the map).
+
+STILL OWED (hardware): all six probes are offline-only on Qblox. Validated as \
+319 offline tests plus `scripts/check_real_config.py` against \
+chipA/cd1/qblox (PASS), but nothing has reached a cluster. The DRAG equator and \
+tomography probes in particular WRITE device state (rxy.beta) and step LOs \
+mid-run, restoring in a `finally` — that restore path has never been exercised \
+against real hardware.
+"""
