@@ -129,6 +129,13 @@ def test_parametric_drive_refuses_an_inverted_window(session):
     assert "inverted" in str(out.get("error"))
 
 
+def test_qubit_sqrb_discriminated_end_to_end(session):
+    out = session.run("qubit_sqrb", {"targets": ["q0"], "use_state_discrimination": True}, update="none")
+    assert out.get("error") is None, out.get("error")
+    assert out["outcomes"]["q0"] == "successful"
+    assert 0.9 < out["fit"]["q0"]["gate_fidelity"] <= 1.0
+
+
 def test_qubit_spectroscopy_writes_channel_knob_and_mode_fact(session):
     assert _suggest(session, "qubit_spectroscopy") == {
         ("q0_xy", "drive_freq_hz"), ("q0", "f_01_hz")}
