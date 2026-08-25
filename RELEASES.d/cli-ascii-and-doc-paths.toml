@@ -1,0 +1,46 @@
+name = "cli-ascii-and-doc-paths"
+repos = { scqo = "564a9ca", scqat = "4eb5eb9" }
+kind = "fix"
+coupling = ""
+validated = "offline"
+notes = """
+Behaviour-preserving repairs to what the CLI prints and what the setup docs tell you to
+install. Two of the three matter beyond cosmetics.
+
+THE ASCII RULE, FINISHED. v2.3.0 established that every CLI meta line is ASCII, after an
+em-dash in the `scqo run --capability` header rendered as mojibake on the Windows console.
+Only that one header was ever fixed, so the rule was fiction: 30 em-dashes and 4 section
+signs remained across scqo/checks.py and ten scqo/cli/ modules, and `scqo doctor` - the
+lab's primary health check, and the first thing INSTALL.md tells anyone to run - printed a
+stray X for every dash and two replacement characters for every 'INSTALL S1'. All emitted
+strings are ASCII now. Docstrings and comments keep their typography deliberately: they are
+not CLI lines, and the replacement was driven by an AST walk that excludes them, asserting
+per module that no emitted string shares a line with a docstring. One test pinned the old
+wording and was updated, not deleted - it exists to keep the INSTALL pointer in the message.
+
+A LAB PATH IN RUNTIME OUTPUT. _backends.py and doctor.py both emitted `activate
+D:{backslash}github{backslash}<venv>` when a backend was not registered - one machine's
+directory layout, printed to whoever hit the error. Anyone outside that machine, which now
+includes every fork contributor, was told to activate a directory they do not have.
+SERVED_BY already carries the venv NAME, which is the actionable half, so the message reads
+"activate the .venv-qm environment (the one that has scqo-qm)" and is true anywhere.
+
+A STALE PIN THAT BUILT A BROKEN ENV - the one with teeth. INSTALL.md pinned
+`qblox-scheduler==1.0.0b4` in three places while scqo-qblox's pyproject floors it at
+>=1.0.0b6. The documented sequence installs the driver and then DOWNGRADES its own
+dependency below its floor. That is not drift: scqo-qblox's CLAUDE.md records b4 and b6
+disagreeing about whether a schedule is LEGAL, and a probe that compiled clean offline dying
+on the cluster on 2026-07-26. All three now read b6, matching pyproject and the CI pin, with
+a note saying the three must move together.
+
+Also in INSTALL.md and TUTORIAL.md: the absolute paths that never meant a machine are now
+generic ("from the repo root", `<folder>` placeholders, `<parent>` in the venv table), and a
+note at the top of section 1 says plainly which paths are this lab's and which are
+prescriptive. Section 5 was deliberately NOT touched - there the layout IS a multi-account
+server contract and the drive letter is part of the point. The retired scqo-contrib
+references went with it.
+
+NO OPERATOR ACTION. Output wording only, plus documentation. Nothing an operator owns
+changes, no dependency ships, and no stored data is affected. Scripts that PARSE doctor
+output would see dashes where em-dashes were, which is the intended repair.
+"""
