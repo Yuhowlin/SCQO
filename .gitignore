@@ -21,5 +21,8 @@ env/
 .idea/
 .DS_Store
 
-# Claude Code (personal/local settings stay local; shared settings.json is committed)
+# Claude Code / agent settings - ALL of it stays local. A committed settings.json
+# ships one machine's accumulated permission grants (and its absolute paths) to
+# every fork, where they would be pre-approved for someone else's agent.
+.claude/settings.json
 .claude/settings.local.json

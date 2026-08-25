@@ -2,7 +2,7 @@
 name = "scqo"
 version = "3.1.0"
 description = "Superconducting Qubit Orchestration — instrument-agnostic experiment API shared by QM and Qblox backends"
-readme = "CLAUDE.md"
+readme = "README.md"
 requires-python = ">=3.10,<3.13"
 license = { text = "BSD-3-Clause" }
 dependencies = [
