@@ -45,7 +45,7 @@ from __future__ import annotations
 from typing import ClassVar
 
 import numpy as np
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from .._scqat import per_qubit_results
 from ..contract import DatasetContract
@@ -58,6 +58,7 @@ from ._capabilities.state_readout import (
 )
 from ._sim import iq_from_population, stable_seed
 from ._time_grid import time_axis_ns
+from ._window import refuse_zero_width, window_bounds
 from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
 from ..experiment import Experiment
@@ -69,9 +70,12 @@ class QubitParametricDriveTimeParameters(TargetSelection, AveragingParameters,
     """Inputs for the parametric-drive chevron.
 
     The frequency window is ABSOLUTE (Hz of the modulation tone), not a detuning:
-    the parametric tone has no standing knob to be relative to. ``define_sweep``
-    refuses an empty or inverted window by name — the frequency axis must ascend
-    (scqat's per-slice reductions mis-fit a descending axis silently).
+    the parametric tone has no standing knob to be relative to. Both windows are
+    ``[start, end]`` pairs whose edges may be given in EITHER order — they define
+    the window, not a sweep direction, and the axis is always swept ascending
+    (``_window.py``). That matters twice here: scqat's per-slice reductions
+    mis-fit a descending frequency axis silently, and a descending TIME axis is
+    not a decay at all. Only a zero-width window is refused.
     """
 
     parametric_amp_v: float = Field(
@@ -80,31 +84,51 @@ class QubitParametricDriveTimeParameters(TargetSelection, AveragingParameters,
                     "sweep axis. The tone rides on the standing idle bias, and the backend "
                     "refuses past the port rail. Locate a usable value with "
                     "qubit_parametric_drive_amp first, which sweeps this axis.")
-    min_parametric_freq_hz: float = Field(
+    start_parametric_freq_hz: float = Field(
         180e6, gt=0,
-        description="Lowest parametric-drive (flux-modulation) frequency (Hz), absolute. "
-                    "This is a ZOOM around a known resonance, not a finder: the window "
-                    "must be narrow enough that the chevron's linewidth (~the exchange "
-                    "rate) spans several frequency steps, or the sweep steps straight "
-                    "over it. Get the centre from qubit_parametric_drive_amp.")
-    max_parametric_freq_hz: float = Field(
+        description="One edge of the swept parametric-drive (flux-modulation) frequency "
+                    "window (Hz), absolute. This is a ZOOM around a known resonance, not "
+                    "a finder: the window must be narrow enough that the chevron's "
+                    "linewidth (~the exchange rate) spans several frequency steps, or the "
+                    "sweep steps straight over it. Get the centre from "
+                    "qubit_parametric_drive_amp. The two edges may be given in EITHER "
+                    "order — they define the window, not a sweep direction, and the axis "
+                    "is always swept ascending.")
+    end_parametric_freq_hz: float = Field(
         220e6, gt=0,
-        description="Highest parametric-drive frequency (Hz; the reachable band is the "
-                    "flux line's — the instrument refuses past its bandwidth).")
+        description="The other edge of the frequency window (Hz; the reachable band is the "
+                    "flux line's — the instrument refuses past its bandwidth). May be above "
+                    "or below start_parametric_freq_hz; only a zero-width window is refused.")
     num_freq_points: int = Field(21, gt=4, description="Number of frequency points.")
-    min_drive_time_ns: float = Field(
+    start_drive_time_ns: float = Field(
         16.0, ge=16.0,
-        description="Shortest parametric driving time (ns; 16 ns is the QM floor — "
-                    "play() counts 4 ns cycles and 16 ns is the shortest pulse).")
-    max_drive_time_ns: float = Field(
-        3000.0, gt=16.0,
-        description="Longest parametric driving time (ns). Cover several exchange "
-                    "periods on resonance, or the oscillation rate is unidentifiable.")
+        description="One edge of the swept parametric driving-time window (ns). The 16 ns "
+                    "floor is the QM one — play() counts 4 ns cycles and 16 ns is the "
+                    "shortest pulse — and it binds whichever edge is lower, since the two "
+                    "may be given in EITHER order; the axis is always swept ascending.")
+    end_drive_time_ns: float = Field(
+        3000.0, ge=16.0,
+        description="The other edge of the driving-time window (ns). Cover several exchange "
+                    "periods on resonance, or the oscillation rate is unidentifiable. May "
+                    "be above or below start_drive_time_ns; only a zero-width window is "
+                    "refused.")
     num_time_points: int = Field(
         101, gt=4,
         description="Number of driving-time points. The axis is uniform on the 4 ns "
                     "instrument grid, so a window too narrow to hold this many distinct "
                     "points is refused by name rather than silently collapsed.")
+
+    @model_validator(mode="after")
+    def _windows_span(self) -> "QubitParametricDriveTimeParameters":
+        refuse_zero_width(
+            self.start_parametric_freq_hz, self.end_parametric_freq_hz,
+            start_name="start_parametric_freq_hz", end_name="end_parametric_freq_hz",
+            points_name="num_freq_points")
+        refuse_zero_width(
+            self.start_drive_time_ns, self.end_drive_time_ns,
+            start_name="start_drive_time_ns", end_name="end_drive_time_ns",
+            points_name="num_time_points", quantity="driving time")
+        return self
 
 
 class QubitParametricDriveTimeResult(Result):
@@ -148,23 +172,23 @@ class QubitParametricDriveTime(Experiment):
 
     def define_sweep(self) -> dict[str, np.ndarray]:
         p = self.params
-        if not p.max_parametric_freq_hz > p.min_parametric_freq_hz:
-            raise ValueError(
-                f"the parametric_freq_hz window is empty or inverted "
-                f"(min {p.min_parametric_freq_hz} >= max {p.max_parametric_freq_hz}); "
-                f"the axis must ascend — swap the edges or widen the window")
+        # window_bounds is the ONE ordering point: the edges arrive in either
+        # order and every axis leaves ascending. Zero width was already refused
+        # at Parameters construction. The TIME pair must be normalised BEFORE
+        # time_axis_ns, which computes step = floor(span / (n-1) / grid) and
+        # would refuse a reversed window with a misleading "cannot hold N
+        # points" message.
+        f_lo, f_hi = window_bounds(p.start_parametric_freq_hz, p.end_parametric_freq_hz)
+        t_lo, t_hi = window_bounds(p.start_drive_time_ns, p.end_drive_time_ns)
         return {
             # dict order IS the contract order: frequency outer, time inner (each
             # map row is one rho_11(t) trace at one drive frequency — the shape the
             # estimator reads, and the one that lets the driver step the z-line
             # oscillator once per frequency instead of once per point).
-            "parametric_freq_hz": np.linspace(p.min_parametric_freq_hz,
-                                              p.max_parametric_freq_hz,
-                                              p.num_freq_points),
+            "parametric_freq_hz": np.linspace(f_lo, f_hi, p.num_freq_points),
             # grid_ns=4, not the neutral 1: QM is the only backend and its
             # play(duration=) counts 4 ns cycles (module docstring).
-            "drive_time_ns": time_axis_ns(p.min_drive_time_ns, p.max_drive_time_ns,
-                                          p.num_time_points, grid_ns=4),
+            "drive_time_ns": time_axis_ns(t_lo, t_hi, p.num_time_points, grid_ns=4),
         }
 
     def simulate(self, coords: dict[str, np.ndarray]) -> dict[str, np.ndarray]:

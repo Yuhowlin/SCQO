@@ -52,9 +52,9 @@ from scqo.experiments._capabilities import (
     foreign_flux_source,
     readout_detuning_sweep,
     reset_wait_ns,
-    window_bounds,
 )
 from scqo.parameters import Parameters
+from scqo.experiments._window import window_bounds
 from scqo.experiments import get
 from scqo.testing import SimulatedBackend, demo_device
 

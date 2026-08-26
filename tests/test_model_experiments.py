@@ -9,8 +9,11 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from pydantic import ValidationError
+
 from scqo import Session
 from scqo import experiments as registry
+from scqo.experiments._window import window_bounds
 from scqo.experiment import Experiment
 from scqo.testing import (
     InMemoryDevice,
@@ -52,8 +55,8 @@ PARITY_DEFAULTS = {"qubit_parity_switch_continuous": {"record_time_s": 0.4},
 #: simulated chevron's linewidth is drawn from the frequency STEP, so holding the
 #: step at 2 MHz is what keeps the seeded resonance resolvable at 9 points.
 PARAMETRIC_TIME_DEFAULTS = {"qubit_parametric_drive_time": {
-    "num_freq_points": 9, "min_parametric_freq_hz": 190e6,
-    "max_parametric_freq_hz": 206e6, "num_time_points": 61}}
+    "num_freq_points": 9, "start_parametric_freq_hz": 190e6,
+    "end_parametric_freq_hz": 206e6, "num_time_points": 61}}
 
 #: what the module fixture runs on; _fresh_parity_session keeps the parity-only set.
 OFFLINE_DEFAULTS = {**PARITY_DEFAULTS, **PARAMETRIC_TIME_DEFAULTS}
@@ -129,23 +132,64 @@ def test_parametric_drive_amp_finds_the_seeded_resonance(session):
     assert fit["n_good"] >= 1
     cls = registry.get("qubit_parametric_drive_amp")
     p = cls.Parameters(**params)
-    assert p.min_parametric_freq_hz <= fit["best_parametric_freq_hz"] <= p.max_parametric_freq_hz
-    assert p.min_parametric_amp_v <= fit["best_parametric_amp_v"] <= p.max_parametric_amp_v
+    # window_bounds, never a chained start <= x <= end: the edges take either
+    # order and a reversed pair makes the chain silently always-False.
+    f_lo, f_hi = window_bounds(p.start_parametric_freq_hz, p.end_parametric_freq_hz)
+    a_lo, a_hi = window_bounds(p.start_parametric_amp_v, p.end_parametric_amp_v)
+    assert f_lo <= fit["best_parametric_freq_hz"] <= f_hi
+    assert a_lo <= fit["best_parametric_amp_v"] <= a_hi
     # The strongest kept peak must be a real LINE, not a window-wide artifact:
     # the seeded FWHM is a few frequency steps (~6-12 % of the span). This is the
     # assertion with teeth — `best_peak_amplitude` cannot carry it, because
     # scqat's fit_peaks normalizes polarity per slice (it inverts a dip trace and
     # fits a positive lorentzian), so a well-fit dip reports a POSITIVE amplitude
     # and a negative one signals a badly-conditioned fit, not a dip.
-    span = p.max_parametric_freq_hz - p.min_parametric_freq_hz
+    span = f_hi - f_lo
     assert 0.0 < fit["best_fwhm_hz"] < 0.25 * span
 
 
-def test_parametric_drive_amp_refuses_an_inverted_window(session):
-    out = session.run("qubit_parametric_drive_amp",
-                      {"targets": ["q0"], "min_parametric_freq_hz": 300e6,
-                       "max_parametric_freq_hz": 50e6}, update="none")
-    assert "inverted" in str(out.get("error"))
+def _sweep(session, name, **params):
+    """define_sweep straight off the experiment, no acquisition."""
+    cls = registry.get(name)
+    return cls(session.backend, cls.Parameters(targets=["q0"], **params)).define_sweep()
+
+
+@pytest.mark.parametrize("name,axis,edges", [
+    ("qubit_parametric_drive_amp", "parametric_amp_v",
+     ("start_parametric_amp_v", "end_parametric_amp_v", 0.0, 0.3)),
+    ("qubit_parametric_drive_amp", "parametric_freq_hz",
+     ("start_parametric_freq_hz", "end_parametric_freq_hz", 50e6, 300e6)),
+    ("qubit_parametric_drive_time", "parametric_freq_hz",
+     ("start_parametric_freq_hz", "end_parametric_freq_hz", 180e6, 220e6)),
+    ("qubit_parametric_drive_time", "drive_time_ns",
+     ("start_drive_time_ns", "end_drive_time_ns", 16.0, 3000.0)),
+])
+def test_parametric_window_edges_take_either_order(session, name, axis, edges):
+    """The pair DEFINES the window, it does not choose a traversal direction:
+    both orders give the identical axis, always ascending. The raw fields are
+    left verbatim — only the AXIS is ordered."""
+    start, end, lo, hi = edges
+    up = _sweep(session, name, **{start: lo, end: hi})[axis]
+    down = _sweep(session, name, **{start: hi, end: lo})[axis]
+    assert down == pytest.approx(up)
+    assert np.all(np.diff(down) > 0), "the emitted axis must ascend"
+    cls = registry.get(name)
+    reversed_params = cls.Parameters(targets=["q0"], **{start: hi, end: lo})
+    assert getattr(reversed_params, start) == hi  # the field is NOT normalised
+    assert getattr(reversed_params, end) == lo
+
+
+@pytest.mark.parametrize("name,start,end,value", [
+    ("qubit_parametric_drive_amp", "start_parametric_amp_v", "end_parametric_amp_v", 0.2),
+    ("qubit_parametric_drive_amp", "start_parametric_freq_hz", "end_parametric_freq_hz", 100e6),
+    ("qubit_parametric_drive_time", "start_parametric_freq_hz", "end_parametric_freq_hz", 200e6),
+    ("qubit_parametric_drive_time", "start_drive_time_ns", "end_drive_time_ns", 100.0),
+])
+def test_parametric_zero_width_window_is_refused(name, start, end, value):
+    """Two identical edges are a typo, not a measurement — and the refusal fires
+    at Parameters construction, not deep inside define_sweep."""
+    with pytest.raises(ValidationError, match="zero-width"):
+        registry.get(name).Parameters(targets=["q0"], **{start: value, end: value})
 
 
 def test_parametric_drive_time_finds_the_seeded_sideband(session):
@@ -161,18 +205,11 @@ def test_parametric_drive_time_finds_the_seeded_sideband(session):
     assert 1 <= fit["n_decoh_ok"] <= fit["n_freq"]
     p = registry.get("qubit_parametric_drive_time").Parameters(
         **{**params, **PARAMETRIC_TIME_DEFAULTS["qubit_parametric_drive_time"]})
-    lo, hi = p.min_parametric_freq_hz, p.max_parametric_freq_hz
+    lo, hi = window_bounds(p.start_parametric_freq_hz, p.end_parametric_freq_hz)
     assert lo + 0.15 * (hi - lo) <= fit["best_parametric_freq_hz"] <= hi - 0.15 * (hi - lo)
     # a loss rate and a coupling rate, both real and positive
     assert fit["best_gamma_hz"] > 0
     assert fit["best_lambda_hz"] > 0
-
-
-def test_parametric_drive_time_refuses_an_inverted_window(session):
-    out = session.run("qubit_parametric_drive_time",
-                      {"targets": ["q0"], "min_parametric_freq_hz": 300e6,
-                       "max_parametric_freq_hz": 50e6}, update="none")
-    assert "inverted" in str(out.get("error"))
 
 
 

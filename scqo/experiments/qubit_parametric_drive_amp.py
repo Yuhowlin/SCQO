@@ -33,7 +33,7 @@ from __future__ import annotations
 from typing import ClassVar
 
 import numpy as np
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from .._scqat import per_qubit_results
 from ..contract import DatasetContract
@@ -45,6 +45,7 @@ from ._capabilities.state_readout import (
     signal_rename,
 )
 from ._sim import iq_from_population, stable_seed
+from ._window import refuse_zero_width, window_bounds
 from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
 from ..experiment import Experiment
@@ -57,27 +58,49 @@ class QubitParametricDriveAmpParameters(TargetSelection, AveragingParameters,
 
     Both windows are ABSOLUTE (volts at the DAC / Hz of the modulation tone),
     not factors or detunings: the parametric tone has no standing knob to be
-    relative to. ``define_sweep`` refuses an empty or inverted window by name —
-    the frequency axis must ascend (scqat's per-slice peak fit mis-fits a
-    descending axis silently).
+    relative to. Each is a ``[start, end]`` pair whose edges may be given in
+    EITHER order — they define the window, not a sweep direction, and the axis
+    is always swept ascending (``_window.py``; scqat's per-slice peak fit
+    mis-fits a descending axis silently). Only a zero-width window is refused.
     """
 
-    min_parametric_amp_v: float = Field(
+    start_parametric_amp_v: float = Field(
         0.0, ge=0.0,
-        description="Lowest parametric-drive amplitude (V at the DAC; the tone rides on "
-                    "the standing idle bias, and the backend refuses past the port rail). "
-                    "0 is the no-drive baseline row.")
-    max_parametric_amp_v: float = Field(
-        0.3, gt=0.0, description="Highest parametric-drive amplitude (V).")
+        description="One edge of the swept parametric-drive amplitude window (V at the "
+                    "DAC; the tone rides on the standing idle bias, and the backend "
+                    "refuses past the port rail). 0 is the no-drive baseline row. The two "
+                    "edges may be given in EITHER order — they define the window, not a "
+                    "sweep direction, and the axis is always swept ascending.")
+    end_parametric_amp_v: float = Field(
+        0.3, ge=0.0,
+        description="The other edge of the amplitude window (V). May be above or below "
+                    "start_parametric_amp_v; only a zero-width window (both edges equal) "
+                    "is refused.")
     num_amp_points: int = Field(21, gt=4, description="Number of amplitude points.")
-    min_parametric_freq_hz: float = Field(
+    start_parametric_freq_hz: float = Field(
         50e6, gt=0,
-        description="Lowest parametric-drive (flux-modulation) frequency (Hz), absolute.")
-    max_parametric_freq_hz: float = Field(
+        description="One edge of the swept parametric-drive (flux-modulation) frequency "
+                    "window (Hz), absolute. The two edges may be given in EITHER order — "
+                    "they define the window, not a sweep direction, and the axis is always "
+                    "swept ascending.")
+    end_parametric_freq_hz: float = Field(
         300e6, gt=0,
-        description="Highest parametric-drive frequency (Hz; the reachable band is the "
-                    "flux line's — the instrument refuses past its bandwidth).")
+        description="The other edge of the frequency window (Hz; the reachable band is the "
+                    "flux line's — the instrument refuses past its bandwidth). May be above "
+                    "or below start_parametric_freq_hz; only a zero-width window is refused.")
     num_freq_points: int = Field(51, gt=4, description="Number of frequency points.")
+
+    @model_validator(mode="after")
+    def _windows_span(self) -> "QubitParametricDriveAmpParameters":
+        refuse_zero_width(
+            self.start_parametric_amp_v, self.end_parametric_amp_v,
+            start_name="start_parametric_amp_v", end_name="end_parametric_amp_v",
+            points_name="num_amp_points", quantity="amplitude")
+        refuse_zero_width(
+            self.start_parametric_freq_hz, self.end_parametric_freq_hz,
+            start_name="start_parametric_freq_hz", end_name="end_parametric_freq_hz",
+            points_name="num_freq_points")
+        return self
     drive_time_ns: int = Field(
         2000, ge=16,
         description="FIXED parametric driving time (ns) — user-given, not a sweep axis. "
@@ -129,23 +152,16 @@ class QubitParametricDriveAmp(Experiment):
 
     def define_sweep(self) -> dict[str, np.ndarray]:
         p = self.params
-        for lo, hi, what in (
-            (p.min_parametric_amp_v, p.max_parametric_amp_v, "parametric_amp_v"),
-            (p.min_parametric_freq_hz, p.max_parametric_freq_hz, "parametric_freq_hz"),
-        ):
-            if not hi > lo:
-                raise ValueError(
-                    f"the {what} window is empty or inverted (min {lo} >= max {hi}); "
-                    f"the axis must ascend — swap the edges or widen the window")
+        # window_bounds is the ONE ordering point: the edges arrive in either
+        # order and every axis leaves ascending. Zero width was already refused
+        # at Parameters construction, so nothing here can raise.
+        amp_lo, amp_hi = window_bounds(p.start_parametric_amp_v, p.end_parametric_amp_v)
+        f_lo, f_hi = window_bounds(p.start_parametric_freq_hz, p.end_parametric_freq_hz)
         return {
             # dict order IS the contract order: amplitude outer, frequency inner
             # (each map row is a spectrum at one drive amplitude).
-            "parametric_amp_v": np.linspace(p.min_parametric_amp_v,
-                                            p.max_parametric_amp_v,
-                                            p.num_amp_points),
-            "parametric_freq_hz": np.linspace(p.min_parametric_freq_hz,
-                                              p.max_parametric_freq_hz,
-                                              p.num_freq_points),
+            "parametric_amp_v": np.linspace(amp_lo, amp_hi, p.num_amp_points),
+            "parametric_freq_hz": np.linspace(f_lo, f_hi, p.num_freq_points),
         }
 
     def simulate(self, coords: dict[str, np.ndarray]) -> dict[str, np.ndarray]:

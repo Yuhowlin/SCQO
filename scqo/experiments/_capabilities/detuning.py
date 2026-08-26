@@ -62,6 +62,13 @@ punchout, where up- and down-sweeps genuinely differ — the door is those two
 
 Only a ZERO-WIDTH window is refused: two identical edges are a typo, not a
 measurement.
+
+THE MECHANISM ITSELF is one level up, in ``.._window`` (``window_bounds`` +
+``refuse_zero_width``): the parametric-drive family carries the same
+either-order rule over absolute volts, absolute Hz and nanoseconds, and none of
+those are detuning frames. The RATIONALE stays here, because it is the argument
+this capability was designed around — ``_window.py`` points back at it rather
+than restating it.
 """
 
 from __future__ import annotations
@@ -70,6 +77,7 @@ import numpy as np
 from pydantic import Field, model_validator
 
 from ...parameters import Parameters
+from .._window import refuse_zero_width, window_bounds
 
 #: the canonical swept-axis name every detuning probe emits, in EITHER frame
 #: (Hz, relative to the frequency the run centers on).
@@ -127,13 +135,10 @@ class DriveDetuningSweepParameters(Parameters):
 
     @model_validator(mode="after")
     def _drive_window_spans(self) -> "DriveDetuningSweepParameters":
-        if self.end_drive_detuning_hz == self.start_drive_detuning_hz:
-            raise ValueError(
-                f"start_drive_detuning_hz and end_drive_detuning_hz are both "
-                f"{self.start_drive_detuning_hz} — a zero-width window measures "
-                f"one frequency num_drive_freq_points times. Give two different "
-                f"edges (either order)."
-            )
+        refuse_zero_width(
+            self.start_drive_detuning_hz, self.end_drive_detuning_hz,
+            start_name="start_drive_detuning_hz", end_name="end_drive_detuning_hz",
+            points_name="num_drive_freq_points")
         return self
 
 
@@ -157,24 +162,11 @@ class ReadoutDetuningSweepParameters(Parameters):
 
     @model_validator(mode="after")
     def _readout_window_spans(self) -> "ReadoutDetuningSweepParameters":
-        if self.end_readout_detuning_hz == self.start_readout_detuning_hz:
-            raise ValueError(
-                f"start_readout_detuning_hz and end_readout_detuning_hz are both "
-                f"{self.start_readout_detuning_hz} — a zero-width window measures "
-                f"one frequency num_readout_freq_points times. Give two different "
-                f"edges (either order)."
-            )
+        refuse_zero_width(
+            self.start_readout_detuning_hz, self.end_readout_detuning_hz,
+            start_name="start_readout_detuning_hz", end_name="end_readout_detuning_hz",
+            points_name="num_readout_freq_points")
         return self
-
-
-def window_bounds(start: float, end: float) -> tuple[float, float]:
-    """The window as ``(low, high)`` — the edges in either order, normalised.
-
-    THE one place the pair is ordered. An estimator asking "did the fitted line
-    land inside the window?" must use this, never a chained ``start <= x <=
-    end``, which is silently always-False on a reversed pair.
-    """
-    return (start, end) if start <= end else (end, start)
 
 
 def _window_sweep(start: float, end: float, num: int) -> dict[str, np.ndarray]:

@@ -31,7 +31,7 @@ from typing import ClassVar
 import numpy as np
 from pydantic import Field
 
-from ._capabilities.detuning import window_bounds
+from ._window import window_bounds
 from ._overlap import OVERLAP_FIELD_DESCS
 from ._sim import stable_seed
 from . import register

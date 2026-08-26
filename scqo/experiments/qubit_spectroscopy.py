@@ -20,9 +20,9 @@ from ..contract import DatasetContract
 from ._capabilities.detuning import (
     DriveDetuningSweepParameters,
     drive_detuning_sweep,
-    window_bounds,
 )
 from ._capabilities.qubit_reset import QubitResetParameters
+from ._window import window_bounds
 from ._sim import stable_seed
 from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result

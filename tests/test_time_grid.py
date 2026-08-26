@@ -158,7 +158,8 @@ def _raw_window(name, p):
     if name == "pair_swap_chevron":
         return p.min_swap_time_ns, p.max_swap_time_ns, p.num_time_points
     if name == "qubit_parametric_drive_time":
-        return p.min_drive_time_ns, p.max_drive_time_ns, p.num_time_points
+        # the one start_/end_ window in this table; its edges take either order
+        return p.start_drive_time_ns, p.end_drive_time_ns, p.num_time_points
     # the flux-swept coherence pair, in EITHER frame: they name their time axis
     # num_wait_points, unlike the plain coherence experiments' num_points
     if name.endswith(("_flux", "_flux_pulse")):
