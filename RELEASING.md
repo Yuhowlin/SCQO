@@ -5,22 +5,47 @@ scqat tag, recorded in [RELEASES.toml](RELEASES.toml). Born from the v0.4.0 less
 tagging only SCQO left the server's checkout-by-tag procedure unable to bring the
 drivers forward, and nobody could tell which repo states belonged together.
 
-## The version rule (0.x)
+## The version rule
 
 One combo number covers the scqo-versioned repos; scqat versions independently on
 its own line under the SAME rule, tied to the combo by the coupling floors.
-**Bump = max severity over the consumed fragments** (each fragment's `kind`):
 
-- As of **v1.0.0** (declared deliberately 2026-08-09 with the v1 driver
-  restructure — this line is the declaration) the full SemVer rule applies:
-  `breaking` → **x+1**, `additive` → **y+1**, `fix` → **z+1**. The 0.x rule
-  (breaking/additive → y+1, all-fix → z+1) is history.
+**A fragment's `kind` and the release digit are two separate judgments**, and
+conflating them is the standing mistake: `kind` says what the change does to
+consumers (and so what the notes owe them), the digit says how far the release
+number moves. **Digit = max severity over the consumed fragments:**
+
+- **x+1 (MAJOR) — ONLY when stored data or the server structure breaks.** The
+  run-folder/dataset layout, a state-file or history-DB schema, the datastore
+  index contract, the structure of `config.toml`/`user.toml`/`cooldowns.toml`, or
+  the install/deployment shape. The test is what the upgrade COSTS: a major is
+  where an operator migrates DATA or a MACHINE, not where they edit a file. Both
+  majors so far pass it — v2.0.0 moved change history off JSONL into per-context
+  `history.sqlite`, and v3.0.0 renamed `f_r0_hz`/`f_r_hz` inside every
+  `physical.json` and `design.toml`.
+- **y+1 (MINOR) — every experiment-level change**, whether its fragment is
+  `additive` or `breaking`. New experiments, and equally a renamed registered
+  experiment, renamed Parameters fields, or renamed catalog fields/knobs: the
+  operator fixes those by editing `parameters.toml`, a campaign plan or a script,
+  and nothing stored has to move. The migration is still real and still MUST be in
+  the notes — that obligation rides the `kind`, never the digit. v3.3.0 is the
+  worked example (a `breaking` fragment, cut minor).
+- **z+1 (PATCH)** — a fix-only cut.
+
+v1.0.0 was declared deliberately 2026-08-09 with the v1 driver restructure; the
+0.x rule (breaking/additive → y+1, all-fix → z+1) is history for the combo line,
+and still governs scqat's own 0.x line.
+
+Fragment `kind`, which drives the notes and the coupling floors:
+
 - **Breaking** is judged against OUR consumers, not just the Python API: an
   existing user artifact (script, campaign plan, parameters.toml,
   config.toml/user.toml, stored state) must change to keep working. That includes
   renamed/removed registered experiment names or Parameters fields, renamed
   catalog fields/knobs, state-file `schema` number bumps, config key changes, and
-  contract/dataset changes that break re-analysis of old runs.
+  contract/dataset changes that break re-analysis of old runs. Only the last
+  three — state-file `schema` bumps, config key changes and contract/dataset
+  changes — reach the MAJOR digit; the two rename groups are minors.
 - **Fix** = behavior-preserving repair or cosmetic change (figure labels,
   annotations, docs). Repairing a BROKEN fit is still `fix` even though numbers
   change — its notes must say re-analysis refreshes old artifacts (run folders

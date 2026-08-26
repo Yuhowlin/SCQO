@@ -61,9 +61,11 @@ venvs are editable installs of them and hardware sessions import them. Hence:
 
 Read every `*.toml` here → cross-check `git log <last-tag>..HEAD` per repo (a
 fragment may be missing — flag it) → pick versions per RELEASING.md's version
-rule — bump = max severity over the fragments (0.x: any breaking/additive → y+1,
-all-fix → z+1; breaking additionally REQUIRES the upgrade action in the notes
-line); `coupling` sets the scqat floor → write the `[vX-Y-Z]` block in
+rule, which is the authority and is NOT restated here: the digit is a separate
+judgment from a fragment's `kind` (MAJOR is reserved for stored-data or
+server-structure breakage; a `breaking` experiment rename is a MINOR), while
+`breaking` ALWAYS obliges the upgrade action in the notes line whatever the digit;
+`coupling` sets the scqat floor → write the `[vX-Y-Z]` block in
 [RELEASES.toml](../RELEASES.toml) from the fragments → `git rm` the consumed
 fragments in the same commit → then follow RELEASING.md steps 1–6 (pyproject bumps
 are PART of the release; tags; editable re-pins).
