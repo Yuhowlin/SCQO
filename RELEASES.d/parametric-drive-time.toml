@@ -1,5 +1,5 @@
 name = "parametric-drive-time"
-repos = { scqat = "8782812", scqo = "bc17701", scqo-qm = "b96724d" }
+repos = { scqat = "1da043e", scqo = "69ec965", scqo-qm = "64675d3" }
 kind = "breaking"
 coupling = """
 scqo needs scqat >= 8782812: qubit_parametric_drive_time is the first orchestrated \
@@ -8,7 +8,9 @@ gives it per-figure isolation (render_figures). Below it the estimator returns a
 plain dict of pre-built figures, so a crash in the pure-fit decoherence_params \
 panel takes SCQO's whole artifact set down with it — the run keeps its data and \
 silently loses every PNG, including the raw-carrying rho11_fits. Silent-failure \
-floor: nothing raises, the figures are simply absent.\
+floor: nothing raises, the figures are simply absent. scqat >= 1da043e is the \
+useful floor in practice — that is where the third figure (rho11_map) and the \
+error-bar y-limit fix land, both cosmetic-only, neither required for import.\
 """
 validated = "offline"
 notes = """
@@ -16,6 +18,26 @@ UPGRADE REQUIRES: the experiment `qubit_parametric_drive` is renamed \
 `qubit_parametric_drive_amp` — update saved parameter files, campaign plans and \
 any `scqo run` scripts naming it. No alias is provided (no-backward-compatibility \
 rule). Old run folders keep the old experiment name and stay findable under it.
+
+UPGRADE REQUIRES: six Parameters fields on the two parametric-drive experiments \
+are renamed to `start_`/`end_` edges. `qubit_parametric_drive_amp`: \
+`min/max_parametric_amp_v` -> `start/end_parametric_amp_v` and \
+`min/max_parametric_freq_hz` -> `start/end_parametric_freq_hz`. \
+`qubit_parametric_drive_time`: `min/max_parametric_freq_hz` -> \
+`start/end_parametric_freq_hz` and `min/max_drive_time_ns` -> \
+`start/end_drive_time_ns`. The edges may now be given in EITHER order — the pair \
+defines the window, not a traversal direction, and the emitted axis is always \
+ascending. Only a zero-width window is refused, and that refusal fires at \
+Parameters construction (a pydantic validator) rather than inside `define_sweep`. \
+Two bounds relaxed with the rename: `end_parametric_amp_v` is `ge=0.0` (was \
+`gt=0.0`) and `end_drive_time_ns` is `ge=16.0` (was `gt=16.0`) — those `gt`s only \
+existed to force max > min, which is the validator's job now.
+
+INTERNAL: `window_bounds` moved from `scqo/experiments/_capabilities/detuning.py` \
+to a new `scqo/experiments/_window.py` (with the zero-width refusal extracted \
+beside it) so a non-detuning carrier can reach the single ordering point. \
+`scqo.experiments._capabilities` no longer re-exports it; import from \
+`scqo.experiments._window`. The design rationale stays in detuning.py.
 
 NEW EXPERIMENT `qubit_parametric_drive_time` (QM only, record-only): the \
 parametric-drive chevron. Fixes `parametric_amp_v` and sweeps \
@@ -38,6 +60,17 @@ passed on a 100 MHz-wide artifact fit 119 MHz away from the planted line. Nothin
 in the fit dict changed shape; only the claim about it, and the test now gates on \
 linewidth. Anyone reading the sign of `best_peak_amplitude` from stored runs \
 should stop.
+
+FIGURES (scqat `parametric_drive_decoherence`, so every consumer sees it): a \
+THIRD figure `rho11_map` — the raw 2-D chevron, driving frequency x driving time \
+coloured by population, pinned to a [0, 1] colour scale when the data really is a \
+population and autoscaled with a "NOT a population" title when it is not. It is \
+listed first, being the one figure that draws whether or not any fit converged. \
+Separately, the gamma / lambda / |Delta| panels now scale to their VALUES: an \
+abnormal fit's error bar used to set the y-limits and flatten every real point, \
+because matplotlib counts the bar caps as data. The bars are still drawn and \
+simply clip. Old runs replot with the new figures from their saved plotdata.nc \
+with no re-fit.
 
 STILL OWED (hardware): both parametric-drive shells are offline-only. \
 `qubit_parametric_drive_amp` carries forward the population run owed since \
