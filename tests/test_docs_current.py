@@ -5,6 +5,11 @@ experiments by the v3.1.0 cut - it was missing both cryoscopes, both broadband
 scans, both qc_n_* calibrations and `qubit_ramsey_phasor`, the flagship feature
 of that same release. The block is generated now; this test is what keeps it
 that way, so a new @register cannot land with the docs left behind.
+
+The second block is the experiment -> estimator map. It is generated for the
+same reason and judged separately: `test_one_estimator_per_experiment.py` owns
+whether the BINDINGS conform, this file only owns whether the doc still shows
+what the code does.
 """
 
 from __future__ import annotations
@@ -33,12 +38,14 @@ def update_docs():
     return _load_update_docs()
 
 
-def test_experiment_census_is_current(update_docs):
-    """Every registered experiment is listed, and nothing retired lingers."""
+@pytest.mark.parametrize("block", ["experiments", "estimator-map"])
+def test_generated_block_is_current(update_docs, block):
+    """Every registered experiment is listed, nothing retired lingers, and the
+    estimator map shows the bindings the code actually makes."""
     text = update_docs.CLAUDE_MD.read_text(encoding="utf-8")
-    wanted = update_docs.render_block(update_docs.experiment_names())
-    assert update_docs.current_block(text) == wanted, (
-        "CLAUDE.md's experiment census is stale.\n"
+    wanted = update_docs.RENDERERS[block]()
+    assert update_docs.current_block(text, block) == wanted, (
+        f"CLAUDE.md's {block!r} block is stale.\n"
         "Run `python scripts/update_docs.py` and commit the result."
     )
 

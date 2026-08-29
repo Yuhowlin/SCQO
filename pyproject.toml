@@ -48,8 +48,8 @@ dependencies = [
 # quam, no qualibrate, no qblox-scheduler). That is what lets both LCHQMDriver
 # and LCHQBDriver depend on scqo without dragging each other's hardware stack in.
 # scqat is the one allowed non-instrument dependency: it is the single estimator
-# engine (one estimator per probing method), so SCQO never fits inline. lmfit is
-# now a transitive dependency via scqat.
+# engine (one estimator per experiment, one experiment per estimator), so SCQO
+# never fits inline. lmfit is now a transitive dependency via scqat.
 
 [project.scripts]
 scqo = "scqo.cli.__main__:main"  # the lab command; re-run `uv pip install -e` after upgrading

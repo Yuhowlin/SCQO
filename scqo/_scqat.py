@@ -1,9 +1,13 @@
 """Bridge to the shared analysis engine (scqat).
 
-SCQO does not fit anything itself: every experiment's ``estimate()`` delegates to a
-single scqat estimator (one estimator per probing method). This module holds the one
-piece both share — the per-qubit split + ``analyze`` loop — and is the only place
-scqat is imported.
+SCQO does not fit anything itself: every experiment's ``estimate()`` delegates to
+EXACTLY ONE scqat estimator, and that estimator is bound by exactly one experiment —
+the binding is 1:1 in both directions, because an estimator is keyed by a READING (a
+dataset shape AND the model fitted to it) and a binding is therefore a claim that this
+model describes this signal. Share math through ``scqat.tools`` instead; the rule and
+its decision procedure are in ``CLAUDE.md`` -> Terminology -> The estimator binding.
+This module holds the one piece every experiment shares — the per-qubit split +
+``analyze`` loop — and is the only place scqat is imported.
 
 scqat is imported **lazily** (inside the function) so ``import scqo`` stays light and
 free of the analysis stack; the import only happens when analysis actually runs.

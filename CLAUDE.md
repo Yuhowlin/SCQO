@@ -9,15 +9,70 @@ run → estimate → extract → decide next).
 ## Terminology (canonical vocabulary — single source of truth)
 The word **"protocol" is retired**; use these names across all repos.
 
-- **Experiment** — the registered, instrument-agnostic unit SCQO catalogs and dispatches to a backend (QM or Qblox). Owns its **Parameters**; binds a probe + an estimator.
+- **Experiment** — the registered, instrument-agnostic unit SCQO catalogs and dispatches to a backend (QM or Qblox). Owns its **Parameters**; binds a probe + **exactly one** estimator.
 - **probe** — the acquisition half: build the instrument sequence (QM program / Qblox schedule) and run it → **Dataset** (xarray). On the simulated backend the probe runs the **model** forward to synthesize data ("simulation = virtual experiment").
-- **estimator** — the analysis half: fit the Dataset to a **model** → **Result** (extracted model parameters). Implemented in scqat (`scqat.estimators`); its orchestrator method is `analyze()`.
+- **estimator** — the analysis half: fit the Dataset to a **model** → **Result** (extracted model parameters). Implemented in scqat (`scqat.estimators`); its orchestrator method is `analyze()`. Keyed by a **reading** — a dataset shape AND the model fitted to it — and bound by exactly ONE experiment (see *The estimator binding*).
 - **tool** / **fitter** — reusable helpers an estimator imports (`scqat.tools`); a fitter is the common case. Many-to-many; **tools never import estimators**.
 - **model** — the physics that predicts the signal; used *forward* by a simulated probe and *inverse* by an estimator. SCQ.jl builds/simulates models; scqat fits them.
 - **Parameters / Result / Backend / Session** — input schema / extracted output / instrument adapter (QM, Qblox, Simulated) / the orchestrator entry point (`catalog()` / `run()` / `device_state()`).
 - **campaign** — an ordered list of experiment STEPS walked N times (`CampaignPlan` / `Session.run_campaign()` / `campaign_id`). OUTER repetition: every (repeat, step) is a full `run()` with its own folder, dataset, fit and TIMESTAMP, stamped `campaign`/`repeat_idx`/`step_idx`; the campaign owns only the plan, the cadence, the stop conditions and the per-(experiment, target, quantity) statistics. Repeating ONE experiment is the degenerate 1-step case. Do NOT call it a *repetition* (scqat's `repetition_data` splitter, the drivers' HW-averaging loop and `pulse_repetitions` already own that word) nor a *series* (the /trends time series).
 
 The scqo stack uses this vocabulary throughout — **scqat** (`estimators/`, `tools/`, `BaseEstimator`), **SCQO** (`Experiment`, `scqo.experiments`, `probe()`, `estimate()`), and the drivers **scqo-qblox** + **scqo-qm** (`probe()`-only experiments). scqat's estimator keeps its own orchestrator method `analyze()` (a different layer). scqo-qm's vendored official qualibrate nodes keep qualibrate's own `node` framework and never import scqo (its scqo surface is the `scqo_qm` package). (QBLOX_training documents Qblox's *own* `Experiment` ABC — a different class from this `Experiment`.)
+
+### The estimator binding (1:1, in both directions)
+
+An **Experiment** binds exactly one estimator, and an estimator is bound by exactly one
+experiment. Four layers, four independent keys:
+
+| Layer | Keyed by | Changes when |
+|---|---|---|
+| `probe()` | the instrument sequence | the pulses change |
+| `DatasetContract` | dims + variables + `target_kinds` | the SHAPE of what comes back changes |
+| **estimator** (scqat) | (contract, **model**) — a READING | the MATH changes |
+| `estimate()` / `update()` | question + writeback — an INTENT | the QUESTION changes |
+
+A binding is a claim that THIS model describes THIS signal. Two experiments binding one
+estimator therefore assert the same physics — and if they really do, they are one
+experiment. Share math through `scqat.tools` and presentation through a `_`-prefixed module
+under `scqat/estimators/`; never through a second binding.
+
+**Two things that look like evidence for sharing and are not:**
+
+1. **A contract is a shape check, never a semantic one.** `DatasetContract.validate()`
+   checks dims, coordinate names and variables; it asserts nothing about meaning.
+   `qubit_spectroscopy` and `resonator_spectroscopy` both declare
+   `sweeps=("detuning_hz",), sweep_units=("Hz",), variables=("I","Q")` — and even the axis
+   NAME agrees while the frame differs, because `DETUNING_AXIS` is shared by both detuning
+   mixins and the frame lives in the Parameters field names (`start_drive_detuning_hz` vs
+   `start_readout_detuning_hz`). Likewise `qubit_echo_flux_pulse` and
+   `qubit_relaxation_flux_pulse` share `("flux_bias_v","wait_time_ns")` byte-for-byte and
+   correctly have their own estimators.
+2. **A shared fit routine is never a shared model.** `qubit_spectroscopy_overlap`'s line is
+   AC-Stark shifted by the live readout tone — different physics — and one Lorentzian fits
+   both only because a shifted Lorentzian is still a Lorentzian. Reusing an estimator on
+   that basis binds a physics claim to a numerical coincidence, which goes silent exactly
+   when it stops holding.
+
+**Deciding, first match wins:**
+
+0. Do the axes MEAN the same thing — not "are they spelled the same"? If not: two
+   experiments, two estimators, however identical the contracts look.
+1. Does the SHAPE differ (dims / variables / units / `target_kinds`)? → two experiments,
+   two estimators; share the probe in a driver `_module.py` and the math in `scqat.tools`.
+   Injecting an axis name into a shared estimator base class is the anti-pattern here.
+2. Same shape and meaning, different math, SAME quantities? → ONE experiment, multi-method
+   `method=` strategies (scqat's CLAUDE.md → *Multi-method estimators*).
+3. Same shape and meaning, different math, DIFFERENT quantities? → two experiments, two
+   estimators over a shared `tools/` reduction.
+4. Same shape, meaning AND model, different question or writeback? → ONE experiment, with a
+   Parameters field selecting the question; a value a backend cannot realize is REFUSED BY
+   NAME, as `reset_method` already does. If the two genuinely cannot be one experiment —
+   incompatible `target_kinds`, `required_operations`, `run()` structure or writeback — then
+   the reading differs after all and each gets its own estimator.
+
+The tree does not yet conform. The generated map under *The registered experiments* marks
+every shared binding, and `tests/test_one_estimator_per_experiment.py` carries them with
+each one's migration. That list may only shrink.
 
 ## Where the two backends started (historical)
 
@@ -144,7 +199,9 @@ scqo/
                   #   backend is deterministic, so an OFFLINE campaign reports
                   #   std == 0.0. [writeback] (stat mean|median, min_n) is the
                   #   aggregate-writeback policy consumed at finalize.
-  contract.py     # DatasetContract per probing method: the explicit probe <-> estimator API
+  contract.py     # DatasetContract per probing method: the explicit probe <-> estimator
+                  #   API. A SHAPE check only - it asserts nothing about MEANING, so two
+                  #   identical contracts may still be two readings (see Terminology)
   backend.py      # Backend ABC: .device + .acquire(experiment) -> xarray.Dataset
   experiment.py   # Experiment ABC: physics half (define_sweep/simulate/estimate/update)
                   #   + backend half (probe); kind-based gating (target_kinds) +
@@ -310,6 +367,59 @@ qubit_parametric_drive_time         qubit_sqrb                          single_s
 ```
 <!-- END generated: experiments -->
 
+### Which estimator each experiment binds
+
+<!-- BEGIN generated: estimator-map -->
+**GENERATED** - refresh with `python scripts/update_docs.py`. Which scqat estimator
+each experiment binds, resolved through the MRO (so an inherited `estimate()` is
+attributed to the estimator it actually runs). The rule is ONE estimator per
+experiment and ONE experiment per estimator - see **Terminology**. A row naming two
+experiments, or a name in the trailing line, is a KNOWN VIOLATION carried in
+`tests/test_one_estimator_per_experiment.py`; that list may only shrink.
+
+| scqat estimator | experiments |
+|---|---|
+| `broadband_qubit_spectroscopy` | broadband_qubit_spectroscopy |
+| `broadband_resonator_spectroscopy` | broadband_resonator_spectroscopy |
+| `pair_swap_chevron` | pair_swap_chevron |
+| `pair_swap_flux_map` | pair_swap_flux_map |
+| `parametric_drive_decoherence` | qubit_parametric_drive_time |
+| `parametric_drive_resonance` | qubit_parametric_drive_amp |
+| `parity_switch_continuous` | qubit_parity_switch_continuous |
+| `parity_switch_discrete` | qubit_parity_switch_discrete |
+| `power_rabi` | qubit_power_rabi |
+| `qc_n_stark_amp` | qc_n_stark_amp |
+| `qc_n_swap_amp` | qc_n_swap_amp |
+| `qubit_deterministic_benchmarking` | qubit_deterministic_benchmarking |
+| `qubit_drag_alternating` | qubit_drag_alternating |
+| `qubit_drag_equator` | qubit_drag_equator |
+| `qubit_echo` | qubit_echo |
+| `qubit_echo_flux` | qubit_echo_flux_pulse |
+| `qubit_flux_arch` | qubit_spectroscopy_flux_pulse |
+| `qubit_relaxation` | qubit_relaxation |
+| `qubit_relaxation_flux` | qubit_relaxation_flux_pulse |
+| `qubit_spectroscopy` | qubit_spectroscopy, qubit_spectroscopy_overlap **(shared)** |
+| `qubit_sqrb` | qubit_sqrb |
+| `qubit_stark_phase_echo` | qubit_stark_phase_echo |
+| `qubit_t1_ade` | qubit_t1_ade |
+| `qubit_t1_bayesian` | qubit_t1_bayesian |
+| `qubit_tomography` | qubit_tomography |
+| `ramsey` | qubit_ramsey |
+| `ramsey_cryoscope` | qubit_ramsey_cryoscope |
+| `ramsey_phasor` | qubit_ramsey_phasor |
+| `readout_fidelity` | readout_frequency, readout_power **(shared)** |
+| `resonator_spectroscopy` | resonator_spectroscopy |
+| `resonator_spectroscopy_flux` | resonator_spectroscopy_flux |
+| `resonator_spectroscopy_power` | resonator_spectroscopy_power_amp, resonator_spectroscopy_power_chain **(shared)** |
+| `spectroscopy_cryoscope` | qubit_spectroscopy_cryoscope |
+| `state_discrimination` | qubit_thermal_population, single_shot_readout, single_shot_readout_gef **(shared)** |
+| `xyz_delay` | qubit_xyz_delay |
+| `zz_interaction` | pair_zz_coupler |
+
+Binds no estimator (fits inline - also a violation): `qubit_pi_pulse_error`.
+Shared bindings: 4 - `qubit_spectroscopy`, `readout_fidelity`, `resonator_spectroscopy_power`, `state_discrimination`.
+<!-- END generated: estimator-map -->
+
 ### Datastore (the "find my measurement data" layer)
 `Session(backend, data_root=...)` persists **every** run — raw dataset (`dataset.nc`),
 parameters/result/record JSONs, device before/after snapshots, and the scqat artifacts
@@ -438,7 +548,10 @@ Three roles, distinguished by ACCESS rather than seniority:
    a fork PR means the reviewer. Checklist, which is also what a PR is reviewed against:
    - [ ] `DatasetContract` declared; probe output validated against it on the real instrument.
    - [ ] `simulate()` implemented -> offline end-to-end test in `tests/`.
-   - [ ] Estimator lives in scqat with metadata (+ figures) outputs.
+   - [ ] Estimator lives in scqat with metadata (+ figures) outputs, and is bound by
+         THIS experiment only. If an existing estimator looks like it fits, work the
+         decision procedure in *The estimator binding* — the answer is a merge or a
+         `tools/` reduction, never a second binding.
    - [ ] `update()` writes only catalogued fields (extend the kind catalog in `catalog.py` first if needed).
    - [ ] Ran repeatedly with findable data; results reviewed via `find_runs`. State plainly
          whether that was on hardware or offline — a PR records this as
@@ -446,8 +559,8 @@ Three roles, distinguished by ACCESS rather than seniority:
    - [ ] `description` is catalog-quality (an AI reads it to decide).
    - [ ] Physics half in `scqo/experiments/`; driver `probe()` subclasses registered under
          the core `scqo.experiments` group (then directly runnable via `scqo run <name>`).
-   - [ ] `python scripts/update_docs.py` re-run, so the experiment census in this file
-         includes it — `tests/test_docs_current.py` fails otherwise.
+   - [ ] `python scripts/update_docs.py` re-run, so this file's experiment census AND
+         estimator map include it — `tests/test_docs_current.py` fails otherwise.
 
 **`scqo run <name>` is the single CLI entry point** — never add wrappers, launcher stubs,
 or per-command shims. `scqo campaign <plan.toml>` is not an exception: it is a different

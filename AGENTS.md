@@ -84,8 +84,8 @@ proved the whole suite.
 1. Subclass the backend-free experiment in `scqo/experiments/`; `@register` it.
 2. A driver implements only `probe()`. Parameters, Result, `estimate`, `simulate` and
    `update` are inherited.
-3. Run `python scripts/update_docs.py` so the census in `CLAUDE.md` includes it —
-   `tests/test_docs_current.py` fails otherwise.
+3. Run `python scripts/update_docs.py` so both generated blocks in `CLAUDE.md` — the
+   census and the estimator map — include it; `tests/test_docs_current.py` fails otherwise.
 4. Work the promotion checklist in [CLAUDE.md](CLAUDE.md) (*Experiment governance*).
 
 ## What you can and cannot verify
@@ -105,7 +105,8 @@ failure:
 
 | Topic | Why it matters |
 |---|---|
-| **Terminology** | `Experiment` = probe + estimator; "protocol" is retired. Consistent across all four repos. |
+| **Terminology** | `Experiment` = probe + **exactly one** estimator, and an estimator is bound by exactly one experiment; "protocol" is retired. Consistent across all four repos. |
+| **The estimator binding** | Why that 1:1 is a claim about MODELS, not filing — plus the decision procedure for whether two candidate experiments are really one. Share math through `scqat.tools`, never a second binding. |
 | **The placement rule** | Decides whether a quantity is a per-run parameter, a `fact`, a `knob` or a `monitor` — i.e. which store owns it. Full text: TUTORIAL §10. |
 | **The readout schema** | `state` is always a per-shot integer level, `population` an averaged marginal, `joint_population` the multi-qubit joint. Never blur them. Full text: TUTORIAL §11. |
 | **How a driver adds an experiment** | Subclass, implement only `probe()`, `@register`. |
