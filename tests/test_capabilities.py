@@ -146,6 +146,11 @@ EXPECTED_CAPABILITIES = {
     "pair_swap_flux_map": ["qubit_reset"],
     "qc_n_stark_amp": ["qubit_reset"],
     "qc_n_swap_amp": ["qubit_reset"],
+    # the Trotter chain: qubit_reset only. Its Stark compensation is a fixed
+    # per-qubit FACTOR of the stark operation's baked amplitude, not a swept
+    # window of a target knob, so it carries no `amplitude` capability (same
+    # reasoning as qc_n_stark_amp); the only swept axis is the round count.
+    "qc_unidirectional_trotter": ["qubit_reset"],
     "single_shot_readout": ["qubit_reset"],
     "single_shot_readout_gef": ["qubit_reset"],
     "qubit_thermal_population": ["qubit_reset"],

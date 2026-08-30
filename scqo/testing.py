@@ -28,7 +28,8 @@ _FR_STEP = 0.1e9
 
 
 def demo_components(qubits: tuple[str, ...] = ("q0", "q1"), *,
-                    pair: bool = True, tunable: bool = False) -> Roster:
+                    pair: bool = True, tunable: bool = False,
+                    chain: bool = False) -> Roster:
     """The chipT-shaped demo roster in the greenfield schema: one
     multiplexed feedline, a dedicated drive wire each, and (default) a
     qubit_pair over the first two qubits — so every core test exercises
@@ -36,24 +37,35 @@ def demo_components(qubits: tuple[str, ...] = ("q0", "q1"), *,
 
     ``tunable=True`` is the flux-demo variant: flux_transmon qubits with a
     z wire each, plus a tracked coupler mode with its own flux wire on the
-    pair — the substrate for the flux/pair experiment tests."""
+    pair — the substrate for the flux/pair experiment tests.
+
+    ``chain=True`` mints a pair over EVERY consecutive qubit instead of just
+    the first two (q0_q1, q1_q2, …), so a multi-pair experiment — a swap
+    chain sharing a relay member — has a device to run on offline. One pair
+    cannot express that, and reusing the same pair twice would put a
+    physically impossible chain in the tests."""
     kind = "flux_transmon" if tunable else "transmon"
     lines = [f"[modes.{q}]\nkind = \"{kind}\"" for q in qubits]
     if pair and len(qubits) >= 2:
-        a, b = sorted(qubits[:2])
-        coupler = ""
-        if tunable:
-            lines.append(f"[modes.{a}_{b}_c]\nkind = \"flux_transmon\"")
-            coupler = f"coupler    = \"{a}_{b}_c\"\n"
-        lines.append(
-            f"[composites.{a}_{b}]\n"
-            f"kind       = \"qubit_pair\"\n"
-            f"high       = \"{qubits[1]}\"\n"     # design f grows with index
-            f"low        = \"{qubits[0]}\"\n"
-            + coupler +
-            f"operations = [\"iswap\"]")
-        if tunable:
-            lines.append(f"[lines.zc]\nflux = [\"{a}_{b}_c\"]")
+        spans = ([(i, i + 1) for i in range(len(qubits) - 1)] if chain
+                 else [(0, 1)])
+        for lo, hi in spans:
+            a, b = sorted((qubits[lo], qubits[hi]))
+            coupler = ""
+            if tunable:
+                lines.append(f"[modes.{a}_{b}_c]\nkind = \"flux_transmon\"")
+                coupler = f"coupler    = \"{a}_{b}_c\"\n"
+            lines.append(
+                f"[composites.{a}_{b}]\n"
+                f"kind       = \"qubit_pair\"\n"
+                f"high       = \"{qubits[hi]}\"\n"   # design f grows with index
+                f"low        = \"{qubits[lo]}\"\n"
+                + coupler +
+                f"operations = [\"iswap\"]")
+            if tunable:
+                # one flux wire PER coupler: a shared line would mint both
+                # couplers' channels onto one wire, which no chip is wired as
+                lines.append(f"[lines.{a}_{b}_zc]\nflux = [\"{a}_{b}_c\"]")
     readout = ", ".join(f'"{q}"' for q in qubits)
     lines.append(f"[lines.fl]\nreadout = [{readout}]")
     lines.extend(f"[lines.{q}_xyl]\ndrive = [\"{q}\"]" for q in qubits)
@@ -120,11 +132,11 @@ def demo_vendor_state(roster: Roster, design: Design) -> dict:
 
 
 def demo_device(qubits: tuple[str, ...] = ("q0", "q1"), *, pair: bool = True,
-                tunable: bool = False):
+                tunable: bool = False, chain: bool = False):
     """The whole offline device in one call: ``(roster, design, vendor)``
     with the vendor tree seeded from the datasheet — what a test needs to
     build a Session against the simulated backend."""
-    roster = demo_components(qubits, pair=pair, tunable=tunable)
+    roster = demo_components(qubits, pair=pair, tunable=tunable, chain=chain)
     design = demo_design(roster, qubits)
     return roster, design, InMemoryDevice(roster,
                                           demo_vendor_state(roster, design))

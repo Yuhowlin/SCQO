@@ -111,8 +111,13 @@ def _demo_session(cfg: LabConfig, setup_name: str = "",
     if cfg.device is not None and cfg.data_root is not None:
         roster, design = _load_device(cfg)
     else:
-        roster = demo_components(tunable=True)
-        design = demo_design(roster)
+        # A three-qubit CHAIN (q0-q1-q2, a pair over each consecutive couple):
+        # practice mode has to be able to run every catalogued experiment, and
+        # the chain family swaps on two pairs that share a relay member — which
+        # a single-pair device cannot express.
+        demo_qubits = ("q0", "q1", "q2")
+        roster = demo_components(demo_qubits, tunable=True, chain=True)
+        design = demo_design(roster, demo_qubits)
     backend: Backend = SimulatedBackend(
         InMemoryDevice(roster, demo_vendor_state(roster, design)))
     return make_session(backend, cfg, roster, backend_label="simulated",

@@ -4,6 +4,7 @@ and the re-homed writes of the load-bearing families land on the right
 entities."""
 
 import math
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -27,7 +28,8 @@ from scqo.testing import (
 #: zero suggestions is their CORRECT outcome.
 RECORD_ONLY = {"qubit_sqrb", "qubit_tomography", "qubit_echo_flux_pulse",
                "qubit_relaxation_flux_pulse", "pair_swap_chevron", "pair_swap_flux_map",
-               "qc_n_swap_amp", "qc_n_stark_amp", "qubit_t1_ade", "qubit_t1_bayesian",
+               "qc_n_swap_amp", "qc_n_stark_amp", "qc_unidirectional_trotter",
+               "qubit_t1_ade", "qubit_t1_bayesian",
                "broadband_resonator_spectroscopy", "broadband_qubit_spectroscopy",
                "qubit_parametric_drive_amp", "qubit_parametric_drive_time"}
 
@@ -58,15 +60,30 @@ PARAMETRIC_TIME_DEFAULTS = {"qubit_parametric_drive_time": {
     "num_freq_points": 9, "start_parametric_freq_hz": 190e6,
     "end_parametric_freq_hz": 206e6, "num_time_points": 61}}
 
+#: the module fixture's device is a THREE-qubit chain (q0-q1-q2) with a pair
+#: over each consecutive couple, because qc_unidirectional_trotter swaps on two
+#: pairs that share a relay member and one pair cannot express that. Reusing the
+#: same pair twice would run, but it would put a physically impossible chain in
+#: the suite; extending the demo device is the honest fix.
+CHAIN_QUBITS = ("q0", "q1", "q2")
+
+#: the chain topology on that device — q0 (source) -> q1 (relay, reset) -> q2
+#: (sink). Supplied as defaults because targets are the only params the
+#: every-experiment sweep passes.
+TROTTER_DEFAULTS = {"qc_unidirectional_trotter": {
+    "first_pair": "q0_q1", "second_pair": "q1_q2", "reset_qubit": "q1",
+    "compensation_amps": {"q0": 0.3, "q1": 0.2, "q2": 0.25}}}
+
 #: what the module fixture runs on; _fresh_parity_session keeps the parity-only set.
-OFFLINE_DEFAULTS = {**PARITY_DEFAULTS, **PARAMETRIC_TIME_DEFAULTS}
+OFFLINE_DEFAULTS = {**PARITY_DEFAULTS, **PARAMETRIC_TIME_DEFAULTS,
+                    **TROTTER_DEFAULTS}
 
 
 @pytest.fixture(scope="module")
 def session(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("gf5d")
-    roster = demo_components(tunable=True)
-    design = demo_design(roster)
+    roster = demo_components(CHAIN_QUBITS, tunable=True, chain=True)
+    design = demo_design(roster, CHAIN_QUBITS)
     vendor = InMemoryDevice(roster, demo_vendor_state(roster, design))
     s = Session(SimulatedBackend(vendor), roster, design=design,
                 scqo_dir=tmp / "scqo", data_root=tmp / "data",
@@ -74,13 +91,13 @@ def session(tmp_path_factory):
                 cooldown_id="cd1",
                 parameter_defaults=OFFLINE_DEFAULTS)
     s.set_values({f"{q}_ro.{field}": value
-                  for q in ("q0", "q1")
+                  for q in CHAIN_QUBITS
                   for field, value in REFERENCE_BLOBS.items()})
     # the parity-switch monitors REFUSE without a governed depletion wait (the
     # shot cadence is their telegraph timebase) and a stored parity splitting
     # (their fixed idle). 250 kHz -> idle = 1 / (2 x 250 kHz) = 2000 ns, on-grid.
-    s.set_values({f"{q}_ro.readout_depletion_s": 1e-6 for q in ("q0", "q1")})
-    s.set_values({f"{q}_xy.parity_delta_f_hz": 250e3 for q in ("q0", "q1")})
+    s.set_values({f"{q}_ro.readout_depletion_s": 1e-6 for q in CHAIN_QUBITS})
+    s.set_values({f"{q}_xy.parity_delta_f_hz": 250e3 for q in CHAIN_QUBITS})
     return s
 
 
@@ -93,22 +110,32 @@ CORE = sorted(obj.name for obj in map(lambda n: getattr(registry, n), registry._
               if isinstance(obj, type) and issubclass(obj, Experiment))
 
 
+#: experiments whose targets are not ONE q0-shaped entity: the chain family
+#: initializes and reads out every chain qubit inside a single circuit, so the
+#: whole chain has to be selected at once.
+CHAIN_TARGETS = {"qc_unidirectional_trotter": list(CHAIN_QUBITS)}
+
+
+def _targets_for(name):
+    """The offline device's targets for one experiment — a pair, a chain, or q0."""
+    if name in CHAIN_TARGETS:
+        return list(CHAIN_TARGETS[name])
+    return ["q0_q1"] if registry.get(name).target_kinds == ("qubit_pair",) else ["q0"]
+
+
 @pytest.mark.parametrize("name", CORE)
 def test_every_experiment_runs_clean(session, name):
-    cls = registry.get(name)
-    target = "q0_q1" if cls.target_kinds == ("qubit_pair",) else "q0"
-    out = session.run(name, {"targets": [target]}, update="none")
+    out = session.run(name, {"targets": _targets_for(name)}, update="none")
     assert out.get("error") is None, out.get("error")
 
 
 def _suggest(session, name, target="q0"):
-    out = session.run(name, {"targets": [target]})
+    targets = [target] if isinstance(target, str) else list(target)
+    out = session.run(name, {"targets": targets})
     assert out.get("error") is None, out.get("error")
     return {(s["entity"], s["field"]) for s in out["suggestions"]}
 
 
-def _pair_target(name):
-    return "q0_q1" if registry.get(name).target_kinds == ("qubit_pair",) else "q0"
 
 
 @pytest.mark.parametrize("name", sorted(RECORD_ONLY))
@@ -117,7 +144,7 @@ def test_record_only_experiments_propose_nothing(session, name):
     just documenting it: a record-only diagnostic that grows an update() must
     either leave the set or fail here."""
     assert name in CORE, f"{name} is not in the core catalog"
-    assert _suggest(session, name, target=_pair_target(name)) == set()
+    assert _suggest(session, name, target=_targets_for(name)) == set()
 
 
 def test_parametric_drive_amp_finds_the_seeded_resonance(session):
@@ -980,6 +1007,89 @@ def test_shaped_flux_pulse_refuses_a_duration_override():
     with pytest.raises(ValueError, match="native length"):
         PairSwapFluxMapParameters(targets=["q0_q1"], swap_time_ns=40.0,
                                   flux_pulse_shape="flattop_cosine")
+
+
+def _trotter(session, **params):
+    out = session.run("qc_unidirectional_trotter",
+                      {"targets": list(CHAIN_QUBITS), **params}, update="none")
+    assert out.get("error") is None, out.get("error")
+    return out
+
+
+def test_unidirectional_trotter_transports_source_to_sink(session):
+    """The whole point of the sequence, read off the three summaries: the source
+    empties, the sink shows a transient, and the relay stays near |0> because it
+    is reset every round. The sink does NOT approach 1 — the second swap also
+    drains it into the relay — so this pins the SHAPE, not a full transfer."""
+    fit = _trotter(session, max_rounds=20)["fit"]
+    source, relay, sink = CHAIN_QUBITS
+    assert fit[source]["p_initial"] > 0.9          # the prep landed
+    assert fit[source]["p_final"] < 0.1            # ...and drained away
+    assert fit[relay]["p_max"] < 0.1, "the relay is dumped every round"
+    assert fit[sink]["p_initial"] < 0.05           # nothing there before the rounds
+    assert fit[sink]["p_max"] > 0.05               # ...and something arrives
+    assert fit[sink]["n_at_max"] > 0               # transport takes rounds
+    assert fit[sink]["p_max"] == fit[source]["sink_p_max"], (
+        "the chain verdict number is repeated on every row")
+
+
+def test_unidirectional_trotter_round_axis_starts_at_the_bare_prep(session):
+    """N=0 is the prep-only baseline (the qc_* family convention), so the axis
+    carries max_rounds + 1 points and the first one is the un-Trottered state."""
+    out = _trotter(session, max_rounds=6)
+    assert out["fit"][CHAIN_QUBITS[0]]["n_round_count"] == 7.0
+    ds = session.datastore.open_dataset(out["run_id"])
+    assert list(ds["round_count"].values) == list(range(7))
+
+
+def test_unidirectional_trotter_shot_mode_reconstructs_the_joint(session):
+    """Shot mode keeps per-qubit levels from the SAME shot, so the joint chain
+    distribution comes for free — a second figure, no second acquisition."""
+    out = _trotter(session, max_rounds=8, num_averages=200, readout_mode="shot")
+    ds = session.datastore.open_dataset(out["run_id"])
+    assert "state" in ds.data_vars and ds.sizes["shot_idx"] == 200
+    figures = {Path(p).name for p in session.load_run(out["run_id"])["figures"]}
+    assert "qc_unidirectional_trotter.png" in figures
+    assert "qc_unidirectional_trotter_joint.png" in figures
+    # average mode acquires no shots, so it gets the transport figure only
+    plain = _trotter(session, max_rounds=8)
+    plain_figs = {Path(p).name for p in session.load_run(plain["run_id"])["figures"]}
+    assert plain_figs == {"qc_unidirectional_trotter.png"}
+    # both modes see the same physics
+    for qubit in CHAIN_QUBITS:
+        assert out["fit"][qubit]["p_max"] == pytest.approx(
+            plain["fit"][qubit]["p_max"], abs=0.06)
+
+
+BROKEN_CHAINS = [
+    ({"first_pair": "q0_q1", "second_pair": "q0_q1"}, "share 2 member"),
+    ({"first_pair": "q0_q1", "second_pair": "nope"}, "not in the roster"),
+    ({"first_pair": "q0", "second_pair": "q1_q2"}, "not a qubit_pair"),
+    # the channel-existence gates: a resonator mode has neither a z line to
+    # play the parametric reset on, nor an xy line for a Stark tone; the tracked
+    # coupler has flux but no drive, so it isolates the second gate alone.
+    ({"reset_qubit": "q0_res"}, "no flux channel"),
+    ({"compensation_amps": {"q0_q1_c": 0.2}}, "no drive channel"),
+]
+
+
+@pytest.mark.parametrize("override,message", BROKEN_CHAINS)
+def test_unidirectional_trotter_refuses_a_broken_chain(session, override, message):
+    """The topology gate runs in define_sweep — the earliest hook that sees both
+    the roster and the params — so a mis-wired chain costs no instrument time."""
+    out = session.run("qc_unidirectional_trotter",
+                      {"targets": list(CHAIN_QUBITS), **override}, update="none")
+    assert message in (out.get("error") or ""), out.get("error")
+
+
+def test_unidirectional_trotter_needs_the_sink_to_judge_transport(session):
+    """A run that does not read the sink out cannot see transport, so it reports
+    FAILED rather than passing on the qubits it did measure."""
+    out = session.run("qc_unidirectional_trotter",
+                      {"targets": ["q0", "q1"]}, update="none")
+    assert out.get("error") is None, out.get("error")
+    assert set(out["outcomes"].values()) == {"failed"}
+    assert math.isnan(out["fit"]["q0"]["sink_p_max"])
 
 
 READOUT_SWEEPS = [

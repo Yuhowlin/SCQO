@@ -287,26 +287,27 @@ tests/test_campaign.py          # the pure aggregator + run_campaign orchestrati
 ### The registered experiments
 
 <!-- BEGIN generated: experiments -->
-**42 registered experiments.** This list is GENERATED from the registry
+**43 registered experiments.** This list is GENERATED from the registry
 (`scqo.catalog()`) - refresh it with `python scripts/update_docs.py`. Descriptions are
 catalog-quality and live in the registry, never here: read one with
 `scqo run <name> --help`, or browse by capability with `scqo run --capability <name>`.
 
 ```
-broadband_qubit_spectroscopy        qubit_parity_switch_continuous      qubit_stark_phase_echo
-broadband_resonator_spectroscopy    qubit_parity_switch_discrete        qubit_t1_ade
-pair_swap_chevron                   qubit_pi_pulse_error                qubit_t1_bayesian
-pair_swap_flux_map                  qubit_power_rabi                    qubit_thermal_population
-pair_zz_coupler                     qubit_ramsey                        qubit_tomography
-qc_n_stark_amp                      qubit_ramsey_cryoscope              qubit_xyz_delay
-qc_n_swap_amp                       qubit_ramsey_phasor                 readout_frequency
-qubit_deterministic_benchmarking    qubit_relaxation                    readout_power
-qubit_drag_alternating              qubit_relaxation_flux_pulse         resonator_spectroscopy
-qubit_drag_equator                  qubit_spectroscopy                  resonator_spectroscopy_flux
-qubit_echo                          qubit_spectroscopy_cryoscope        resonator_spectroscopy_power_amp
-qubit_echo_flux_pulse               qubit_spectroscopy_flux_pulse       resonator_spectroscopy_power_chain
-qubit_parametric_drive_amp          qubit_spectroscopy_overlap          single_shot_readout
-qubit_parametric_drive_time         qubit_sqrb                          single_shot_readout_gef
+broadband_qubit_spectroscopy        qubit_parity_switch_continuous      qubit_t1_ade
+broadband_resonator_spectroscopy    qubit_parity_switch_discrete        qubit_t1_bayesian
+pair_swap_chevron                   qubit_pi_pulse_error                qubit_thermal_population
+pair_swap_flux_map                  qubit_power_rabi                    qubit_tomography
+pair_zz_coupler                     qubit_ramsey                        qubit_xyz_delay
+qc_n_stark_amp                      qubit_ramsey_cryoscope              readout_frequency
+qc_n_swap_amp                       qubit_ramsey_phasor                 readout_power
+qc_unidirectional_trotter           qubit_relaxation                    resonator_spectroscopy
+qubit_deterministic_benchmarking    qubit_relaxation_flux_pulse         resonator_spectroscopy_flux
+qubit_drag_alternating              qubit_spectroscopy                  resonator_spectroscopy_power_amp
+qubit_drag_equator                  qubit_spectroscopy_cryoscope        resonator_spectroscopy_power_chain
+qubit_echo                          qubit_spectroscopy_flux_pulse       single_shot_readout
+qubit_echo_flux_pulse               qubit_spectroscopy_overlap          single_shot_readout_gef
+qubit_parametric_drive_amp          qubit_sqrb
+qubit_parametric_drive_time         qubit_stark_phase_echo
 ```
 <!-- END generated: experiments -->
 

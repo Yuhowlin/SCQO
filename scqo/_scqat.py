@@ -76,6 +76,54 @@ def per_qubit_results(
     return out
 
 
+def whole_dataset_results(
+    prepared: xr.Dataset,
+    estimator: Any,
+    artifact_dir: Path | None = None,
+    *,
+    label: str,
+    **estimator_kwargs,
+) -> dict:
+    """Run a scqat estimator ONCE on the whole multi-target dataset.
+
+    The sibling of :func:`per_qubit_results` for an experiment whose analysis
+    is a property of the target SET rather than of each target: a chain's joint
+    distribution spans every member at once, so the per-target split would make
+    it undrawable. ``label`` names the artifact subfolder
+    (``artifact_dir/<label>/``) — a role word like ``"chain"``, not an entity
+    name, because the analysis belongs to no single entity.
+
+    Same artifact-failure discipline as :func:`per_qubit_results`: a netCDF/PNG
+    write that fails must never kill a measurement, so the analysis is redone
+    in-memory and the run stays alive.
+    """
+    import sys
+
+    out_dir = str(artifact_dir / label) if artifact_dir is not None else None
+    try:
+        results, figures = estimator.analyze(
+            prepared, output_dir=out_dir, skip_figures=artifact_dir is None,
+            **estimator_kwargs
+        )
+    except Exception as err:
+        if out_dir is None:
+            raise  # genuine analysis failure, nothing to fall back to
+        print(
+            f"scqo: artifact write failed for {label} ({type(err).__name__}: {err}); "
+            "retrying analysis without saving artifacts",
+            file=sys.stderr,
+        )
+        results, figures = estimator.analyze(
+            prepared, output_dir=None, skip_figures=True, **estimator_kwargs
+        )
+    if figures:  # already saved to out_dir by analyze(); free them (long sessions)
+        import matplotlib.pyplot as plt
+
+        for fig in figures.values():
+            plt.close(fig)
+    return results
+
+
 def mad_outlier_mask(
     values: Sequence[float | None], *, n_sigma: float = 3.0, rel_floor: float = 0.25
 ) -> tuple[list[bool], float | None, float | None]:
