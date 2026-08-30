@@ -92,7 +92,7 @@ is the single most common source of "impossible" behaviour in this stack.
 | a fitter or an estimator | scqat |
 | an experiment's physics, Parameters, or writeback | SCQO (+ scqat if the estimator moves) |
 | how an experiment runs on hardware (`probe()`) | the driver, + SCQO if the neutral surface changes |
-| a new experiment, end to end | scqat → SCQO → both drivers |
+| a new experiment, end to end | scqat → SCQO → both drivers (a new experiment always means a new estimator — reusing an existing one is a merge or a `tools/` reduction instead, see SCQO's *The estimator binding*) |
 
 ---
 
@@ -160,11 +160,12 @@ Say so; that is what `unverified` is for.
 - [ ] `validated =` line: `offline`, `hardware <chip> <date>`, or `unverified`.
 - [ ] New experiment? Work the promotion checklist in SCQO's
       [CLAUDE.md](CLAUDE.md) (*Experiment governance*) — contract declared, `simulate()`
-      implemented, estimator in scqat, `update()` writing only catalogued fields, a
-      catalog-quality `description`.
-- [ ] New experiment? `python scripts/update_docs.py` re-run in SCQO, so the census in
-      `CLAUDE.md` includes it. `tests/test_docs_current.py` fails otherwise. scqat has
-      the same script for its derived tables.
+      implemented, an estimator in scqat bound by THIS experiment only, `update()` writing
+      only catalogued fields, a catalog-quality `description`.
+- [ ] New experiment? `python scripts/update_docs.py` re-run in SCQO, so both generated
+      blocks in `CLAUDE.md` — the census and the estimator map — include it.
+      `tests/test_docs_current.py` fails otherwise. scqat has the same script for its
+      derived tables.
 - [ ] A `RELEASES.d/<slug>.toml` fragment **drafted in the PR body** — format in
       [RELEASES.d/README.md](RELEASES.d/README.md). Do not commit it: the ledger may
       only list complete features, so the maintainer commits it once the *last* repo's
