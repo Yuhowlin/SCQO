@@ -1,0 +1,79 @@
+name = "qc-unidirectional-trotter"
+repos = { scqat = "70ee447", scqo = "cc02e9a", scqo-qm = "ef06cbc" }
+kind = "additive"
+coupling = """
+scqo needs scqat >= 70ee447: qc_unidirectional_trotter's estimate() lazy-imports \
+scqat.estimators.qc_unidirectional_trotter, which does not exist below that \
+commit. LOUD, not silent - the run fails with an ImportError naming the missing \
+module, so nobody gets wrong numbers - but the floor is real and the experiment \
+is unusable below it. Note this ledger's couplings are usually the silent kind; \
+this one is not.\
+"""
+validated = "offline"
+notes = """
+NEW EXPERIMENT `qc_unidirectional_trotter` (QM only, record-only): unidirectional \
+(cascaded) coupling by Trotterization on a three-qubit chain. Excite the chain \
+source ONCE, then repeat N times a partial swap source->relay, a partial swap \
+relay->sink, a parametric reset of the relay, and a per-qubit off-resonant \
+AC-Stark phase compensation; read every chain qubit out at the end. Dumping the \
+relay each round destroys the sink's return path, so the coupling is one-way and \
+the populations vs N draw the excitation transport. `targets` are the chain \
+QUBITS and THEIR ORDER IS THE CHAIN ORDER - it is also the digit order of the \
+`joint_state` labels. The two swap pairs, the reset qubit and the per-qubit \
+compensation are Parameters, not targets (the shape `qubit_tomography` already \
+uses for a multi-qubit circuit). `readout_mode='shot'` keeps every shot and \
+additionally reconstructs the JOINT 8-state chain distribution, so it gains a \
+second figure without a second acquisition.
+
+READ `min_transfer` AS "SOMETHING ARRIVED", NEVER AS "THE TRANSFER WAS GOOD". Its \
+default is 0.05, deliberately far below the pair families' 0.3, because the sink \
+CANNOT approach unity in this sequence and that is the physics rather than a \
+miscalibration: the second swap is an exchange like the first, so the sink also \
+emits back into the relay that the very next reset dumps. The sink settles near \
+(first-swap transfer) x (current source population) and then follows the source \
+down, so its peak is a fraction of an excitation - around 0.1 offline - reached \
+within a few rounds. Capturing the excitation instead would need the angles \
+shaped in time, which a fixed named operation cannot express.
+
+`reset_operation` defaults to `"reset"` - the QUAM MACRO KEY that \
+`quam_config/register_reset_macro.py` writes, NOT the z-pulse name \
+`parametric_reset` that the macro plays. It is also unrelated to the \
+`reset_method` mixin field, which is how targets return to |g> BETWEEN shots; \
+this one is the mid-circuit reset inside the round.
+
+BEHAVIOR CHANGE (offline only): the demo device is now a THREE-qubit chain. \
+`scqo.testing.demo_components` takes a new `chain=` flag that mints a qubit_pair \
+over every consecutive qubit, and both the offline test fixture and the CLI's \
+device-less `simulated` practice device are built as q0-q1-q2 with pairs q0_q1 \
+and q1_q2 (plus a coupler mode and its own flux wire each). A relay-sharing chain \
+cannot be expressed on one pair, and reusing the same pair twice would have put a \
+physically impossible chain in the suite. `chain=` defaults False, so a direct \
+caller of `demo_components`/`demo_device` is unaffected; anyone whose script \
+assumed practice mode holds exactly q0/q1 now sees a third qubit and a second \
+pair. One incidental rename inside the helper: the coupler's flux LINE is minted \
+per pair (`q0_q1_zc`) instead of a single `zc`. Line names are wiring, not lock \
+identity, and the minted CHANNEL names (`q0_q1_c_z`) are unchanged.
+
+INTERNAL: `scqo/_scqat.py` gains `whole_dataset_results`, the sibling of \
+`per_qubit_results` for an experiment whose analysis is a property of the target \
+SET rather than of each target - the chain's joint distribution spans every \
+member, so the per-target split cannot draw it. Artifacts land under \
+`analysis/chain/`, a role word rather than an entity name. `scqo_qm` gains \
+`_vendor.vendor_qubit`, the single-mode twin of `vendor_pair`, so a qubit scqo \
+names in a PARAMETER rather than in `targets` is joined through the roster's \
+default channel of the kind the probe will play on, never by indexing \
+`machine.qubits` with an entity name.
+
+STILL OWED (hardware): nothing has been acquired. The QM probe renders correct \
+QUA against the live 5Q4C state (swap, swap, parametric reset, three concurrent \
+stark tones, verified through the gateway-free script dump) and the shell does \
+NOT self-acquire, so `scqo run ... --preview` works with no opt-out - but the \
+pulses it plays are placeholders. On 5Q4C today: `q1_q2` carries `partial_swap`, \
+`q2_q3` carries only `iswap`, so the DEFAULT `swap_operation="partial_swap"` \
+refuses on the second pair by name until `register_swap_macro.py` is run for it \
+(or set `swap_operation="iswap"`); the `stark` op and q2's `parametric_reset` z \
+pulse both carry PLACEHOLDER amplitude/length/frequency from their register \
+scripts; and the reset macro is registered on q2 alone. Qblox: not realized - \
+neither the `stark` operation nor a parametric-reset macro exists there, so it \
+refuses by name rather than degrading.
+"""

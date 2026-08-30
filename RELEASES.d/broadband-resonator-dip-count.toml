@@ -1,0 +1,27 @@
+name = "broadband-resonator-dip-count"
+repos = { scqo = "32d3ec1" }
+kind = "fix"
+coupling = ""
+validated = "offline"
+notes = """
+BEHAVIOR CHANGE: an unsuccessful `broadband_resonator_spectroscopy` fit now \
+reports outcome FAILED instead of raising `AttributeError`. `Outcome.WARNING` \
+does not exist - the vocabulary is successful/failed/no_data - so estimate() \
+crashed the moment a fit did NOT succeed, which is exactly when that branch was \
+needed. It fired on hardware as well as offline; the run lost its whole result, \
+not just its verdict. Nothing in the fit dict changed shape.
+
+Second bug, same file and the same cause of it never being noticed: `simulate()` \
+planted `max(2, len(targets))` dips while `estimate()` asked the dip finder for \
+the ROSTER's resonator count. The two agreed only by coincidence, for as long as \
+the offline device happened to carry exactly one resonator per target; on any \
+other shape an offline run reported a found-vs-requested mismatch that was an \
+artifact of the two disagreeing rather than anything about the chip - and that \
+mismatch is what drove the crash above. Both now resolve through one \
+`_expected_dips` helper (explicit `num_dips` -> roster resonator modes -> target \
+count), verified consistent on 1-, 2- and 3-resonator rosters.
+
+Found while adding a third qubit to the offline demo device for \
+`qc_unidirectional_trotter`; landed separately because it is a fix to a different \
+experiment and neither change depends on the other.
+"""
