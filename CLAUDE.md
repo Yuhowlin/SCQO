@@ -391,6 +391,7 @@ experiments, or a name in the trailing line, is a KNOWN VIOLATION carried in
 | `power_rabi` | qubit_power_rabi |
 | `qc_n_stark_amp` | qc_n_stark_amp |
 | `qc_n_swap_amp` | qc_n_swap_amp |
+| `qc_unidirectional_trotter` | qc_unidirectional_trotter |
 | `qubit_deterministic_benchmarking` | qubit_deterministic_benchmarking |
 | `qubit_drag_alternating` | qubit_drag_alternating |
 | `qubit_drag_equator` | qubit_drag_equator |
