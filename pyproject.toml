@@ -1,6 +1,6 @@
 [project]
 name = "scqo"
-version = "3.3.0"
+version = "3.4.0"
 description = "Superconducting Qubit Orchestration — instrument-agnostic experiment API shared by QM and Qblox backends"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
@@ -40,6 +40,13 @@ dependencies = [
                         # decoherence_params panel takes the WHOLE artifact set down: the run
                         # keeps its data and loses every PNG, including the raw-carrying
                         # rho11_fits. Nothing raises. See RELEASES.toml [v3-3-0].
+                        # As of v3.4.0 the floor is scqat v0.22.0, and this one is LOUD:
+                        # qc_unidirectional_trotter's estimate() lazy-imports
+                        # scqat.estimators.qc_unidirectional_trotter, which does not exist
+                        # below it - an ImportError naming the missing module, so nobody
+                        # gets wrong numbers. Unusual for this stack, where the floors are
+                        # usually silent; the experiment is simply unusable below it.
+                        # See RELEASES.toml [v3-4-0].
     "netcdf4>=1.6",     # datastore: dataset.nc has a string qubit coord (needs netCDF4, not the scipy netCDF3 fallback)
     "tomli>=2.0; python_version<'3.11'",  # labconfig TOML parsing on py3.10
 ]
