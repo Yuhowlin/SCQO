@@ -138,6 +138,29 @@ class BroadbandResonatorSpectroscopy(Experiment):
         all_freqs = np.unique(np.concatenate(sweep_segments))
         return {"frequency_hz": all_freqs}
 
+    def _expected_dips(self, targets) -> int:
+        """How many resonator dips the feedline should show: the explicit
+        ``num_dips`` when given, else the ROSTER's resonator modes, else the
+        target count.
+
+        Shared by ``simulate()`` and ``estimate()`` on purpose — the number the
+        offline trace PLANTS and the number the dip finder is ASKED for have to
+        be the same, or an offline run reports a mismatch that is an artifact of
+        the two disagreeing rather than anything about the chip. They diverged
+        silently (planted ``max(2, len(targets))``, requested the roster count)
+        for as long as the demo device happened to carry one resonator per
+        target."""
+        if self.params.num_dips is not None:
+            return int(self.params.num_dips)
+        try:
+            roster = getattr(self.device, "roster", None)
+            modes = ([m for m in roster.modes().values()
+                      if getattr(m, "kind", None) == "resonator"]
+                     if roster is not None else [])
+        except Exception:
+            modes = []
+        return len(modes) or len(list(targets))
+
     def simulate(self, coords: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         freqs = coords["frequency_hz"]
         targets = self.params.targets
@@ -164,7 +187,7 @@ class BroadbandResonatorSpectroscopy(Experiment):
         # by name — knobs live on channels).
         sim_dips: list[tuple[float, float, float]] = []
         span = freqs[-1] - freqs[0]
-        n_dips = self.params.num_dips or max(2, len(targets))
+        n_dips = max(2, self._expected_dips(targets))
         for i in range(n_dips):
             offset = freqs[0] + span * (0.15 + 0.7 * (i + 0.5) / n_dips)
             sim_dips.append((offset, 4.0e6, 0.8))
@@ -197,21 +220,7 @@ class BroadbandResonatorSpectroscopy(Experiment):
         prepared = self.dataset.rename({"frequency_hz": "frequency"})
 
         # Resolve expected number of dips from components.toml / roster
-        num_dips = self.params.num_dips
-        if num_dips is None:
-            try:
-                roster = getattr(self.device, "roster", None)
-                if roster is not None:
-                    resonator_modes = [
-                        m
-                        for m in roster.modes().values()
-                        if getattr(m, "kind", None) == "resonator"
-                    ]
-                    num_dips = len(resonator_modes) if resonator_modes else len(targets)
-                else:
-                    num_dips = len(targets)
-            except Exception:
-                num_dips = len(targets)
+        num_dips = self._expected_dips(targets)
 
         results = per_qubit_results(
             prepared,
@@ -243,8 +252,12 @@ class BroadbandResonatorSpectroscopy(Experiment):
                 "num_dips_found": len(clean_dips),
                 "num_dips_requested": num_dips,
             }
+            # FAILED, not a "warning": the Outcome vocabulary is
+            # successful/failed/no_data, and the missing member used to raise
+            # AttributeError the moment a fit did NOT succeed — i.e. exactly
+            # when this branch was needed.
             result.outcomes[target] = (
-                Outcome.SUCCESSFUL if bool(r.get("success", False)) else Outcome.WARNING
+                Outcome.SUCCESSFUL if bool(r.get("success", False)) else Outcome.FAILED
             )
         return result
 
