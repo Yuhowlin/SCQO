@@ -6,8 +6,9 @@ the binding is 1:1 in both directions, because an estimator is keyed by a READIN
 dataset shape AND the model fitted to it) and a binding is therefore a claim that this
 model describes this signal. Share math through ``scqat.tools`` instead; the rule and
 its decision procedure are in ``CLAUDE.md`` -> Terminology -> The estimator binding.
-This module holds the one piece every experiment shares — the per-qubit split +
-``analyze`` loop — and is the only place scqat is imported.
+This module holds the pieces every experiment shares — the per-target split and its
+whole-dataset sibling, each wrapping the ``analyze`` loop — and is the only place scqat
+is imported.
 
 scqat is imported **lazily** (inside the function) so ``import scqo`` stays light and
 free of the analysis stack; the import only happens when analysis actually runs.
