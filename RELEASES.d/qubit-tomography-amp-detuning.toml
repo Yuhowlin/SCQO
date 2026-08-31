@@ -1,0 +1,41 @@
+name = "qubit-tomography-amp-detuning"
+repos = { scqo = "59d2de0", scqo-qm = "10c08da" }   # LAST commit per repo (the PR merges)
+kind = "additive"
+coupling = ""      # no scqat change: the dataset shape, the TomographyContract and the
+                   # scqat estimator are all untouched, so no floor moves.
+validated = "offline"
+notes = """qubit_tomography gains two OPTIONAL per-qubit knobs and a restructured QM
+sequence. Yuhowlin, SCQO PR #27 + scqo-qm PR #30.
+
+The knobs live inside qubit_configs, which is dict[str, dict[str, Any]] with NO key
+validation, so the SCQO half is literally its Field description and the whole feature is
+the QM probe: `amp` (amplitude scale on the target gate, default 1.0) and
+`detuning`/`frequency_shift` (Hz, applied with update_frequency around the target gates
+and restored after, default 0.0). The QM probe also accepts `amp_scale`,
+`frequency_detuning`, `intermediate_frequency` and `frequency` as further spellings that
+the documented surface does not mention - an unknown key is silently ignored either way,
+which is pre-existing behaviour of an unvalidated dict, not new.
+
+BEHAVIOR CHANGE - the QM sequence is rebuilt around the same measurement. Gate counts
+unroll through switch_/case_ with a Python-level repeat instead of for_(rep, 0, rep <
+gc_idx, ...); every shot now calls reset_if_phase per xy element and reset_global_phase
+once; the basis rotation and the symmetrized x180 are played per-basis under switch_(b_idx)
+rather than per-qubit under if_/elif_; and every bare align() became align(*names) over the
+xy + resonator elements only. Runs taken before and after are therefore not directly
+comparable. Nothing about the OUTPUT changed - same dims, same variables, same contract, so
+old runs re-analyse unchanged and no estimator moves.
+
+QMQubitTomography also gains preview_program() (training shots omitted, thermal wait
+skipped). It is INERT in this cut: the dispatch line that reaches it - `if reason:` ->
+`if hasattr(experiment, "preview_program")` in QMBackend.preview - is stranded in the held
+close-qm PR scqo-qm #31. --preview still works, falling through to probe() and rendering the
+full program including training shots. Tracked as scqo-qm issue #36.
+
+Three defects were accepted at merge rather than fixed, by the maintainer's call, and are
+filed: num_training_shots=0 now drops the I_train/Q_train streams that acquire() still
+fetches and TomographyContract still requires (scqo-qm #33); the narrowed align() no longer
+holds flux/z elements (scqo-qm #34); reset_global_phase() sits in a bare except that
+swallows NameError while the reset_if_phase() above it dies loud (scqo-qm #35).
+
+HARDWARE: none. qubit_tomography's interleaved-noise validation has been owed since v3.1.0
+and this cut adds an unvalidated sequence rewrite on top of it."""
