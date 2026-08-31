@@ -637,15 +637,28 @@ def test_a_broken_progress_callback_never_kills_the_campaign(session, capsys):
     assert capsys.readouterr().err.count("progress callback failed") == 1
 
 
-def test_cadence_wait_is_announced_before_sleeping(session):
+def test_cadence_wait_is_announced_before_sleeping(session, monkeypatch):
+    # The event fires ONLY when the period actually has time left to sleep
+    # (an overrun is recorded instead — session.py's `overran_by_s`), so the
+    # period must be longer than a repeat can plausibly take or the assertion
+    # below is really a statement about how fast the machine is. period_s=0.4
+    # held warm and failed cold — in isolation locally, and on a loaded CI
+    # runner. Stubbing sleep lets the period be large without the test waiting.
+    import time as _time
+
+    slept: list[float] = []
+    monkeypatch.setattr(_time, "sleep", slept.append)
+
     events: list[dict] = []
     session.run_campaign(
-        _plan_obj(label="cad", repeat=2, period_s=0.4, skip_artifacts=True),
+        _plan_obj(label="cad", repeat=2, period_s=30, skip_artifacts=True),
         on_progress=events.append)
     waits = [e for e in events if e["kind"] == "cadence_wait"]
     assert waits and waits[0]["wait_s"] > 0
     # ...and it precedes the repeat_start whose timestamp it delays
     assert events.index(waits[0]) < [e["kind"] for e in events][4:].index("repeat_start") + 4
+    # ...and what was announced is what was actually slept
+    assert slept and slept[0] == waits[0]["wait_s"]
 
 
 def test_progress_line_for_a_successful_step():
