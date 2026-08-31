@@ -1,0 +1,40 @@
+name = "close-qm-driver-cli"
+repos = { scqo-qm = "db1f79b" }   # LAST commit per repo
+kind = "additive"
+coupling = ""      # scqo-qm only, and deliberately so - scqo gains NOTHING (see notes)
+validated = "offline"
+notes = """ADDITIVE - a recovery door for a QM cluster whose hardware locks are still held by
+a crashed or abandoned session, the state that otherwise shows up as a job stalling forever or
+an open that never returns. QMBackend.close_qm() halts running jobs and closes the open
+Quantum Machines; python -m scqo_qm.backend.close_qm is the operator command (--qm-id for a
+single machine, --dry-run to list without closing).
+
+THE COMMAND LIVES IN THE DRIVER, and that is the substance of this entry rather than an
+implementation detail. The contributed version (SCQO PR #28, CLOSED unmerged) put it in scqo
+as `scqo close-qm` + Session.close_qm() + an _ALIASES dict: it named a vendor three times
+inside the vendor-neutral core, gave every Qblox operator a top-level command that could only
+ever refuse them, and added exactly the compatibility alias the house rule forbids. This
+follows the apply_distortion precedent instead - an operator command that needs the vendor
+libraries lives beside them, in the venv where they are installed - and scqo gains NOTHING.
+A non-QM setup is refused BY NAME rather than handed a benign-looking empty report.
+Generalized as a standing rule for future contributions.
+
+BEST-EFFORT BY DESIGN: every step is an independent cleanup on a cluster that is by
+hypothesis already misbehaving, so a QM that refuses to close must not strand the ones after
+it. The blanket exception capture is deliberate and is the one place in this backend where it
+is right, but every arm now RECORDS what failed into the report's `errors` instead of passing
+silently - read `success`, never the absence of a raise. It opens and closes its own manager,
+which is safe because QMBackend caches none (preview's simulation path already does the same).
+
+DESTRUCTIVE and unprompted: halting a job discards whatever it had not yet streamed out,
+including a colleague's running measurement. Hence --dry-run, and hence --qm-id NOT running
+the whole-cluster close_all sweep (the contributed version swept regardless, so a targeted
+close still took out its neighbours).
+
+NOT a wedged-gateway fix, and the module docstring says so to keep the two failure modes
+apart: a cluster in the DEADLINE_EXCEEDED state answers nothing and still needs an operator
+restart from its web UI.
+
+Implementation from Yuhowlin's scqo-qm PR #31 (CLOSED - landed as maintainer commits),
+restructured as above. HARDWARE: none - the tests drive doubles, and by its nature this
+command is validated by using it on a genuinely stuck cluster."""

@@ -1,0 +1,26 @@
+name = "preview-dispatch-on-hook"
+repos = { scqo-qm = "1f6a5b2" }   # LAST commit per repo
+kind = "fix"
+coupling = ""      # scqo-qm only: no scqo, scqat or scqo-qblox change
+validated = "offline"
+notes = """FIX - qubit_tomography's preview_program() was DEAD CODE in v3.5.0 and is now
+reached. QMBackend.preview dispatched on `if reason:` - i.e. "does this shell declare
+probe_self_acquires?" - so only a self-acquiring shell could reach its own hook. Tomography
+is a normal build-and-return shell, so --preview fell through to probe() and rendered the
+full program INCLUDING the training shots the hook exists to drop.
+
+The dispatch conflated two separate questions. Whether a shell ACQUIRES inside probe()
+decides whether probe() is a legal fallback, and gates the single-target rule; whether it has
+a HOOK decides what preview renders. It now asks the second, and _preview_refusal's docstring
+says explicitly that a normal shell may carry a hook too.
+
+NO behaviour change for the existing carriers - qc_n_swap_amp and qc_n_stark_amp declare both
+attributes, and the four self-acquiring shells without a hook are still refused by
+_preview_refusal before the dispatch is reached. The only shell whose preview output changes
+is qubit_tomography, whose --preview is now the cheaper program it always intended.
+
+The line was misfiled into the close-qm PR (scqo-qm #31) and shipped in neither half of
+v3.5.0; landing it with the feature it belongs to. Closes scqo-qm issue #36. Two tests pin it:
+a QUAM-free invariant in test_preview.py (a hook without probe_self_acquires is legal at any
+target count) and a live-state proof in test_qm_backend.py that the previewed script omits
+I_train/Q_train while probe()'s build still carries them."""
