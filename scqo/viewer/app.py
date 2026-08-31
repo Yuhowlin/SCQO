@@ -26,6 +26,8 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Resp
 from fastapi.templating import Jinja2Templates
 
 from ._export import XLSX_MEDIA_TYPE, pdf_bytes, xlsx_bytes
+from ._export_lab_dashboard import lab_template_xlsx_bytes
+from ._export_slides import PPTX_MEDIA_TYPE, presentation_pptx_bytes
 
 from ..changes import (
     HISTORY_FILE,
@@ -501,6 +503,143 @@ def create_app(data_root: str | Path) -> FastAPI:
                      "extra: uv pip install -e <SCQO repo>[viewer]")
         return Response(data, media_type=XLSX_MEDIA_TYPE,
                         headers=_attachment(device, cooldown, setup_name, "xlsx"))
+
+    def _cooldown_unified_context(device: str, cooldown: str, setup_names: list[str] | None = None) -> dict:
+        """Unified context across all setups in a cooldown cycle (Option A: Unified QPU)."""
+        cooldown_error = ""
+        try:
+            cycles = load_cooldowns(store.data_root, device)
+        except (ValueError, OSError) as err:
+            cycles, cooldown_error = {}, str(err)
+        cycle = cycles.get(cooldown) or {}
+        setups_dict = cycle.get("setup", {})
+        target_setups = setup_names or list(setups_dict.keys())
+        active = active_cooldown(cycles)
+
+        # Collect candidate rows across all setups, keeping the freshest measurement for each (entity, field)
+        state_candidates: dict[tuple[str, str], dict] = {}
+        phys_candidates: dict[tuple[str, str], dict] = {}
+
+        def _src_key(row: dict) -> str:
+            src = row.get("source") or {}
+            if isinstance(src, dict):
+                return src.get("run_id") or src.get("campaign_id") or ""
+            return ""
+
+        for sname in target_setups:
+            scqo_dir = _scqo_dir(device, cooldown, sname)
+            if scqo_dir is None:
+                continue
+            state_data = _read_json(scqo_dir / STATE_FILE)
+            state_values = state_data.get("values") or {} if state_data else {}
+            s_rows = _param_rows(state_values, _latest_pairs(scqo_dir, "state"), INSTRUMENT_FIELD_ORDER)
+            p_rows = _param_rows(_values_of(scqo_dir / PHYSICAL_FILE), _latest_pairs(scqo_dir, "physical"), PHYSICAL_FIELD_ORDER)
+
+            for r in s_rows:
+                key = (r["entity"], r["field"])
+                if key not in state_candidates:
+                    state_candidates[key] = r
+                else:
+                    if _src_key(r) > _src_key(state_candidates[key]):
+                        state_candidates[key] = r
+
+            for r in p_rows:
+                key = (r["entity"], r["field"])
+                if key not in phys_candidates:
+                    phys_candidates[key] = r
+                else:
+                    if _src_key(r) > _src_key(phys_candidates[key]):
+                        phys_candidates[key] = r
+
+        combined_state_rows = list(state_candidates.values())
+        combined_phys_rows = list(phys_candidates.values())
+
+        return {
+            "device": device,
+            "cooldown": cooldown,
+            "setup_name": "unified",
+            "is_unified": True,
+            "setups": target_setups,
+            "cycle": cycle,
+            "setup_meta": {"backend": "multi-setup", "note": "Unified across all setups"},
+            "in_registry": True,
+            "is_active": bool(active and active[0] == cooldown),
+            "cooldown_error": cooldown_error,
+            "authority": "unified",
+            "snapshot_run": None,
+            "latest_run": None,
+            "state_rows": combined_state_rows,
+            "physical_rows": combined_phys_rows,
+            "state_path": "",
+        }
+
+    @app.get("/setup/{device}/{cooldown}/{setup_name}/export_dashboard.xlsx")
+    def setup_export_dashboard_xlsx(device: str, cooldown: str, setup_name: str,
+                                    unified: bool = False, min_repeats: int = 2,
+                                    estimator: str = "mean", tags: str = ""):
+        ctx = _cooldown_unified_context(device, cooldown) if unified else _setup_context(device, cooldown, setup_name)
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else None
+        try:
+            data = lab_template_xlsx_bytes(ctx, store=store, data_root=store.data_root,
+                                           min_repeats=min_repeats, estimator=estimator, tags=tag_list)
+        except ImportError:
+            raise HTTPException(
+                503, "xlsx export needs openpyxl — reinstall the viewer "
+                     "extra: uv pip install -e <SCQO repo>[viewer]")
+        return Response(data, media_type=XLSX_MEDIA_TYPE,
+                        headers=_attachment(device, cooldown, "unified" if unified else setup_name, "dashboard.xlsx"))
+
+    @app.get("/setup/{device}/{cooldown}/{setup_name}/export.pptx")
+    @app.get("/setup/{device}/{cooldown}/{setup_name}/export_slides.pptx")
+    def setup_export_pptx(device: str, cooldown: str, setup_name: str,
+                          presenter: str = "", design_name: str = "", goal: str = "",
+                          unified: bool = False, min_repeats: int = 2,
+                          estimator: str = "mean", tags: str = ""):
+        ctx = _cooldown_unified_context(device, cooldown) if unified else _setup_context(device, cooldown, setup_name)
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else None
+        try:
+            data = presentation_pptx_bytes(ctx, store=store, data_root=store.data_root,
+                                           presenter=presenter, design_name=design_name, goal=goal,
+                                           min_repeats=min_repeats, estimator=estimator, tags=tag_list)
+        except ImportError:
+            raise HTTPException(
+                503, "pptx export needs python-pptx — reinstall the viewer "
+                     "extra: uv pip install -e <SCQO repo>[viewer]")
+        return Response(data, media_type=PPTX_MEDIA_TYPE,
+                        headers=_attachment(device, cooldown, "unified" if unified else setup_name, "pptx"))
+
+    @app.get("/cooldown/{device}/{cooldown}/export_dashboard.xlsx")
+    def cooldown_export_dashboard_xlsx(device: str, cooldown: str,
+                                       min_repeats: int = 2, estimator: str = "mean", tags: str = ""):
+        ctx = _cooldown_unified_context(device, cooldown)
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else None
+        try:
+            data = lab_template_xlsx_bytes(ctx, store=store, data_root=store.data_root,
+                                           min_repeats=min_repeats, estimator=estimator, tags=tag_list)
+        except ImportError:
+            raise HTTPException(
+                503, "xlsx export needs openpyxl — reinstall the viewer "
+                     "extra: uv pip install -e <SCQO repo>[viewer]")
+        return Response(data, media_type=XLSX_MEDIA_TYPE,
+                        headers=_attachment(device, cooldown, "unified", "dashboard.xlsx"))
+
+    @app.get("/cooldown/{device}/{cooldown}/export.pptx")
+    @app.get("/cooldown/{device}/{cooldown}/export_slides.pptx")
+    def cooldown_export_pptx(device: str, cooldown: str,
+                             presenter: str = "", design_name: str = "", goal: str = "",
+                             min_repeats: int = 2, estimator: str = "mean", tags: str = ""):
+        ctx = _cooldown_unified_context(device, cooldown)
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else None
+        try:
+            data = presentation_pptx_bytes(ctx, store=store, data_root=store.data_root,
+                                           presenter=presenter, design_name=design_name, goal=goal,
+                                           min_repeats=min_repeats, estimator=estimator, tags=tag_list)
+        except ImportError:
+            raise HTTPException(
+                503, "pptx export needs python-pptx — reinstall the viewer "
+                     "extra: uv pip install -e <SCQO repo>[viewer]")
+        return Response(data, media_type=PPTX_MEDIA_TYPE,
+                        headers=_attachment(device, cooldown, "unified", "pptx"))
 
     @app.get("/setup/{device}/{cooldown}/{setup_name}/export.pdf")
     def setup_export_pdf(device: str, cooldown: str, setup_name: str):

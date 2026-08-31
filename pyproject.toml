@@ -61,6 +61,7 @@ viewer = [
     "jinja2>=3.1",
     "python-multipart>=0.0.9",  # FastAPI Form(...) — the tag-edit POST
     "openpyxl>=3.1",            # the setup page's .xlsx export (PDF rides matplotlib via scqat; HTML is stdlib)
+    "python-pptx>=1.0",         # the setup/cooldown page's .pptx export
 ]
 
 [tool.uv.sources]

@@ -39,9 +39,83 @@
   {{ cooldown }} · <b>{{ setup_name }}</b> ·
   <a href="/trends?device={{ device }}">trends of {{ device }}</a></p>
 <p class="muted">Export:
-  <a href="/setup/{{ device }}/{{ cooldown }}/{{ setup_name }}/export.html" title="one self-contained file — run links jump to embedded snapshots">offline HTML</a> ·
-  <a href="/setup/{{ device }}/{{ cooldown }}/{{ setup_name }}/export.xlsx" title="two sheets: Calibration + Physical parameters">Excel</a> ·
-  <a href="/setup/{{ device }}/{{ cooldown }}/{{ setup_name }}/export.pdf" title="16:9 slides, one page per source kind">PDF slides</a></p>
+  <button type="button" class="export-btn" onclick="document.getElementById('export-dialog').showModal()">Export Report & Presentation...</button></p>
+
+<dialog id="export-dialog">
+  <h3 style="margin-top: 0; color: #14385c;">Export Report & Presentation</h3>
+  <div class="export-grid">
+    <div class="export-opt">
+      <h4>Export Scope</h4>
+      <label><input type="radio" name="export-scope" value="single" checked> This Setup ({{ setup_name }})</label>
+      <label><input type="radio" name="export-scope" value="unified"> Unified Chip ({{ cooldown }})</label>
+    </div>
+    <div class="export-opt">
+      <h4>Quality Gate (Min Repeats)</h4>
+      <label>Min repeats N &ge; <input type="number" id="export-min-repeats" value="2" min="1" step="1" style="width: 60px; padding: 2px 4px; font-size: 13px;"></label>
+      <div style="font-size: 11px; color: #6b7683; margin-top: 4px;">
+        Presets:
+        <a href="#" onclick="document.getElementById('export-min-repeats').value=2; return false;">2</a> ·
+        <a href="#" onclick="document.getElementById('export-min-repeats').value=10; return false;">10</a> ·
+        <a href="#" onclick="document.getElementById('export-min-repeats').value=50; return false;">50</a> ·
+        <a href="#" onclick="document.getElementById('export-min-repeats').value=100; return false;">100</a>
+      </div>
+    </div>
+    <div class="export-opt">
+      <h4>Statistic Model</h4>
+      <label><input type="radio" name="export-estimator" value="mean" checked> Mean &plusmn; Std</label>
+      <label><input type="radio" name="export-estimator" value="median"> Median &plusmn; MAD (Robust)</label>
+    </div>
+    <div class="export-opt">
+      <h4>Tag Filter (Optional)</h4>
+      <input type="text" id="export-tags" placeholder="e.g. baseline, overnight" style="width: 90%; font-size: 12px; padding: 4px;">
+    </div>
+  </div>
+
+  <div class="export-actions">
+    <button type="button" class="btn-download" onclick="triggerExportDownload('dashboard_xlsx')">Download Lab Dashboard (.xlsx)</button>
+    <button type="button" class="btn-download" onclick="triggerExportDownload('pptx')">Download Presentation (.pptx)</button>
+    <button type="button" class="btn-download-secondary" onclick="triggerExportDownload('raw_xlsx')">Download Raw Excel (.xlsx)</button>
+    <button type="button" class="btn-download-secondary" onclick="triggerExportDownload('html')">Download Offline HTML</button>
+    <button type="button" class="btn-download-secondary" onclick="triggerExportDownload('pdf')">Download PDF</button>
+    <button type="button" class="btn-download-secondary" onclick="document.getElementById('export-dialog').close()" style="margin-top: 6px;">Close</button>
+  </div>
+</dialog>
+
+<script>
+  function triggerExportDownload(format) {
+    const isUnified = document.querySelector('input[name="export-scope"]:checked').value === 'unified';
+    const minRepeatsInput = document.getElementById('export-min-repeats').value;
+    const minRepeats = parseInt(minRepeatsInput, 10) || 2;
+    const estimator = document.querySelector('input[name="export-estimator"]:checked').value;
+    const tags = document.getElementById('export-tags').value.trim();
+
+    const dev = "{{ device }}";
+    const cd = "{{ cooldown }}";
+    const sname = "{{ setup_name }}";
+
+    let url = "";
+    if (format === 'dashboard_xlsx') {
+      url = isUnified ? `/cooldown/${dev}/${cd}/export_dashboard.xlsx` : `/setup/${dev}/${cd}/${sname}/export_dashboard.xlsx`;
+    } else if (format === 'pptx') {
+      url = isUnified ? `/cooldown/${dev}/${cd}/export.pptx` : `/setup/${dev}/${cd}/${sname}/export.pptx`;
+    } else if (format === 'raw_xlsx') {
+      url = `/setup/${dev}/${cd}/${sname}/export.xlsx`;
+    } else if (format === 'pdf') {
+      url = `/setup/${dev}/${cd}/${sname}/export.pdf`;
+    } else if (format === 'html') {
+      url = `/setup/${dev}/${cd}/${sname}/export.html`;
+    }
+
+    const params = new URLSearchParams();
+    if (minRepeats && minRepeats !== 2) params.set('min_repeats', minRepeats);
+    if (estimator && estimator !== 'mean') params.set('estimator', estimator);
+    if (tags) params.set('tags', tags);
+
+    const qs = params.toString();
+    window.location.href = url + (qs ? '?' + qs : '');
+    document.getElementById('export-dialog').close();
+  }
+</script>
 
 {% if cooldown_error %}
 <p><b>cooldowns.toml error:</b> {{ cooldown_error }}</p>

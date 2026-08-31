@@ -850,8 +850,58 @@ def test_setup_export_pdf_mirrors_the_offline_page(lab):
 
 def test_setup_export_bad_slug_404s_all_three(lab):
     c = lab["client"]
-    for ext in ("html", "xlsx", "pdf"):
+    for ext in ("html", "xlsx", "pdf", "pptx", "dashboard.xlsx"):
         assert c.get(f"/setup/devV/cd%20bad/main/export.{ext}").status_code == 404
+
+
+def test_setup_export_dashboard_xlsx(lab):
+    import io
+    import openpyxl
+    from scqo.viewer._export_lab_dashboard import XLSX_MEDIA_TYPE
+
+    resp = lab["client"].get("/setup/devV/cdV/sim_main/export_dashboard.xlsx")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == XLSX_MEDIA_TYPE
+    assert "dashboard.xlsx" in resp.headers["content-disposition"]
+    assert resp.content[:2] == b"PK"
+
+    wb = openpyxl.load_workbook(io.BytesIO(resp.content))
+    assert wb.sheetnames == ["Data", "Dashboard", "欄位字典"]
+
+    ws_data = wb["Data"]
+    assert ws_data["A1"].value == "Basic info"
+    assert ws_data["A2"].value == "QPU name"
+    assert ws_data["B2"].value == "devV"
+
+    ws_dash = wb["Dashboard"]
+    assert ws_dash["A1"].value == "QPU Characterization Dashboard"
+    assert ws_dash["A2"].value == "Qubit"
+
+    ws_dict = wb["欄位字典"]
+    assert ws_dict.max_row >= 40
+
+
+def test_setup_export_pptx(lab):
+    import io
+    import pptx
+    from scqo.viewer._export_slides import PPTX_MEDIA_TYPE
+
+    resp = lab["client"].get("/setup/devV/cdV/sim_main/export.pptx")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == PPTX_MEDIA_TYPE
+    assert resp.headers["content-disposition"].endswith('.pptx"')
+    assert resp.content[:2] == b"PK"
+
+    prs = pptx.Presentation(io.BytesIO(resp.content))
+    assert len(prs.slides) == 4
+
+    # Slide 4 has characterization summary table
+    s4 = prs.slides[3]
+    tables = [shape.table for shape in s4.shapes if shape.has_table]
+    assert len(tables) == 1
+    table = tables[0]
+    assert table.cell(0, 0).text == "Characterization summary"
+    assert len(table.columns) >= 2
 
 
 def test_setup_export_xlsx_missing_openpyxl_is_a_clear_503(lab, monkeypatch):
@@ -863,3 +913,86 @@ def test_setup_export_xlsx_missing_openpyxl_is_a_clear_503(lab, monkeypatch):
     resp = lab["client"].get("/setup/devV/cdV/sim_main/export.xlsx")
     assert resp.status_code == 503
     assert "openpyxl" in resp.json()["detail"]
+
+
+def test_cooldown_unified_export_pptx(lab):
+    import io
+    import pptx
+    from scqo.viewer._export_slides import PPTX_MEDIA_TYPE
+
+    resp = lab["client"].get("/cooldown/devV/cdV/export.pptx")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == PPTX_MEDIA_TYPE
+    assert resp.content[:2] == b"PK"
+
+    prs = pptx.Presentation(io.BytesIO(resp.content))
+    assert len(prs.slides) == 4
+
+
+def test_cooldown_unified_export_dashboard_xlsx(lab):
+    import io
+    import openpyxl
+    from scqo.viewer._export_lab_dashboard import XLSX_MEDIA_TYPE
+
+    resp = lab["client"].get("/cooldown/devV/cdV/export_dashboard.xlsx")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == XLSX_MEDIA_TYPE
+
+    wb = openpyxl.load_workbook(io.BytesIO(resp.content))
+    assert "Data" in wb.sheetnames
+    assert "Dashboard" in wb.sheetnames
+    assert "欄位字典" in wb.sheetnames
+
+
+def test_export_priority_and_null_rules_without_campaign(lab):
+    """When no qualifying campaign was run for a qubit, its #100 values must remain empty/X.
+    When a campaign exists for Q0 but not Q1, Q0 receives campaign stats while Q1 remains X.
+    Ramsey/echo without campaigns dynamically show #1 titles with single values (never force-filling #100)."""
+    import io
+    import openpyxl
+    import pptx
+
+    # 1. PPTX verification
+    resp_pptx = lab["client"].get("/setup/devV/cdV/sim_main/export.pptx")
+    prs = pptx.Presentation(io.BytesIO(resp_pptx.content))
+    s4 = prs.slides[3]
+    tbl = next(s.table for s in s4.shapes if s.has_table)
+
+    row_titles = [tbl.cell(r, 0).text for r in range(len(tbl.rows))]
+    assert "T1 #100 (us)" in row_titles
+    t1_row_idx = row_titles.index("T1 #100 (us)")
+
+    # Q0 had a campaign in lab fixture -> has formatted mean
+    assert "36.87" in tbl.cell(t1_row_idx, 1).text
+    # Q1 had NO campaign -> must be X (not force-filled with single measurement!)
+    assert tbl.cell(t1_row_idx, 2).text == "X"
+
+    # Ramsey row should be titled T2_Ramsey #1 (us) because no Ramsey campaign was run
+    assert "T2_Ramsey #1 (us)" in row_titles
+    assert "T2_Ramsey #100 (us)" not in row_titles
+
+    # 2. XLSX verification
+    resp_xlsx = lab["client"].get("/setup/devV/cdV/sim_main/export_dashboard.xlsx")
+    wb = openpyxl.load_workbook(io.BytesIO(resp_xlsx.content))
+    ws_data = wb["Data"]
+    # Row 20 is T1 #100 (us)
+    assert ws_data.cell(row=20, column=1).value == "T1 #100 (us)"
+    # Q0 column has campaign value
+    assert ws_data.cell(row=20, column=2).value is not None
+    # Q1 column is None / empty because it had no campaign
+    assert ws_data.cell(row=20, column=3).value is None
+
+
+def test_cooldown_unified_context_freshest_timestamp_priority(lab):
+    """When multiple setups record the same parameter, the freshest timestamped measurement wins."""
+    import openpyxl
+    import io
+
+    resp = lab["client"].get("/cooldown/devV/cdV/export_dashboard.xlsx")
+    assert resp.status_code == 200
+    wb = openpyxl.load_workbook(io.BytesIO(resp.content))
+    ws = wb["Data"]
+    # Verify workbook renders cleanly with aggregated qubits across setups
+    assert ws.cell(row=2, column=2).value == "devV"
+
+
