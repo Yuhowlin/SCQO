@@ -29,6 +29,7 @@ from scqo.testing import (
 RECORD_ONLY = {"qubit_sqrb", "qubit_tomography", "qubit_echo_flux_pulse",
                "qubit_relaxation_flux_pulse", "pair_swap_chevron", "pair_swap_flux_map",
                "qc_n_swap_amp", "qc_n_stark_amp", "qc_unidirectional_trotter",
+               "pair_swap_angle", "qc_trotter_compensation",
                "qubit_t1_ade", "qubit_t1_bayesian",
                "broadband_resonator_spectroscopy", "broadband_qubit_spectroscopy",
                "qubit_parametric_drive_amp", "qubit_parametric_drive_time"}
@@ -72,7 +73,13 @@ CHAIN_QUBITS = ("q0", "q1", "q2")
 #: every-experiment sweep passes.
 TROTTER_DEFAULTS = {"qc_unidirectional_trotter": {
     "first_pair": "q0_q1", "second_pair": "q1_q2", "reset_qubit": "q1",
-    "compensation_amps": {"q0": 0.3, "q1": 0.2, "q2": 0.25}}}
+    "compensation_amps": {"q0": 0.3, "q1": 0.2, "q2": 0.25}},
+    # the compensation scan takes the SAME chain, but its swept qubit may not
+    # also appear in the fixed map (two sources of truth for one amplitude), so
+    # q0 is the target and only the sink keeps a fixed tone.
+    "qc_trotter_compensation": {
+        "first_pair": "q0_q1", "second_pair": "q1_q2", "reset_qubit": "q1",
+        "compensation_target": "q0", "compensation_amps": {"q2": 0.25}}}
 
 #: what the module fixture runs on; _fresh_parity_session keeps the parity-only set.
 OFFLINE_DEFAULTS = {**PARITY_DEFAULTS, **PARAMETRIC_TIME_DEFAULTS,
@@ -113,7 +120,8 @@ CORE = sorted(obj.name for obj in map(lambda n: getattr(registry, n), registry._
 #: experiments whose targets are not ONE q0-shaped entity: the chain family
 #: initializes and reads out every chain qubit inside a single circuit, so the
 #: whole chain has to be selected at once.
-CHAIN_TARGETS = {"qc_unidirectional_trotter": list(CHAIN_QUBITS)}
+CHAIN_TARGETS = {"qc_unidirectional_trotter": list(CHAIN_QUBITS),
+                 "qc_trotter_compensation": list(CHAIN_QUBITS)}
 
 
 def _targets_for(name):
@@ -1786,3 +1794,145 @@ def test_broadband_resonator_spectroscopy_multi_targets(session):
     assert out["fit"]["q0"]["resonator_frequencies_hz"] == out["fit"]["q1"]["resonator_frequencies_hz"]
 
 
+
+
+# ---------------------------------------------------------------------------
+# pair_swap_angle - the swap ANGLE, read off the oscillation period in N
+# ---------------------------------------------------------------------------
+
+def _angle(session, **params):
+    out = session.run("pair_swap_angle",
+                      {"targets": ["q0_q1"], **params}, update="none")
+    assert out.get("error") is None, out.get("error")
+    return out
+
+
+def test_pair_swap_angle_fits_an_angle_per_coupler_value(session):
+    """Every coupler amplitude must yield a converged angle on clean data, and
+    the curve must span the range the simulator planted."""
+    out = _angle(session)
+    fit = out["fit"]["q0_q1"]
+    assert out["outcomes"]["q0_q1"] == "successful"
+    assert fit["n_theta_ok"] == fit["n_coupler_flux_v"]
+    # the planted window is theta_lo in [0.25, 0.40] rising to theta_hi in
+    # [1.10, 1.40]; both stay inside the integer-N Nyquist limit (pi/2)
+    assert 0.2 < fit["theta_min_rad"] < 0.45
+    assert 1.05 < fit["theta_max_rad"] < math.pi / 2
+    assert fit["theta_min_rad"] < fit["theta_max_rad"]
+
+
+def test_pair_swap_angle_solves_the_curve_for_a_requested_angle(session):
+    """A target angle inside the measured range is INTERPOLATED, and the volts
+    it reports are inside the swept window."""
+    out = _angle(session, target_theta_rad=0.8)
+    fit = out["fit"]["q0_q1"]
+    assert fit["best_theta_rad"] == pytest.approx(0.8)
+    assert fit["best_is_interpolated"] == 1.0
+    assert 0.0 <= fit["best_coupler_flux_v"] <= 0.1
+
+
+def test_pair_swap_angle_without_a_target_measures_only_the_curve(session):
+    out = _angle(session)
+    fit = out["fit"]["q0_q1"]
+    assert math.isnan(fit["target_theta_rad"])
+    assert math.isnan(fit["best_coupler_flux_v"])
+    # ...but the curve itself is still there, so the run is not wasted
+    assert fit["n_theta_ok"] > 0
+
+
+def test_pair_swap_angle_shot_mode_gives_the_same_angles(session):
+    """Shot mode reduces to the SAME joint distribution, so the calibration must
+    not depend on which readout mode was used."""
+    average = _angle(session, num_coupler_points=7)["fit"]["q0_q1"]
+    shot = _angle(session, num_coupler_points=7, num_averages=400,
+                  readout_mode="shot")["fit"]["q0_q1"]
+    assert shot["n_theta_ok"] == average["n_theta_ok"]
+    assert shot["theta_max_rad"] == pytest.approx(average["theta_max_rad"], abs=0.1)
+
+
+def test_pair_swap_angle_is_record_only(session):
+    assert len(_angle(session).get("suggestions", [])) == 0
+
+
+def test_pair_swap_angle_needs_a_coupler(session):
+    """The angle knob IS the coupler, so a pair without one is refused before
+    any instrument time is booked -- unlike qc_n_swap_amp, which needs none."""
+    out = session.run("pair_swap_angle", {"targets": ["q0_q2"]}, update="none")
+    assert out.get("error") is not None
+
+
+# ---------------------------------------------------------------------------
+# qc_trotter_compensation - the differential-phase scan over the chain
+# ---------------------------------------------------------------------------
+
+def _compensation(session, **params):
+    out = session.run("qc_trotter_compensation",
+                      {"targets": list(CHAIN_QUBITS), **params}, update="none")
+    assert out.get("error") is None, out.get("error")
+    return out
+
+
+def test_trotter_compensation_finds_an_optimum_inside_the_window(session):
+    """The simulator plants the phase-nulling amplitude inside the swept range,
+    so the scan must find it and beat the worst amplitude by a real factor."""
+    out = _compensation(session, max_rounds=12)
+    fit = out["fit"]["q2"]
+    assert set(out["outcomes"].values()) == {"successful"}
+    assert 0.0 < fit["best_compensation_amp"] < 1.0
+    assert fit["contrast"] > 2.0
+    assert fit["best_sink_p_max"] > fit["worst_sink_p_max"]
+
+
+def test_trotter_compensation_n_at_max_reads_the_phase_condition(session):
+    """The second discriminator: when the rounds cancel only the LAST one
+    survives, so the sink peaks at N=1; when they add, the peak moves out."""
+    fit = _compensation(session, max_rounds=12)["fit"]["q2"]
+    assert fit["best_n_at_max"] >= 3.0
+
+
+def test_trotter_compensation_reports_the_curve_at_the_optimum(session):
+    """The slice at the optimum IS the population-vs-N curve, so each qubit's
+    row summarises its own transport there -- the source drains, the sink fills."""
+    fit = _compensation(session, max_rounds=12)["fit"]
+    assert fit["q0"]["p_initial"] > 0.9 and fit["q0"]["p_final"] < 0.3
+    assert fit["q2"]["p_initial"] < 0.1
+    assert fit["q2"]["p_max"] == pytest.approx(fit["q2"]["best_sink_p_max"])
+    # every row carries the run-wide optimum, so one target reads on its own
+    assert fit["q1"]["best_compensation_amp"] == fit["q2"]["best_compensation_amp"]
+
+
+def test_trotter_compensation_is_record_only(session):
+    assert len(_compensation(session, max_rounds=6).get("suggestions", [])) == 0
+
+
+COMPENSATION_REFUSALS = [
+    # the relay's tone fires AFTER the reset, onto an emptied qubit
+    ({"compensation_target": "q1"}, "must be the chain source"),
+    # one amplitude, one source of truth
+    ({"compensation_target": "q0", "compensation_amps": {"q0": 0.4}},
+     "two sources of truth"),
+    # a pair the chain does not declare
+    ({"swap_coupler_flux": {"q0_q2": 0.05}}, "neither first_pair"),
+]
+
+
+@pytest.mark.parametrize("override,message", COMPENSATION_REFUSALS)
+def test_trotter_compensation_refuses_by_name(session, override, message):
+    """Every gate runs in define_sweep -- the earliest hook that sees both the
+    roster and the params -- so a mis-specified scan costs no instrument time."""
+    out = session.run("qc_trotter_compensation",
+                      {"targets": list(CHAIN_QUBITS), **override}, update="none")
+    assert message in (out.get("error") or ""), out.get("error")
+
+
+def test_swap_coupler_flux_is_accepted_by_the_chain_and_the_scan(session):
+    """The angle knob threads through BOTH chain experiments unchanged, which is
+    what makes a (theta_1, theta_2) campaign a parameter sweep rather than a
+    re-registration."""
+    flux = {"q0_q1": 0.04, "q1_q2": 0.05}
+    chain = session.run("qc_unidirectional_trotter",
+                        {"targets": list(CHAIN_QUBITS), "max_rounds": 6,
+                         "swap_coupler_flux": flux}, update="none")
+    assert chain.get("error") is None, chain.get("error")
+    scan = _compensation(session, max_rounds=6, swap_coupler_flux=flux)
+    assert scan["fit"]["q2"]["n_compensation_amp"] > 0

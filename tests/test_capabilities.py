@@ -143,6 +143,7 @@ EXPECTED_CAPABILITIES = {
     # flux_bias_v), and these sweep a pair's pulse amplitudes instead. Their
     # probes hardcode discrimination, so no state_readout either.
     "pair_swap_chevron": ["qubit_reset"],
+    "pair_swap_angle": ["qubit_reset"],
     "pair_swap_flux_map": ["qubit_reset"],
     "qc_n_stark_amp": ["qubit_reset"],
     "qc_n_swap_amp": ["qubit_reset"],
@@ -150,6 +151,7 @@ EXPECTED_CAPABILITIES = {
     # per-qubit FACTOR of the stark operation's baked amplitude, not a swept
     # window of a target knob, so it carries no `amplitude` capability (same
     # reasoning as qc_n_stark_amp); the only swept axis is the round count.
+    "qc_trotter_compensation": ["qubit_reset"],
     "qc_unidirectional_trotter": ["qubit_reset"],
     "single_shot_readout": ["qubit_reset"],
     "single_shot_readout_gef": ["qubit_reset"],

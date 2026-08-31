@@ -47,6 +47,16 @@ dependencies = [
                         # gets wrong numbers. Unusual for this stack, where the floors are
                         # usually silent; the experiment is simply unusable below it.
                         # See RELEASES.toml [v3-4-0].
+                        # The NEXT cut raises the floor to scqat v0.23.0, LOUD the same
+                        # way twice over: pair_swap_angle and qc_trotter_compensation
+                        # each lazy-import their own estimator subpackage, neither of
+                        # which exists below it. It ALSO carries a silent half worth
+                        # naming - scqat v0.23.0 seeds the cosine fit at sub-bin
+                        # frequency resolution, and below it a swap period falling
+                        # between FFT bins pins the fit at the nearer bin and returns a
+                        # plausible-looking angle that is several percent wrong with a
+                        # collapsed R^2. That affects swap_oscillation too, so an older
+                        # scqat does not merely lack the new experiments.
     "netcdf4>=1.6",     # datastore: dataset.nc has a string qubit coord (needs netCDF4, not the scipy netCDF3 fallback)
     "tomli>=2.0; python_version<'3.11'",  # labconfig TOML parsing on py3.10
 ]

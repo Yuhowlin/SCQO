@@ -344,27 +344,27 @@ tests/test_campaign.py          # the pure aggregator + run_campaign orchestrati
 ### The registered experiments
 
 <!-- BEGIN generated: experiments -->
-**43 registered experiments.** This list is GENERATED from the registry
+**45 registered experiments.** This list is GENERATED from the registry
 (`scqo.catalog()`) - refresh it with `python scripts/update_docs.py`. Descriptions are
 catalog-quality and live in the registry, never here: read one with
 `scqo run <name> --help`, or browse by capability with `scqo run --capability <name>`.
 
 ```
-broadband_qubit_spectroscopy        qubit_parity_switch_continuous      qubit_t1_ade
-broadband_resonator_spectroscopy    qubit_parity_switch_discrete        qubit_t1_bayesian
-pair_swap_chevron                   qubit_pi_pulse_error                qubit_thermal_population
-pair_swap_flux_map                  qubit_power_rabi                    qubit_tomography
-pair_zz_coupler                     qubit_ramsey                        qubit_xyz_delay
-qc_n_stark_amp                      qubit_ramsey_cryoscope              readout_frequency
-qc_n_swap_amp                       qubit_ramsey_phasor                 readout_power
+broadband_qubit_spectroscopy        qubit_parametric_drive_amp          qubit_sqrb
+broadband_resonator_spectroscopy    qubit_parametric_drive_time         qubit_stark_phase_echo
+pair_swap_angle                     qubit_parity_switch_continuous      qubit_t1_ade
+pair_swap_chevron                   qubit_parity_switch_discrete        qubit_t1_bayesian
+pair_swap_flux_map                  qubit_pi_pulse_error                qubit_thermal_population
+pair_zz_coupler                     qubit_power_rabi                    qubit_tomography
+qc_n_stark_amp                      qubit_ramsey                        qubit_xyz_delay
+qc_n_swap_amp                       qubit_ramsey_cryoscope              readout_frequency
+qc_trotter_compensation             qubit_ramsey_phasor                 readout_power
 qc_unidirectional_trotter           qubit_relaxation                    resonator_spectroscopy
 qubit_deterministic_benchmarking    qubit_relaxation_flux_pulse         resonator_spectroscopy_flux
 qubit_drag_alternating              qubit_spectroscopy                  resonator_spectroscopy_power_amp
 qubit_drag_equator                  qubit_spectroscopy_cryoscope        resonator_spectroscopy_power_chain
 qubit_echo                          qubit_spectroscopy_flux_pulse       single_shot_readout
 qubit_echo_flux_pulse               qubit_spectroscopy_overlap          single_shot_readout_gef
-qubit_parametric_drive_amp          qubit_sqrb
-qubit_parametric_drive_time         qubit_stark_phase_echo
 ```
 <!-- END generated: experiments -->
 
@@ -382,6 +382,7 @@ experiments, or a name in the trailing line, is a KNOWN VIOLATION carried in
 |---|---|
 | `broadband_qubit_spectroscopy` | broadband_qubit_spectroscopy |
 | `broadband_resonator_spectroscopy` | broadband_resonator_spectroscopy |
+| `pair_swap_angle` | pair_swap_angle |
 | `pair_swap_chevron` | pair_swap_chevron |
 | `pair_swap_flux_map` | pair_swap_flux_map |
 | `parametric_drive_decoherence` | qubit_parametric_drive_time |
@@ -391,6 +392,7 @@ experiments, or a name in the trailing line, is a KNOWN VIOLATION carried in
 | `power_rabi` | qubit_power_rabi |
 | `qc_n_stark_amp` | qc_n_stark_amp |
 | `qc_n_swap_amp` | qc_n_swap_amp |
+| `qc_trotter_compensation` | qc_trotter_compensation |
 | `qc_unidirectional_trotter` | qc_unidirectional_trotter |
 | `qubit_deterministic_benchmarking` | qubit_deterministic_benchmarking |
 | `qubit_drag_alternating` | qubit_drag_alternating |

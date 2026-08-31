@@ -139,6 +139,24 @@ def chain_roles(roster, params) -> tuple[str, str, str, str]:
             problems.append(
                 f"compensation_amps names {qubit!r}, which has no drive "
                 f"channel — nothing to play {params.stark_operation!r} on")
+    # The swap coupler flux names PAIRS, and only the two the chain declares:
+    # a third name is a typo that would otherwise be silently ignored.
+    for pair in sorted(getattr(params, "swap_coupler_flux", {}) or {}):
+        if pair not in (params.first_pair, params.second_pair):
+            problems.append(
+                f"swap_coupler_flux names {pair!r}, which is neither first_pair "
+                f"({params.first_pair!r}) nor second_pair ({params.second_pair!r})")
+            continue
+        entity = roster.entities.get(pair)
+        couplers = (getattr(entity, "roles", {}) or {}).get("coupler", ())
+        if not couplers:
+            problems.append(
+                f"swap_coupler_flux names {pair!r}, which declares no coupler role "
+                f"— there is no coupler flux to set")
+        elif (couplers[0], "flux") not in roster.defaults:
+            problems.append(
+                f"swap_coupler_flux names {pair!r}, whose coupler {couplers[0]!r} "
+                f"has no flux channel")
     if problems:
         raise ValueError("qc_unidirectional_trotter: " + "; ".join(problems))
     return source, relay, sink, prep
@@ -190,6 +208,21 @@ class QcUnidirectionalTrotterParameters(TargetSelection, AveragingParameters,
                     "parametric reset (quam_config/register_reset_macro.py registers it "
                     "under this key; the z pulse it plays is a separate name). This is "
                     "NOT reset_method, which is how targets return to |g> BETWEEN shots.")
+    swap_coupler_flux: dict[str, float] = Field(
+        default_factory=dict,
+        description="Per-pair COUPLER flux amplitude for the swap, as {pair name: volts "
+                    "at the DAC}. This is the swap ANGLE knob (TUTORIAL section 12: the "
+                    "member's own flux sets resonance, the coupler sets the angle), so "
+                    "this is how a run picks a (theta_1, theta_2) pair without "
+                    "re-registering pulses. Absolute VOLTS, not an angle and not a "
+                    "factor: theta = J_eff(Phi_c) * t_p is not linear in coupler flux, "
+                    "so calibrate the curve with pair_swap_angle and read the volts off "
+                    "it. A pair absent from the map plays its baked coupler amplitude; "
+                    "{} leaves both pairs alone, which is the pre-existing behaviour. "
+                    "Only first_pair and second_pair may be named, and the driver "
+                    "refuses a coupler that has no flux channel or is baked at zero "
+                    "amplitude (unsettable, since it is the divisor of the "
+                    "volts->amplitude-scale conversion).")
     stark_operation: str = Field(
         "stark",
         description="The named XY (RF) operation played on each compensated qubit at the "
