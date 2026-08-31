@@ -25,6 +25,11 @@ _COMMANDS = {
     "user": ("user", "show or set YOUR selection: device + setup (writes user.toml)"),
     "device": ("device", "device admin (manager): add, list, cooldown start/end"),
     "doctor": ("doctor", "health check: venv, drivers, config chain, registries (run me first)"),
+    "close-qm": ("close_qm", "halt running jobs and close open Quantum Machines on the cluster"),
+}
+
+_ALIASES = {
+    "close_qm": "close-qm",
 }
 
 
@@ -47,9 +52,9 @@ def main(argv: list[str] | None = None) -> int:
 
         print(version("scqo"))
         return 0
-    command = argv[0]
+    command = _ALIASES.get(argv[0], argv[0])
     if command not in _COMMANDS:
-        print(f"unknown command {command!r}\n\n{_usage()}", file=sys.stderr)
+        print(f"unknown command {argv[0]!r}\n\n{_usage()}", file=sys.stderr)
         return 2
     from importlib import import_module
 

@@ -402,6 +402,27 @@ class Session:
                 "warnings": [str(w.message) for w in caught
                              if issubclass(w.category, PreviewWarning)]}
 
+    def close_qm(self, **options: Any) -> dict[str, Any]:
+        """Halt running jobs and close open Quantum Machines on the backend (if supported).
+
+        Delegates to the backend's duck-typed ``close_qm(**options)`` hook. If the
+        current backend does not implement ``close_qm`` (e.g. simulated backend),
+        returns an informative report indicating no hardware QM sessions to close.
+        """
+        hook = getattr(self.backend, "close_qm", None)
+        if hook is not None:
+            return hook(**options)
+        return {
+            "success": True,
+            "backend": self.backend_label,
+            "open_qms": [],
+            "halted_jobs": [],
+            "closed_qms": [],
+            "errors": [],
+            "message": (f"backend {self.backend_label!r} does not have hardware "
+                        f"QM sessions to close"),
+        }
+
     # ----------------------------------------------------------- campaigns
 
     def run_campaign(
