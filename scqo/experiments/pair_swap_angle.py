@@ -23,6 +23,33 @@ error amplification; it reports where transfer peaks and fits nothing. Same
 sweep shape, different knob and different model — so, per the 1:1 rule, its own
 estimator. Run that one FIRST (resonance), then this one (angle).
 
+WHAT THE FIT ACTUALLY RETURNS, and why it is not always the exchange angle.
+Repeating the swap does not just amplify the exchange: between swaps the two
+members accumulate a RELATIVE phase ``phi`` (during the flux pulse, during
+``operation_gap_ns``, and at idle). In the single-excitation subspace the round
+is therefore an exchange followed by a Z rotation, and those do not commute. The
+composite per-round rotation has half-angle ``theta_eff`` with
+
+    cos(theta_eff) = cos(phi/2) * cos(theta)
+
+and it is ``theta_eff`` that the N-oscillation reports. Two consequences:
+``theta_eff >= theta`` ALWAYS — an uncompensated phase can only INFLATE the
+apparent angle — and the oscillation's contrast falls as phi grows. Measured on
+5Q4C 2026-09-01: at ``coupler_flux_v = 0.0``, where the coupler pulse has zero
+amplitude and the swap is therefore physically identical, changing
+``operation_gap_ns`` from 0 to 20 moved the fitted angle from 0.993 to 1.561 rad
+— the second reading being indistinguishable from a full iSWAP.
+
+So ``theta_rad`` is the PER-ROUND COMPOSITE angle, and equals the exchange angle
+only when ``phi`` is nulled. ``compensation_amps`` is how you null it: an
+off-resonant AC-Stark tone on one member adds a controllable differential phase,
+exactly as ``qc_unidirectional_trotter`` compensates its chain. Only the
+DIFFERENCE between the members is observable, so a tone on ONE member is enough.
+Calibrate it with ``qc_n_stark_amp`` at the same swap, or scan it here across
+runs and take the MINIMUM of ``theta_rad`` — the minimum is the true exchange
+angle, and it is immune to decoherence because decay changes the oscillation's
+amplitude, not its frequency.
+
 READOUT (the unified readout schema): digital, both modes. ``readout_mode=
 "average"`` (default) stores the pair's ``joint_population`` over ``joint_state``
 labels; ``"shot"`` keeps every shot as per-member integer levels
@@ -67,6 +94,32 @@ from .pair_swap_chevron import (
 )
 
 
+def _compensation_problems(roster, params) -> list[str]:
+    """Roster gate for ``compensation_amps``: named members, real drive lines.
+
+    A tone on a qubit OUTSIDE the pair would shift a spectator and change nothing
+    observable here, and a name that is not a member at all is a typo that would
+    otherwise be played silently — so both refuse, naming every problem at once
+    and before any instrument time is booked.
+    """
+    problems: list[str] = []
+    for pair in params.targets:
+        entity = roster.entities.get(pair)
+        members = [m for role in ("high", "low")
+                   for m in (getattr(entity, "roles", {}) or {}).get(role, ())]
+        for qubit in sorted(params.compensation_amps):
+            if qubit not in members:
+                problems.append(
+                    f"compensation_amps names {qubit!r}, which is not a member of "
+                    f"{pair} {members} — only the pair's own members carry a "
+                    f"compensation tone, and only their DIFFERENCE is observable")
+            elif (qubit, "drive") not in roster.defaults:
+                problems.append(
+                    f"compensation_amps names {qubit!r}, which has no drive channel "
+                    f"— nothing to play {params.stark_operation!r} on")
+    return problems
+
+
 class PairSwapAngleParameters(TargetSelection, AveragingParameters,
                               QubitResetParameters, ReadoutModeParameters):
     """Inputs for the swap-angle calibration. ``targets`` are PAIR components."""
@@ -104,11 +157,42 @@ class PairSwapAngleParameters(TargetSelection, AveragingParameters,
                     "coupler amplitude that delivers it is reported as "
                     "best_coupler_flux_v — interpolated when the target falls between "
                     "two measured points. None just measures the curve.")
+    compensation_amps: dict[str, float] = Field(
+        default_factory=dict,
+        description="Per-member AC-Stark phase compensation, as {qubit name: amplitude "
+                    "FACTOR of the stark operation's baked amplitude}, played after every "
+                    "swap. This is what makes the fitted angle the EXCHANGE angle rather "
+                    "than the per-round composite (see the module docstring): the tone is "
+                    "off-resonant, so it shifts the qubit rather than rotating it, and the "
+                    "shift integrated over the pulse is the differential phase it cancels. "
+                    "Only the DIFFERENCE between the two members is observable, so naming "
+                    "ONE member is enough — and only the pair's own members may be named. "
+                    "Calibrate with qc_n_stark_amp, or scan across runs and take the "
+                    "MINIMUM fitted angle. NOTE {} and {'q1': 0.0} are not the same run: a "
+                    "qubit absent from the map plays no tone at all, while a factor of 0.0 "
+                    "still plays and so keeps the round's DURATION — and hence its phase — "
+                    "identical to a compensated one. Use 0.0 for the baseline you intend "
+                    "to compare against.")
+    stark_operation: str = Field(
+        "stark",
+        description="The named XY (RF) operation played on each compensated member after "
+                    "every swap; its baked amplitude is the reference each compensation "
+                    "factor multiplies. NOT x180 — a dedicated off-resonant tone (the "
+                    "driver refuses by name if the operation is missing; register it via "
+                    "quam_config/register_stark.py).")
+    stark_detuning_hz: float = Field(
+        50e6,
+        description="FIXED off-resonant detuning (Hz) of the compensation tones from each "
+                    "member's drive frequency. Must be off-resonant for a genuine Stark "
+                    "shift (a resonant tone drives Rabi rotations instead); tune per chip. "
+                    "Not a sweep axis, and shared by both members.")
     operation_gap_ns: int = Field(
         0, ge=0,
         description="Idle gap (ns) on the pair's flux lines after each swap, so the "
                     "pulse settles before the next swap fires. 0 disables; the QM "
-                    "backend requires a multiple of 4 ns.")
+                    "backend requires a multiple of 4 ns. It is ALSO a phase knob: the "
+                    "members accumulate their relative phase through it, so changing it "
+                    "changes the fitted angle unless compensation_amps nulls that phase.")
     drive_side: Literal["high", "low"] = Field("low", description=DRIVE_SIDE_DESC)
     flux_side: Literal["high", "low"] = Field("low", description=FLUX_SIDE_DESC)
     min_transfer: float = Field(
@@ -129,8 +213,12 @@ class PairSwapAngleResult(Result):
     converged fit) — alongside the usual transfer-map summary
     (``best_transfer`` and its coordinates, the marginal ranges, ``p_ee_max``).
     The full ``theta`` curve is per-coupler-value and so lives in the scqat
-    metadata, not in ``fit`` (which is scalars). Record-only: no ``update()``,
-    nothing written to the device."""
+    metadata, not in ``fit`` (which is scalars).
+
+    EVERY reported angle is the PER-ROUND COMPOSITE angle ``theta_eff``, which
+    equals the exchange angle only when ``compensation_amps`` nulls the
+    inter-swap phase; uncompensated it is an UPPER BOUND (see the module
+    docstring). Record-only: no ``update()``, nothing written to the device."""
 
 
 @register
@@ -145,10 +233,13 @@ class PairSwapAngle(Experiment):
         "populations. At each coupler amplitude the transfer oscillates in N with period "
         "pi/theta, so a cosine fit per coupler row yields the calibration curve "
         "theta(coupler flux) and, given target_theta_rad, the amplitude that delivers a "
-        "wanted angle. Run qc_n_swap_amp first to set the resonance; this one then sets "
-        "the angle. readout_mode='shot' keeps every shot instead of the averaged joint "
-        "distribution. Record-only diagnostic: the calibration lands in result.fit and "
-        "nothing is written back to the device."
+        "wanted angle. What is fitted is the PER-ROUND COMPOSITE angle: the members also "
+        "accumulate a relative phase between swaps, which can only inflate the apparent "
+        "angle, so compensation_amps plays an AC-Stark tone that nulls it and the true "
+        "exchange angle is the MINIMUM over that compensation. Run qc_n_swap_amp first to "
+        "set the resonance; this one then sets the angle. readout_mode='shot' keeps every "
+        "shot instead of the averaged joint distribution. Record-only diagnostic: the "
+        "calibration lands in result.fit and nothing is written back to the device."
     )
     Parameters: ClassVar[type] = PairSwapAngleParameters
     Result: ClassVar[type] = PairSwapAngleResult
@@ -171,6 +262,11 @@ class PairSwapAngle(Experiment):
     params: PairSwapAngleParameters
 
     def define_sweep(self) -> dict[str, np.ndarray]:
+        # The compensation gate lives here: validate_targets cannot see params,
+        # and this still runs before the backend is asked for anything.
+        problems = _compensation_problems(self.device.roster, self.params)
+        if problems:
+            raise ValueError("pair_swap_angle: " + "; ".join(problems))
         return {
             # dict order IS the contract order: coupler flux outer, swap count inner.
             "coupler_flux_v": np.linspace(self.params.min_coupler_flux_v,
@@ -186,16 +282,27 @@ class PairSwapAngle(Experiment):
         return {"joint_state": joint_state_labels(2)}
 
     def simulate(self, coords: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
-        """A coherent exchange whose ANGLE grows with the coupler amplitude.
+        """A coherent exchange, plus the inter-swap PHASE that contaminates it.
 
         On resonance one swap advances the exchange by ``theta = J_eff * t_p``,
-        so ``N`` swaps transfer ``sin^2(N*theta)``: the population ping-pongs
-        with period ``pi/theta`` and the period SHORTENS as the coupler opens.
-        That period is the whole signal — unlike ``qc_n_swap_amp``, where the
-        coupler is fixed and a detuning kills the contrast, here the contrast
-        stays high and only the frequency moves. ``J_eff`` is planted linear in
-        the coupler flux, which is the local behaviour a narrow sweep sees; the
-        estimator assumes no such shape.
+        so ``N`` swaps would transfer ``sin^2(N*theta)`` — but only if nothing
+        rotated the phase between them. Something always does (the flux pulse,
+        the gap, the idle), and an exchange followed by a Z rotation does not
+        commute, so what repeats is a composite rotation:
+
+            cos(theta_eff) = cos(phi/2) * cos(theta)
+            contrast       = sin^2(theta) / (sin^2(theta) + sin^2(phi/2) cos^2(theta))
+
+        Both are planted here, because an offline test against a phase-free
+        simulator would pass while the experiment silently mismeasured on
+        hardware — which is exactly what happened on 5Q4C 2026-09-01. The
+        residual phase is drawn with a COUPLER-DEPENDENT part, so one fixed
+        ``compensation_amps`` cannot null it across the whole sweep, and a
+        ``gap``-proportional part, so changing ``operation_gap_ns`` moves the
+        answer the way the instrument does.
+
+        ``J_eff`` is planted linear in the coupler flux, which is the local
+        behaviour a narrow sweep sees; the estimator assumes no such shape.
         """
         v = coords["coupler_flux_v"]
         n = coords["swap_count"].astype(float)
@@ -205,7 +312,8 @@ class PairSwapAngle(Experiment):
         shot_mode = self.params.readout_mode == "shot"
         num_shots = int(self.params.num_averages)
         per_pair = []
-        for _k in range(len(pairs)):
+        roles = _role_names(self.device, pairs)
+        for _k, pair in enumerate(pairs):
             # Angles the sweep can actually resolve: the largest stays under the
             # integer-N Nyquist limit (theta = pi/2, a full iSWAP) and the
             # smallest completes a period within the default count axis.
@@ -215,7 +323,35 @@ class PairSwapAngle(Experiment):
             n_tau = float(rng.uniform(30.0, 60.0))              # swaps to decohere
             prep = float(rng.uniform(0.94, 0.99))               # pi-pulse fidelity
             therm = float(rng.uniform(0.005, 0.02))             # residual |ee>
-            swap = (np.sin(theta[:, None] * n[None, :]) ** 2
+
+            # The residual differential phase per round: a constant, a part that
+            # rides the gap, and a COUPLER-DEPENDENT part (the flux pulse shifts
+            # both members while it plays). The last one is why a single fixed
+            # compensation cannot null the phase across the whole sweep.
+            phi_const = float(rng.uniform(-0.6, 0.6))
+            phi_per_ns = float(rng.uniform(0.01, 0.05))         # rad per ns of gap
+            phi_slope = float(rng.uniform(-6.0, 6.0))           # rad per volt
+            phi = (phi_const
+                   + phi_per_ns * float(self.params.operation_gap_ns)
+                   + phi_slope * (v - v.min()))
+
+            # The compensation tone: an off-resonant Stark shift, quadratic in
+            # amplitude. Only the DIFFERENCE between the members is observable,
+            # so the two roles enter with opposite sign.
+            stark_k = float(rng.uniform(3.0, 9.0))              # rad per amp^2
+            names = roles.get(pair, {})
+            for qubit, factor in self.params.compensation_amps.items():
+                sign = 1.0 if qubit == names.get("high_name") else -1.0
+                phi = phi + sign * stark_k * float(factor) ** 2
+
+            # The composite rotation the N-oscillation actually reports, and the
+            # contrast the phase costs it.
+            c_phi = np.cos(phi / 2.0)
+            theta_eff = np.arccos(np.clip(c_phi * np.cos(theta), -1.0, 1.0))
+            s2 = np.sin(theta) ** 2
+            contrast = s2 / (s2 + np.sin(phi / 2.0) ** 2 * np.cos(theta) ** 2)
+            swap = (contrast[:, None]
+                    * np.sin(theta_eff[:, None] * n[None, :]) ** 2
                     * np.exp(-n[None, :] / n_tau))
             p_partner = np.clip(prep * swap, 0.0, 1.0)
             p_driven = np.clip(prep * (1.0 - swap) * np.exp(-n[None, :] / (8 * n_tau)),

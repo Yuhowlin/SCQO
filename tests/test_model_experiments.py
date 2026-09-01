@@ -1936,3 +1936,67 @@ def test_swap_coupler_flux_is_accepted_by_the_chain_and_the_scan(session):
     assert chain.get("error") is None, chain.get("error")
     scan = _compensation(session, max_rounds=6, swap_coupler_flux=flux)
     assert scan["fit"]["q2"]["n_compensation_amp"] > 0
+
+
+# ---------------------------------------------------------------------------
+# pair_swap_angle - the inter-swap phase, and the tone that nulls it
+# ---------------------------------------------------------------------------
+
+def test_pair_swap_angle_refuses_a_compensation_outside_the_pair(session):
+    """Only the DIFFERENCE between the two members is observable, so a tone on a
+    spectator changes nothing measurable here -- refused rather than played."""
+    out = session.run("pair_swap_angle",
+                      {"targets": ["q0_q1"], "compensation_amps": {"q2": 0.3}},
+                      update="none")
+    assert "not a member" in (out.get("error") or ""), out.get("error")
+
+
+def test_pair_swap_angle_gap_moves_the_fitted_angle(session):
+    """THE contamination this experiment has to be honest about: the members
+    accumulate a relative phase through the gap, and an exchange followed by a Z
+    rotation does not commute -- so the SAME swap reports a different angle at a
+    different gap. Pinned because a phase-free simulator would let the offline
+    suite pass while hardware silently mismeasured (5Q4C 2026-09-01)."""
+    tight = _angle(session, num_coupler_points=7, operation_gap_ns=0)["fit"]["q0_q1"]
+    loose = _angle(session, num_coupler_points=7, operation_gap_ns=20)["fit"]["q0_q1"]
+    assert tight["theta_min_rad"] != pytest.approx(loose["theta_min_rad"], abs=0.02)
+
+
+def test_pair_swap_angle_compensation_can_only_lower_the_angle(session):
+    """cos(theta_eff) = cos(phi/2) cos(theta), so theta_eff >= theta ALWAYS: a
+    compensation scan can push the reported angle DOWN toward the exchange angle
+    and never below it. That one-sidedness is what makes the MINIMUM over the
+    scan the right estimator of theta, and it is why a single uncompensated run
+    is an upper bound rather than a measurement."""
+    # PIN the coupler: a degenerate window makes every row the same physical
+    # point, so theta_min_rad is one well-defined angle rather than a minimum
+    # over a coupler axis that would already pick the most favourable phase.
+    pinned = dict(min_coupler_flux_v=0.05, max_coupler_flux_v=0.05,
+                  num_coupler_points=5, operation_gap_ns=0)
+    amps = (0.0, 0.1, 0.2, 0.25, 0.3, 0.4, 0.6)
+    scan = {}
+    for member in ("q0", "q1"):
+        for amp in amps:
+            fit = _angle(session, compensation_amps={member: amp},
+                         **pinned)["fit"]["q0_q1"]
+            scan[(member, amp)] = fit["theta_min_rad"]
+
+    bare = scan[("q0", 0.0)]
+    assert scan[("q1", 0.0)] == pytest.approx(bare)     # no tone either way
+    best_key = min(scan, key=scan.get)
+    best = scan[best_key]
+    # some compensation beats no compensation, and by a real margin
+    assert best < bare - 0.05, scan
+    # the optimum is INTERIOR to the scan, which is what distinguishes a genuine
+    # phase null from a monotone drift: over-compensating climbs back up
+    member, amp = best_key
+    assert 0.0 < amp < amps[-1], scan
+    assert scan[(member, amps[-1])] > best, scan
+
+
+def test_pair_swap_angle_compensation_reaches_the_probe(session):
+    """A compensated run must still produce a full calibration, not merely not
+    crash: every coupler value keeps a converged fit."""
+    fit = _angle(session, num_coupler_points=7, operation_gap_ns=20,
+                 compensation_amps={"q0": 0.3})["fit"]["q0_q1"]
+    assert fit["n_theta_ok"] == fit["n_coupler_flux_v"]
