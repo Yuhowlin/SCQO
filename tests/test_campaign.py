@@ -568,7 +568,22 @@ def test_period_gates_the_repeat_start(session):
         skip_artifacts=True, steps=[{"experiment": "qubit_relaxation"}]))
     assert out["repeat_done"] == 3
     starts = [r["elapsed_s"] for r in out["repeats"]]
-    assert starts[1] >= 0.25 and starts[2] >= 0.5
+    # elapsed_s is `monotonic() - started_mono` read just after the gate waited
+    # until `started_mono + n * period_s`, so it lands a hair either side of the
+    # exact multiple. Windows CI has produced 0.4999999999999716 — short of 0.5
+    # by 3e-14 s, i.e. 28 femtoseconds. Nothing about a sleep, a scheduler or a
+    # clock source operates at that scale, so it is a floating-point artifact of
+    # the read, not a cadence miss. (The obvious candidate, cancellation in
+    # (base + 0.5) - base, is NOT it: 0.5 needs one fractional bit, so that is
+    # exact for every realistic monotonic base. The precise mechanism is
+    # unidentified.)
+    #
+    # Hence a tolerance chosen to be unmistakably sub-physical: at 1 ns it is
+    # ~30000x the observed error and ~1e6x below the 0.25 s period, so it cannot
+    # mask a real gate failure while removing the whole class of artifact.
+    epsilon = 1e-9
+    assert starts[1] >= 0.25 - epsilon
+    assert starts[2] >= 0.5 - epsilon
 
 
 def test_a_single_repeat_reproduces_a_standalone_run(session):
