@@ -1,87 +1,108 @@
 name = "trotter-angle-and-compensation"
-repos = { scqat = "c32d2c4", scqo = "da6acdb", scqo-qm = "b89cba1" }
+repos = { scqat = "9d28654", scqo = "62961fb", scqo-qm = "07f623c" }
 kind = "additive"
 coupling = """
-scqo needs scqat >= c32d2c4 (the v0.23.0 line), and this coupling has BOTH kinds \
-in it. LOUD, twice: pair_swap_angle and qc_trotter_compensation each lazy-import \
-their own estimator subpackage inside estimate(), so below the floor the catalog \
-still imports and `scqo run <either>` dies with an ImportError naming the missing \
-module - nobody gets wrong numbers. SILENT, once, and it reaches an EXISTING \
-estimator: scqat c32d2c4 also refines the cosine fit's frequency seed to sub-bin \
-precision, and below it swap_oscillation (and any angle read through it) pins a \
-period falling between FFT bins at the nearer bin - a plausible angle several \
-percent wrong with a collapsed R^2. So an older scqat does not merely lack the \
-new experiments; do not run either one against one.
+scqo needs scqat >= c32d2c4 (the v0.23.0 line), and this coupling has BOTH kinds in \
+it. LOUD, twice: pair_swap_angle and qc_trotter_compensation each lazy-import their \
+own estimator subpackage inside estimate(), so below the floor the catalog still \
+imports and `scqo run <either>` dies with an ImportError naming the missing module - \
+nobody gets wrong numbers. SILENT, once, and it reaches an EXISTING estimator: scqat \
+c32d2c4 also refines the cosine fit's frequency seed to sub-bin precision, and below \
+it swap_oscillation (and any angle read through it) pins a period falling between FFT \
+bins at the nearer bin - a plausible angle several percent wrong with a collapsed R^2. \
+So an older scqat does not merely lack the new experiments; do not run either one \
+against one.
 """
-validated = "offline"
+validated = "hardware 5Q4C 2026-09-01 (pair_swap_angle only, and every angle it has reported is UNCOMPENSATED = an upper bound); offline for qc_trotter_compensation and swap_coupler_flux"
 notes = """
-ADDITIVE - two new experiments and one new Parameters field, nothing existing \
-changes shape. UPGRADE REQUIRES the usual editable reinstalls (all three scqo \
-pyproject versions plus scqat, whose version DOES move this cut).
+ADDITIVE - two new experiments and one new Parameters field, nothing existing changes \
+shape. UPGRADE REQUIRES the usual editable reinstalls (all three scqo pyproject \
+versions plus scqat, whose version DOES move this cut).
 
-WHAT SHIPS. pair_swap_angle measures the partial-swap ANGLE: it sweeps the \
-COUPLER flux against the swap count and fits the oscillation period pi/theta per \
-coupler value, returning theta(coupler flux) in radians and - given \
-target_theta_rad - the volts that deliver a wanted angle, interpolated between \
-measured rows. Until now the angle was carried entirely by a QUAM operation NAME, \
-materialized by hand-editing two register scripts, with nothing recording what \
-angle that name actually is; TUTORIAL section 12 said to count the period off a \
-figure by eye. It is deliberately NOT a second binding on qc_n_swap_amp: that one \
-sweeps the control qubit's flux (the RESONANCE knob) and only summarises where \
-transfer peaks. Same sweep shape, different knob, different model.
+WHAT SHIPS. pair_swap_angle measures the partial-swap ANGLE: it sweeps the COUPLER \
+flux against the swap count and fits the oscillation period pi/theta per coupler \
+value, returning theta(coupler flux) in radians and - given target_theta_rad - the \
+volts that deliver a wanted angle, interpolated between measured rows. Until now the \
+angle was carried entirely by a QUAM operation NAME, materialized by hand-editing two \
+register scripts, with nothing recording what angle that name actually is; TUTORIAL \
+section 12 said to count the period off a figure by eye. It is deliberately NOT a \
+second binding on qc_n_swap_amp: that one sweeps the control qubit's flux (the \
+RESONANCE knob) and only summarises where transfer peaks. Same sweep shape, different \
+knob, different model.
 
 qc_trotter_compensation replaces the ~50-run hand scan that finding the chain's \
-AC-Stark compensation phase used to be, with one 2-D run over (compensation \
-amplitude, Trotter step). Its Parameters SUBCLASS QcUnidirectionalTrotterParameters \
-so the scan and the run it calibrates cannot disagree about the round. Only the \
-DIFFERENTIAL source-sink phase is observable (a common-mode phase cancels), so ONE \
-amplitude is swept and compensation_target refuses the reset qubit BY NAME - that \
-tone fires after the qubit has been emptied and measures nothing. n_at_max is \
-reported beside the peak height because it reads the phase condition \
-independently: cancelling rounds leave the sink peaking at N=1, adding rounds push \
-the peak out to several. Because N is swept, the slice at the optimum IS the \
-population-vs-N curve, so one run answers both questions.
+AC-Stark compensation phase used to be, with one 2-D run over (compensation amplitude, \
+Trotter step). Its Parameters SUBCLASS QcUnidirectionalTrotterParameters so the scan \
+and the run it calibrates cannot disagree about the round. Only the DIFFERENTIAL \
+source-sink phase is observable (a common-mode phase cancels), so ONE amplitude is \
+swept and compensation_target refuses the reset qubit BY NAME - that tone fires after \
+the qubit has been emptied and measures nothing. n_at_max is reported beside the peak \
+height because it reads the phase condition independently: cancelling rounds leave the \
+sink peaking at N=1, adding rounds push the peak out to several. Because N is swept, \
+the slice at the optimum IS the population-vs-N curve, so one run answers both \
+questions.
 
 qc_unidirectional_trotter gains swap_coupler_flux - per-pair coupler volts, so a \
-(theta_1, theta_2) set is a parameter sweep rather than a re-registered pulse, and \
-the campaign over angle sets is a plan file. VOLTS, not an angle and not a factor, \
-because theta = J_eff(Phi_c) * t_p is not linear in coupler flux; pair_swap_angle \
-measures the curve you invert. Default {} is byte-for-byte the previous sequence.
+(theta_1, theta_2) set is a parameter sweep rather than a re-registered pulse, and the \
+campaign over angle sets is a plan file. VOLTS, not an angle and not a factor, because \
+theta = J_eff(Phi_c) * t_p is not linear in coupler flux; pair_swap_angle measures the \
+curve you invert. Default {} is byte-for-byte the previous sequence.
 
-BOTH ARE RECORD-ONLY, and for a reason worth recording: a Stark compensation \
-factor is a per-run sequence choice with no vendor home, and the composite knob \
+BOTH ARE RECORD-ONLY, and for a reason worth recording: a Stark compensation factor is \
+a per-run sequence choice with no vendor home, and the composite knob \
 <op>_coupler_flux IS in the catalog but its QM fieldmap binding reads \
 macro.coupler_flux_pulse.amplitude, which ISwapImplementation does not have (it \
-carries flux_pulse: str). So today that knob's read returns None and its write \
-raises KeyError - the binding was written against a CZ-shaped macro. Proposing it \
-would write nothing. Worth filing separately.
+carries flux_pulse: str). So today that knob's read returns None and its write raises \
+KeyError - the binding was written against a CZ-shaped macro. Proposing it would write \
+nothing. Worth filing separately.
 
-FIX inside scqat, and it is not confined to the new code: the cosine fit seeded \
-its frequency from the FFT peak BIN (spacing 1/(N*dx)). A true frequency landing \
-between two bins pinned the fit there and it never walked off - silently, \
-returning an angle several percent wrong with an R^2 the quality gate then \
-rejected as if the DATA were bad. Nothing makes a swap period fall on a bin; it \
-cost one rejected row per handful in the offline sweep. Now refined by three-point \
-parabolic interpolation with the raw bin kept as a second candidate, so it never \
-does worse. swap_oscillation - previously bound by no experiment, still bound by \
-none - now calls the same shared tools/fit_cosine.fit_swap_oscillation reduction.
+FIX inside scqat, and it is not confined to the new code: the cosine fit seeded its \
+frequency from the FFT peak BIN (spacing 1/(N*dx)). A true frequency landing between \
+two bins pinned the fit there and it never walked off - silently, returning an angle \
+several percent wrong with an R^2 the quality gate then rejected as if the DATA were \
+bad. Nothing makes a swap period fall on a bin; it cost one rejected row per handful \
+in the offline sweep. Now refined by three-point parabolic interpolation with the raw \
+bin kept as a second candidate, so it never does worse. swap_oscillation - previously \
+bound by no experiment, still bound by none - now calls the same shared \
+tools/fit_cosine.fit_swap_oscillation reduction.
+
+CORRECTED BEFORE RELEASE, and it is the most important line in this fragment. \
+pair_swap_angle's fitted `theta_rad` is the PER-ROUND COMPOSITE half-angle, not the \
+exchange angle. Between swaps the two members accumulate a relative phase phi, and an \
+exchange followed by a Z rotation does not commute, so the repeated unit satisfies \
+cos(theta_eff) = cos(phi/2) cos(theta). Therefore theta_eff >= theta ALWAYS and an \
+uncompensated run is an UPPER BOUND. Caught on hardware with an internal control: 5Q4C \
+runs 20260901-003455 and -003908 differ only in operation_gap_ns (0 vs 20), and at \
+coupler_flux_v = 0.0 the coupler pulse has zero amplitude so the swap is physically \
+identical -- yet the fitted angle moved 0.993 -> 1.561 rad, the second \
+indistinguishable from a full iSWAP. The experiment now carries compensation_amps + \
+stark_operation + stark_detuning_hz (mirroring the Trotter chain's fields), its \
+simulator plants the phase rather than a bare sin^2(N theta), and every docstring says \
+what the number is. THE RECIPE: calibrate the tone with qc_n_stark_amp, or scan it and \
+take the MINIMUM fitted angle -- the minimum is the exchange angle and is \
+decoherence-immune, because decay changes the oscillation's amplitude and not its \
+frequency. KNOWN LIMIT: phi depends on the coupler amplitude, so one fixed \
+compensation is correct near its calibration point and drifts away from it; the \
+phase-free alternative is a single pulse with swept time, i.e. a coupler-aware \
+pair_swap_chevron, which does not exist yet.
 
 STILL OWED (hardware): EVERYTHING here is offline. Both new experiments and \
-swap_coupler_flux have had no instrument contact.
+swap_coupler_flux have had no instrument contact. pair_swap_angle HAS now run on 5Q4C \
+(2026-09-01), which is how the phase contamination above was found, but every angle it \
+has reported so far is uncompensated and therefore an upper bound.
 
-AND A HARDWARE PREREQUISITE, which is the first thing an operator will hit: on \
-5Q4C BOTH chain couplers carry their swap pulse at amplitude 0.0 V, while the \
-control qubits carry theirs at 0.152 / 0.1515 V. Those swaps are pure \
-control-detuning swaps and TUTORIAL section 12's coupler-as-angle-knob recipe has \
-never been applied to those pairs. The angle CANNOT be swept until \
-register_flattop_cosine.py is re-run with a nonzero coupler amplitude - the macro \
-divides cplr_amp by that stored value. All three QM probes refuse it by name \
-through the new shared _coupler_knob.py rather than dividing by zero inside the \
-vendor macro.
+AND A HARDWARE PREREQUISITE, which is the first thing an operator will hit: on 5Q4C \
+BOTH chain couplers carry their swap pulse at amplitude 0.0 V, while the control \
+qubits carry theirs at 0.152 / 0.1515 V. Those swaps are pure control-detuning swaps \
+and TUTORIAL section 12's coupler-as-angle-knob recipe has never been applied to those \
+pairs. The angle CANNOT be swept until register_flattop_cosine.py is re-run with a \
+nonzero coupler amplitude - the macro divides cplr_amp by that stored value. All three \
+QM probes refuse it by name through the new shared _coupler_knob.py rather than \
+dividing by zero inside the vendor macro.
 
 LEDGER CORRECTION: v3.6.0 still lists qc_unidirectional_trotter as having had no \
 instrument contact. It reached 5Q4C on 2026-08-27 (a ~50-run compensation scan, \
-q1-q2-q3, runs 20260827-034936 through -044951), which is where this feature's \
-physics comes from. That debt is discharged; what is owed for the chain now is a \
-run WITH swap_coupler_flux set.
+q1-q2-q3, runs 20260827-034936 through -044951), which is where this feature's physics \
+comes from. That debt is discharged; what is owed for the chain now is a run WITH \
+swap_coupler_flux set.
 """
