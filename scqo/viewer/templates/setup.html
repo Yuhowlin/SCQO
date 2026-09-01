@@ -41,7 +41,12 @@
 <p class="muted">Export:
   <a href="/setup/{{ device }}/{{ cooldown }}/{{ setup_name }}/export.html" title="one self-contained file — run links jump to embedded snapshots">offline HTML</a> ·
   <a href="/setup/{{ device }}/{{ cooldown }}/{{ setup_name }}/export.xlsx" title="two sheets: Calibration + Physical parameters">Excel</a> ·
-  <a href="/setup/{{ device }}/{{ cooldown }}/{{ setup_name }}/export.pdf" title="16:9 slides, one page per source kind">PDF slides</a></p>
+  <a href="/setup/{{ device }}/{{ cooldown }}/{{ setup_name }}/export.pdf" title="16:9 slides, one page per source kind">PDF slides</a> ·
+  <button type="button" class="export-btn"
+          onclick="document.getElementById('lab-report-dialog').showModal()"
+          title="the lab's characterization template: xlsx dashboard or pptx deck, over campaign statistics">lab report…</button></p>
+
+{% include "_lab_report_dialog.html" %}
 
 {% if cooldown_error %}
 <p><b>cooldowns.toml error:</b> {{ cooldown_error }}</p>
