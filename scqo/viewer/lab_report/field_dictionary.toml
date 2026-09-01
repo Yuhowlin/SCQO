@@ -1,0 +1,396 @@
+# The lab's QPU characterization template — DATA, not code.
+#
+# scqo/viewer/lab_report/ is one lab's reporting convention living inside the
+# vendor-neutral core, and this file is where that convention is confined. Another
+# lab swaps THIS FILE and gets its own workbook: nothing in the renderers knows a
+# field name, a unit, a sheet title or a language. Keep it that way — a convention
+# that leaks back into xlsx.py or slides.py is the thing the split exists to stop.
+#
+# The `dictionary` rows below are the 欄位字典 sheet, in sheet order.
+
+# 區段 / 項次 / 欄位名稱 / 輸入方式 / 型態·單位 / 說明 / 分類·重要度
+dictionary_header = ["區段", "項次", "欄位名稱", "輸入方式", "型態/單位", "說明", "分類/重要度"]
+
+[sheets]
+data = "Data"
+dashboard = "Dashboard"
+dictionary = "欄位字典"
+dictionary_title = "QPU 公版欄位字典（標準規格）"
+
+[[dictionary]]
+section = "基本資訊"
+item = 2.0
+name = "QPU name"
+entry = "手動"
+unit = "文字"
+doc = "QPU／sample 唯一名稱；建議與資料夾命名一致。"
+tier = "P0｜白"
+
+[[dictionary]]
+section = "基本資訊"
+item = 3.0
+name = "meas person"
+entry = "手動"
+unit = "文字"
+doc = "主要量測人員；多人可用逗號分隔。"
+tier = "P0｜白"
+
+[[dictionary]]
+section = "基本資訊"
+item = 4.0
+name = "holder"
+entry = "手動"
+unit = "文字"
+doc = "Sample holder／封裝座編號。"
+tier = "P0｜白"
+
+[[dictionary]]
+section = "基本資訊"
+item = 5.0
+name = "cooldown_date"
+entry = "手動"
+unit = "日期"
+doc = "建議 YYYY-MM-DD；既有 YYMMDD 格式可沿用但需一致。"
+tier = "P0｜白"
+
+[[dictionary]]
+section = "基本資訊"
+item = 6.0
+name = "DR"
+entry = "手動"
+unit = "文字"
+doc = "Dilution refrigerator／量測冰箱識別。"
+tier = "P0｜白"
+
+[[dictionary]]
+section = "基本資訊"
+item = 7.0
+name = "OM"
+entry = "手動"
+unit = "URL"
+doc = "Optical microscope／製程檢查資料連結。"
+tier = "P0｜白"
+
+[[dictionary]]
+section = "基本資訊"
+item = 8.0
+name = "Raw data URI"
+entry = "手動"
+unit = "URI"
+doc = "原始量測資料位置；建議可解析且長期不變。"
+tier = "P0｜白"
+
+[[dictionary]]
+section = "Resonator"
+item = 9.0
+name = "Resonator"
+entry = "結構"
+unit = "元件 ID"
+doc = "B:Z 的 resonator 欄名；衍生式要求與 row 14 qubit 同欄配對。"
+tier = "P0｜白"
+
+[[dictionary]]
+section = "Resonator"
+item = 10.0
+name = "Bare resonant frequency"
+entry = "手動"
+unit = "GHz"
+doc = "未耦合／基準 resonator 頻率；需註明取得方法與 dressed 值同條件。"
+tier = "P0｜白"
+
+[[dictionary]]
+section = "Resonator"
+item = 11.0
+name = "Q_c"
+entry = "手動"
+unit = "無因次"
+doc = "Coupling quality factor。"
+tier = "P3｜深灰"
+
+[[dictionary]]
+section = "Resonator"
+item = 12.0
+name = "Q_i_e0"
+entry = "手動"
+unit = "無因次"
+doc = "Internal Q at e0 regime；請在 SOP 固定 e0 的 photon number／drive-power 定義。"
+tier = "P3｜深灰"
+
+[[dictionary]]
+section = "Resonator"
+item = 13.0
+name = "Q_i_e4"
+entry = "手動"
+unit = "無因次"
+doc = "Internal Q at e4 regime；請在 SOP 固定 e4 的 photon number／drive-power 定義。"
+tier = "P3｜深灰"
+
+[[dictionary]]
+section = "Qubit"
+item = 14.0
+name = "qubit (sweet spot)"
+entry = "結構"
+unit = "元件 ID"
+doc = "B:Z 的 qubit 欄名；固定頻率 qubit 亦以工作點填入。"
+tier = "P0｜白"
+
+[[dictionary]]
+section = "Qubit"
+item = 15.0
+name = "Junction Resistance"
+entry = "手動"
+unit = "ohm"
+doc = "Josephson junction normal resistance；外部來源若為 kΩ 必須 ×1000。"
+tier = "P0｜白"
+
+[[dictionary]]
+section = "Qubit"
+item = 16.0
+name = "Resistance to fq"
+entry = "手動"
+unit = "GHz"
+doc = "由 junction resistance／模型得到的預估 f01；模型版本與 Ec 假設需留在來源註記。"
+tier = "P0｜白"
+
+[[dictionary]]
+section = "Qubit"
+item = 17.0
+name = "Dressed resonant frequency (|0>)"
+entry = "手動"
+unit = "GHz"
+doc = "含 qubit 耦合後的 readout resonator 頻率。"
+tier = "P0｜白"
+
+[[dictionary]]
+section = "Qubit"
+item = 18.0
+name = "Qubit frequency"
+entry = "手動"
+unit = "GHz"
+doc = "量測 f01；對 tunable qubit 預設記 sweet spot，其他 bias 點另留 raw data。"
+tier = "P0｜白"
+
+[[dictionary]]
+section = "Qubit"
+item = 19.0
+name = "Tunable"
+entry = "手動"
+unit = "TRUE/FALSE"
+doc = "是否可藉 flux 調頻。"
+tier = "P0｜白"
+
+[[dictionary]]
+section = "Qubit"
+item = 20.0
+name = "T1 #100"
+entry = "手動"
+unit = "us"
+doc = "100 次重複量測的 T1 統計代表值；需在 SOP 定義 mean／median。"
+tier = "P0｜白"
+
+[[dictionary]]
+section = "Qubit"
+item = 21.0
+name = "T1_error"
+entry = "手動"
+unit = "us"
+doc = "T1 #100 的誤差；需在 SOP 明確定義 SD、SEM 或 fit uncertainty。"
+tier = "P0｜白"
+
+[[dictionary]]
+section = "Qubit"
+item = 22.0
+name = "T2_Ramsey #1"
+entry = "手動"
+unit = "us"
+doc = "單次 Ramsey dephasing time（常記 T2*）。"
+tier = "P0｜白"
+
+[[dictionary]]
+section = "Qubit"
+item = 23.0
+name = "T2_echo #1"
+entry = "手動"
+unit = "us"
+doc = "單次 Hahn-echo coherence time。"
+tier = "P0｜白"
+
+[[dictionary]]
+section = "Qubit"
+item = 24.0
+name = "Readout fidelity"
+entry = "手動"
+unit = "0–1"
+doc = "單次 readout assignment fidelity；需固定 estimator 與 calibration protocol。"
+tier = "P0｜白"
+
+[[dictionary]]
+section = "Qubit"
+item = 25.0
+name = "T2_Ramsey #100"
+entry = "手動"
+unit = "us"
+doc = "100 次 Ramsey 的統計代表值；需在 SOP 定義 mean／median。"
+tier = "P1｜淺灰"
+
+[[dictionary]]
+section = "Qubit"
+item = 26.0
+name = "T2_Ramsey_error"
+entry = "手動"
+unit = "us"
+doc = "T2_Ramsey #100 的誤差；需定義 SD／SEM／fit uncertainty。"
+tier = "P1｜淺灰"
+
+[[dictionary]]
+section = "Qubit"
+item = 27.0
+name = "T2_echo #100"
+entry = "手動"
+unit = "us"
+doc = "100 次 echo 的統計代表值。"
+tier = "P1｜淺灰"
+
+[[dictionary]]
+section = "Qubit"
+item = 28.0
+name = "T2_echo_error"
+entry = "手動"
+unit = "us"
+doc = "T2_echo #100 的誤差；需定義 SD／SEM／fit uncertainty。"
+tier = "P1｜淺灰"
+
+[[dictionary]]
+section = "Qubit"
+item = 29.0
+name = "Readout fidelity #100"
+entry = "手動"
+unit = "0–1"
+doc = "100 次重複校正／量測的 readout fidelity；#100 protocol 需固定。"
+tier = "P1｜淺灰"
+
+[[dictionary]]
+section = "Qubit"
+item = 30.0
+name = "thermal_population #100"
+entry = "手動"
+unit = "0–1"
+doc = "100 次估計的 excited-state thermal population。"
+tier = "P1｜淺灰"
+
+[[dictionary]]
+section = "Qubit"
+item = 31.0
+name = "RB fidelity #100"
+entry = "手動"
+unit = "0–1"
+doc = "100 次 randomized benchmarking 的 gate fidelity；需記 Clifford／primitive 定義。"
+tier = "P1｜淺灰"
+
+[[dictionary]]
+section = "Qubit"
+item = 32.0
+name = "flux_bias"
+entry = "手動"
+unit = "V"
+doc = "選定工作點的 flux-bias voltage。"
+tier = "P2｜中灰"
+
+[[dictionary]]
+section = "Qubit"
+item = 33.0
+name = "flux_period"
+entry = "手動"
+unit = "V"
+doc = "一個 flux quantum 對應的 bias period。"
+tier = "P2｜中灰"
+
+[[dictionary]]
+section = "Qubit"
+item = 34.0
+name = "f02/2"
+entry = "手動"
+unit = "GHz"
+doc = "二光子 0→2 躍遷頻率的一半；用於 α 與 EJ/EC 衍生。"
+tier = "P2｜中灰"
+
+[[dictionary]]
+section = "Qubit"
+item = 35.0
+name = "Resonator shift Δf_r(|1⟩−|0⟩)"
+entry = "被動"
+unit = "MHz"
+doc = "2χ=2g²α/[Δ(Δ+α)]，Δ=fq−fr,bare；有號值、dispersive 近似。"
+tier = "衍生｜黃"
+
+[[dictionary]]
+section = "Qubit"
+item = 36.0
+name = "Resonator linewidth κ/2π"
+entry = "被動"
+unit = "MHz"
+doc = "1000×fr,dressed×(1/Qc+1/Qi)；Qi 優先 e4，否則 e0。"
+tier = "衍生｜黃"
+
+[[dictionary]]
+section = "Qubit"
+item = 37.0
+name = "Qubit-resonator coupling g/2π"
+entry = "被動"
+unit = "MHz"
+doc = "1000×√| (fr,dressed−fr,bare)(fr,dressed−fq) |；二能級模態估算。"
+tier = "衍生｜黃"
+
+[[dictionary]]
+section = "Qubit"
+item = 38.0
+name = "Anharmonicity α/2π"
+entry = "被動"
+unit = "MHz"
+doc = "2000×(f02/2−f01)。"
+tier = "衍生｜黃"
+
+[[dictionary]]
+section = "Qubit"
+item = 39.0
+name = "EJ/EC"
+entry = "被動"
+unit = "無因次"
+doc = "[(1000f01/(−α)+1)²]/8；transmon 近似且 α<0。"
+tier = "衍生｜黃"
+
+[[dictionary]]
+section = "Coupler"
+item = 40.0
+name = "Coupler"
+entry = "結構"
+unit = "元件 ID"
+doc = "B:Z 的 coupler／edge 欄名；建議以 Q1–Q2 等 pair ID 命名。"
+tier = "P0｜白"
+
+[[dictionary]]
+section = "Coupler"
+item = 41.0
+name = "Coupler sweetspot frequency"
+entry = "手動"
+unit = "GHz"
+doc = "Coupler sweet-spot 頻率。"
+tier = "P0｜白"
+
+[[dictionary]]
+section = "Coupler"
+item = 42.0
+name = "Coupler idle frequency"
+entry = "手動"
+unit = "GHz"
+doc = "Coupler idle operating frequency。"
+tier = "P0｜白"
+
+[[dictionary]]
+section = "Coupler"
+item = 43.0
+name = "Residual ZZ/2π"
+entry = "手動"
+unit = "kHz"
+doc = "Coupler／qubit pair 在 idle point 的 residual ZZ。"
+tier = "P1｜淺灰"
