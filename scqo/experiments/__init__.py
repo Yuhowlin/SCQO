@@ -177,6 +177,7 @@ from .qubit_ramsey_phasor import QubitRamseyPhasor  # noqa: E402
 from .qubit_deterministic_benchmarking import QubitDeterministicBenchmarking  # noqa: E402
 from .qubit_drag_alternating import QubitDragAlternating  # noqa: E402
 from .qubit_drag_equator import QubitDragEquator  # noqa: E402
+from .crosstalk_compensated_sqrb import CrosstalkCompensatedSQRB  # noqa: E402
 from .qubit_echo import QubitEcho  # noqa: E402
 from .qubit_echo_flux_pulse import QubitEchoFluxPulse  # noqa: E402
 from .qubit_parametric_drive_amp import QubitParametricDriveAmp  # noqa: E402
@@ -227,6 +228,7 @@ __all__ = [
     "states_to_joint_population",
     "BroadbandQubitSpectroscopy",
     "BroadbandResonatorSpectroscopy",
+    "CrosstalkCompensatedSQRB",
     "PairSwapChevron", "PairSwapFluxMap",
     "PairZZCoupler", "QcNStarkAmp", "QcNSwapAmp", "QcUnidirectionalTrotter",
     "QubitRamseyCryoscope", "QubitRamseyPhasor", "QubitDeterministicBenchmarking", "QubitDragAlternating", "QubitDragEquator", "QubitEcho",

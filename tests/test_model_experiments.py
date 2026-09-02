@@ -29,6 +29,7 @@ from scqo.testing import (
 RECORD_ONLY = {"qubit_sqrb", "qubit_tomography", "qubit_echo_flux_pulse",
                "qubit_relaxation_flux_pulse", "pair_swap_chevron", "pair_swap_flux_map",
                "qc_n_swap_amp", "qc_n_stark_amp", "qc_unidirectional_trotter",
+               "crosstalk_compensated_sqrb",
                "qubit_t1_ade", "qubit_t1_bayesian",
                "broadband_resonator_spectroscopy", "broadband_qubit_spectroscopy",
                "qubit_parametric_drive_amp", "qubit_parametric_drive_time"}
