@@ -1,0 +1,70 @@
+{# The lab report's export dialog — the ONE template that knows this feature.
+
+   Kept out of setup.html so the page keeps its plain export links and this
+   whole block can leave with the lab_report package if it ever moves out.
+   Options mirror the route signatures in scqo/viewer/lab_report/routes.py;
+   `estimator` offers exactly what campaign_query implements. #}
+<dialog id="lab-report-dialog">
+  <h3 style="margin-top: 0; color: #14385c;">Export report &amp; presentation</h3>
+  <div class="export-grid">
+    <div class="export-opt">
+      <h4>Scope</h4>
+      <label><input type="radio" name="lr-scope" value="single" checked> This setup ({{ setup_name }})</label>
+      <label><input type="radio" name="lr-scope" value="unified"> Whole chip ({{ cooldown }})</label>
+    </div>
+    <div class="export-opt">
+      <h4>Quality gate</h4>
+      <label>Min repeats N &ge;
+        <input type="number" id="lr-min-repeats" value="2" min="1" step="1"
+               style="width: 60px; padding: 2px 4px; font-size: 13px;"></label>
+      <div style="font-size: 11px; color: #6b7683; margin-top: 4px;">
+        A quantity aggregated over fewer repeats is left out.
+      </div>
+    </div>
+    <div class="export-opt">
+      <h4>Statistic</h4>
+      <label><input type="radio" name="lr-estimator" value="mean" checked> Mean &plusmn; SD</label>
+      <label><input type="radio" name="lr-estimator" value="median"> Median &plusmn; MAD (robust)</label>
+    </div>
+    <div class="export-opt">
+      <h4>Tag filter (optional)</h4>
+      <input type="text" id="lr-tags" placeholder="e.g. baseline, overnight"
+             style="width: 90%; font-size: 12px; padding: 4px;">
+    </div>
+  </div>
+
+  <div class="export-actions">
+    <button type="button" class="btn-download" onclick="labReportDownload('dashboard')">Lab dashboard (.xlsx)</button>
+    <button type="button" class="btn-download" onclick="labReportDownload('slides')">Presentation (.pptx)</button>
+    <button type="button" class="btn-download-secondary"
+            onclick="document.getElementById('lab-report-dialog').close()"
+            style="margin-top: 6px;">Close</button>
+  </div>
+</dialog>
+
+<script>
+  function labReportDownload(kind) {
+    const dev = {{ device | tojson }};
+    const cd = {{ cooldown | tojson }};
+    const setup = {{ setup_name | tojson }};
+    const unified = document.querySelector('input[name="lr-scope"]:checked').value === 'unified';
+    const minRepeats = parseInt(document.getElementById('lr-min-repeats').value, 10) || 2;
+    const estimator = document.querySelector('input[name="lr-estimator"]:checked').value;
+    const tags = document.getElementById('lr-tags').value.trim();
+
+    const seg = encodeURIComponent;
+    const file = kind === 'dashboard' ? 'export_dashboard.xlsx' : 'export.pptx';
+    const base = unified
+      ? `/cooldown/${seg(dev)}/${seg(cd)}/${file}`
+      : `/setup/${seg(dev)}/${seg(cd)}/${seg(setup)}/${file}`;
+
+    const params = new URLSearchParams();
+    if (minRepeats !== 2) params.set('min_repeats', minRepeats);
+    if (estimator !== 'mean') params.set('estimator', estimator);
+    if (tags) params.set('tags', tags);
+
+    const qs = params.toString();
+    window.location.href = base + (qs ? '?' + qs : '');
+    document.getElementById('lab-report-dialog').close();
+  }
+</script>

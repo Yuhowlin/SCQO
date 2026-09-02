@@ -1,6 +1,6 @@
 [project]
 name = "scqo"
-version = "3.3.0"
+version = "3.8.0"
 description = "Superconducting Qubit Orchestration — instrument-agnostic experiment API shared by QM and Qblox backends"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
@@ -40,6 +40,23 @@ dependencies = [
                         # decoherence_params panel takes the WHOLE artifact set down: the run
                         # keeps its data and loses every PNG, including the raw-carrying
                         # rho11_fits. Nothing raises. See RELEASES.toml [v3-3-0].
+                        # As of v3.4.0 the floor is scqat v0.22.0, and this one is LOUD:
+                        # qc_unidirectional_trotter's estimate() lazy-imports
+                        # scqat.estimators.qc_unidirectional_trotter, which does not exist
+                        # below it - an ImportError naming the missing module, so nobody
+                        # gets wrong numbers. Unusual for this stack, where the floors are
+                        # usually silent; the experiment is simply unusable below it.
+                        # See RELEASES.toml [v3-4-0].
+                        # The NEXT cut raises the floor to scqat v0.23.0, LOUD the same
+                        # way twice over: pair_swap_angle and qc_trotter_compensation
+                        # each lazy-import their own estimator subpackage, neither of
+                        # which exists below it. It ALSO carries a silent half worth
+                        # naming - scqat v0.23.0 seeds the cosine fit at sub-bin
+                        # frequency resolution, and below it a swap period falling
+                        # between FFT bins pins the fit at the nearer bin and returns a
+                        # plausible-looking angle that is several percent wrong with a
+                        # collapsed R^2. That affects swap_oscillation too, so an older
+                        # scqat does not merely lack the new experiments.
     "netcdf4>=1.6",     # datastore: dataset.nc has a string qubit coord (needs netCDF4, not the scipy netCDF3 fallback)
     "tomli>=2.0; python_version<'3.11'",  # labconfig TOML parsing on py3.10
 ]
@@ -48,8 +65,8 @@ dependencies = [
 # quam, no qualibrate, no qblox-scheduler). That is what lets both LCHQMDriver
 # and LCHQBDriver depend on scqo without dragging each other's hardware stack in.
 # scqat is the one allowed non-instrument dependency: it is the single estimator
-# engine (one estimator per probing method), so SCQO never fits inline. lmfit is
-# now a transitive dependency via scqat.
+# engine (one estimator per experiment, one experiment per estimator), so SCQO
+# never fits inline. lmfit is now a transitive dependency via scqat.
 
 [project.scripts]
 scqo = "scqo.cli.__main__:main"  # the lab command; re-run `uv pip install -e` after upgrading
@@ -61,7 +78,7 @@ viewer = [
     "jinja2>=3.1",
     "python-multipart>=0.0.9",  # FastAPI Form(...) — the tag-edit POST
     "openpyxl>=3.1",            # the setup page's .xlsx export (PDF rides matplotlib via scqat; HTML is stdlib)
-    "python-pptx>=1.0",         # the setup/cooldown page's .pptx export
+    "python-pptx>=1.0",         # the lab report's .pptx deck (scqo/viewer/lab_report) — pulls lxml + XlsxWriter
 ]
 
 [tool.uv.sources]

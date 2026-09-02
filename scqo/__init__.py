@@ -61,6 +61,7 @@ from .backend import Backend
 from .experiment import Experiment
 from .experiments import catalog, get, register
 from .campaign import CampaignPlan, CampaignStep, load_campaign_plan
+from .campaign_query import get_latest_metric_stat, query_campaign_statistics
 from .datastore import DataStore, RunRecord, reindex
 from .labconfig import LabConfig, load as load_lab_config, make_session
 from .session import Session
@@ -86,6 +87,7 @@ __all__ = [
     # orchestration
     "Backend", "Experiment", "register", "get", "catalog",
     "CampaignPlan", "CampaignStep", "load_campaign_plan",
+    "query_campaign_statistics", "get_latest_metric_stat",
     "DataStore", "RunRecord", "reindex",
     "LabConfig", "load_lab_config", "make_session", "Session",
 ]

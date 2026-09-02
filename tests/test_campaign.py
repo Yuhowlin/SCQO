@@ -568,7 +568,22 @@ def test_period_gates_the_repeat_start(session):
         skip_artifacts=True, steps=[{"experiment": "qubit_relaxation"}]))
     assert out["repeat_done"] == 3
     starts = [r["elapsed_s"] for r in out["repeats"]]
-    assert starts[1] >= 0.25 and starts[2] >= 0.5
+    # elapsed_s is `monotonic() - started_mono` read just after the gate waited
+    # until `started_mono + n * period_s`, so it lands a hair either side of the
+    # exact multiple. Windows CI has produced 0.4999999999999716 — short of 0.5
+    # by 3e-14 s, i.e. 28 femtoseconds. Nothing about a sleep, a scheduler or a
+    # clock source operates at that scale, so it is a floating-point artifact of
+    # the read, not a cadence miss. (The obvious candidate, cancellation in
+    # (base + 0.5) - base, is NOT it: 0.5 needs one fractional bit, so that is
+    # exact for every realistic monotonic base. The precise mechanism is
+    # unidentified.)
+    #
+    # Hence a tolerance chosen to be unmistakably sub-physical: at 1 ns it is
+    # ~30000x the observed error and ~1e6x below the 0.25 s period, so it cannot
+    # mask a real gate failure while removing the whole class of artifact.
+    epsilon = 1e-9
+    assert starts[1] >= 0.25 - epsilon
+    assert starts[2] >= 0.5 - epsilon
 
 
 def test_a_single_repeat_reproduces_a_standalone_run(session):
@@ -637,15 +652,28 @@ def test_a_broken_progress_callback_never_kills_the_campaign(session, capsys):
     assert capsys.readouterr().err.count("progress callback failed") == 1
 
 
-def test_cadence_wait_is_announced_before_sleeping(session):
+def test_cadence_wait_is_announced_before_sleeping(session, monkeypatch):
+    # The event fires ONLY when the period actually has time left to sleep
+    # (an overrun is recorded instead — session.py's `overran_by_s`), so the
+    # period must be longer than a repeat can plausibly take or the assertion
+    # below is really a statement about how fast the machine is. period_s=0.4
+    # held warm and failed cold — in isolation locally, and on a loaded CI
+    # runner. Stubbing sleep lets the period be large without the test waiting.
+    import time as _time
+
+    slept: list[float] = []
+    monkeypatch.setattr(_time, "sleep", slept.append)
+
     events: list[dict] = []
     session.run_campaign(
-        _plan_obj(label="cad", repeat=2, period_s=0.4, skip_artifacts=True),
+        _plan_obj(label="cad", repeat=2, period_s=30, skip_artifacts=True),
         on_progress=events.append)
     waits = [e for e in events if e["kind"] == "cadence_wait"]
     assert waits and waits[0]["wait_s"] > 0
     # ...and it precedes the repeat_start whose timestamp it delays
     assert events.index(waits[0]) < [e["kind"] for e in events][4:].index("repeat_start") + 4
+    # ...and what was announced is what was actually slept
+    assert slept and slept[0] == waits[0]["wait_s"]
 
 
 def test_progress_line_for_a_successful_step():

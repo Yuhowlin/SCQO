@@ -26,6 +26,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Resp
 from fastapi.templating import Jinja2Templates
 
 from ._export import XLSX_MEDIA_TYPE, pdf_bytes, xlsx_bytes
+from .lab_report import register_lab_report_routes
 
 from ..changes import (
     HISTORY_FILE,
@@ -501,6 +502,72 @@ def create_app(data_root: str | Path) -> FastAPI:
                      "extra: uv pip install -e <SCQO repo>[viewer]")
         return Response(data, media_type=XLSX_MEDIA_TYPE,
                         headers=_attachment(device, cooldown, setup_name, "xlsx"))
+
+    def _cooldown_unified_context(device: str, cooldown: str) -> dict:
+        """One context merging every setup in a cooldown cycle — the chip as a
+        whole rather than the instrument currently carrying it.
+
+        Where two setups both hold an (entity, field), the FRESHER measurement
+        wins, and freshness is read from the change history's timestamp rather
+        than by comparing identifiers: a run id and a campaign id are different
+        ID spaces, and string-comparing them across kinds ranks by whichever
+        happens to sort higher, not by when the measurement happened.
+        """
+        cycles, cooldown_error = {}, ""
+        try:
+            cycles = load_cooldowns(store.data_root, device)
+        except (ValueError, OSError) as err:
+            cooldown_error = str(err)
+        cycle = cycles.get(cooldown) or {}
+        setups = list((cycle.get("setup") or {}).keys())
+        # Same gate as _setup_context: an unresolvable context is a 404, not an
+        # empty-but-successful export of a chip that does not exist.
+        if not cooldown_error and not setups and _scqo_dir(device, cooldown, "_") is None:
+            raise HTTPException(
+                404, "not a valid context (cooldown/setup are letters/digits/_/-)")
+        active = active_cooldown(cycles)
+
+        def freshness(row: dict) -> str:
+            src = row.get("source") or {}
+            return (src.get("timestamp") or "") if isinstance(src, dict) else ""
+
+        def merge(into: dict, rows: list[dict]) -> None:
+            for row in rows:
+                key = (row["entity"], row["field"])
+                if key not in into or freshness(row) > freshness(into[key]):
+                    into[key] = row
+
+        state_rows: dict[tuple[str, str], dict] = {}
+        phys_rows: dict[tuple[str, str], dict] = {}
+        for name in setups:
+            scqo_dir = _scqo_dir(device, cooldown, name)
+            if scqo_dir is None:
+                continue
+            state_data = _read_json(scqo_dir / STATE_FILE) or {}
+            merge(state_rows, _param_rows(state_data.get("values") or {},
+                                          _latest_pairs(scqo_dir, "state"),
+                                          INSTRUMENT_FIELD_ORDER))
+            merge(phys_rows, _param_rows(_values_of(scqo_dir / PHYSICAL_FILE),
+                                         _latest_pairs(scqo_dir, "physical"),
+                                         PHYSICAL_FIELD_ORDER))
+
+        return {"device": device, "cooldown": cooldown, "setup_name": "unified",
+                "is_unified": True, "setups": setups, "cycle": cycle,
+                "setup_meta": {"backend": "multi-setup",
+                               "note": "Unified across all setups"},
+                "in_registry": True,
+                "is_active": bool(active and active[0] == cooldown),
+                "cooldown_error": cooldown_error, "authority": "unified",
+                "snapshot_run": None, "latest_run": None,
+                "state_rows": list(state_rows.values()),
+                "physical_rows": list(phys_rows.values()), "state_path": ""}
+
+    # The lab's own characterization report (xlsx dashboard + pptx deck) is a
+    # fenced-off subpackage — see scqo/viewer/lab_report/__init__.py for why.
+    # This is the ONLY line in scqo/ that may import it.
+    register_lab_report_routes(
+        app, store=store, setup_context=_setup_context,
+        unified_context=_cooldown_unified_context, attachment=_attachment)
 
     @app.get("/setup/{device}/{cooldown}/{setup_name}/export.pdf")
     def setup_export_pdf(device: str, cooldown: str, setup_name: str):

@@ -71,7 +71,9 @@ class QubitTomographyParameters(TargetSelection, AveragingParameters, QubitReset
         default_factory=dict,
         description=(
             "Qubit configurations mapping qubit name to init_state "
-            "('0','1','+','-','+i','-i'), target_gate ('I','X','X90','Y','Y90') "
+            "('0','1','+','-','+i','-i'), target_gate ('I','X','X90','Y','Y90'), "
+            "amp (float, amplitude scaling factor, default 1.0), "
+            "detuning / frequency_shift (float in Hz, default 0.0), "
             "and noise_mode (bool, default False). A noise_mode qubit is a "
             "spectator noise source: it still plays its target gates but skips "
             "init, basis rotation and measurement — its record holds dummy "
