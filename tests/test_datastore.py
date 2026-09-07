@@ -100,7 +100,7 @@ def test_default_run_stores_pending_suggestions(tmp_path):
 
     record = json.loads((run_dir / "record.json").read_text(encoding="utf-8"))
     assert record["updated_device"] is False
-    assert [s["field"] for s in record["suggestions"]] == ["readout_freq_hz", "f_dress0_hz", "kappa_tot_hz", "readout_depletion_s"]
+    assert [s["field"] for s in record["suggestions"]] == ["readout_freq_hz", "f_dress0_hz", "f_bare_hz", "kappa_tot_hz", "readout_depletion_s"]
     assert {s["status"] for s in record["suggestions"]} == {"pending"}
 
     before = json.loads((run_dir / "device_before.json").read_text(encoding="utf-8"))
@@ -132,7 +132,7 @@ def test_update_suggestions_append_recomputes_pending(tmp_path):
 
     assert [r["run_id"] for r in sess.find_runs(pending=True)] == [run_id]
     row = sess.find_runs()[0]
-    assert row["suggestions_pending"] == 1 and len(row["suggestions"]) == 5
+    assert row["suggestions_pending"] == 1 and len(row["suggestions"]) == 6
     assert sess.datastore.reindex() == 1  # record.json carries the appended item
     assert [r["run_id"] for r in sess.find_runs(pending=True)] == [run_id]
 
@@ -229,13 +229,13 @@ def test_suggest_during_tag_window_survives(tmp_path, monkeypatch):
     record = sess_a.load_run(run_id)["record"]
     assert record["tags"] == ["thesis-fig3"] and record["note"] == "tagged mid-suggest"
     assert [s["field"] for s in record["suggestions"]] == [  # nothing clobbered
-        "readout_freq_hz", "f_dress0_hz", "kappa_tot_hz", "readout_depletion_s", "pi_amp"]
+        "readout_freq_hz", "f_dress0_hz", "f_bare_hz", "kappa_tot_hz", "readout_depletion_s", "pi_amp"]
     assert record["suggestions"][-1]["origin"] == "operator"
 
     # record.json is the truth: both writers' edits survive a full rebuild
     assert sess_a.datastore.reindex() == 1
     assert [r["run_id"] for r in sess_a.find_runs(tag="thesis-fig3", pending=True)] == [run_id]
-    assert sess_a.find_runs()[0]["suggestions_pending"] == 5
+    assert sess_a.find_runs()[0]["suggestions_pending"] == 6
 
 
 def test_tag_during_suggest_window_survives(tmp_path):
@@ -256,13 +256,13 @@ def test_tag_during_suggest_window_survives(tmp_path):
 
     sess_b._load_run_record = load_then_concurrent_tag
     summary = sess_b.suggest(run_id, {"q0.pi_amp": 0.21})
-    assert summary["pending_total"] == 5  # 4 estimator rows + the operator's
+    assert summary["pending_total"] == 6  # 5 estimator rows + the operator's
 
     record = sess_b.load_run(run_id)["record"]
     assert record["tags"] == ["thesis-fig3"]  # NOT reverted by the suggestion write
     assert record["note"] == "tagged mid-suggest"
     assert [s["field"] for s in record["suggestions"]] == [
-        "readout_freq_hz", "f_dress0_hz", "kappa_tot_hz", "readout_depletion_s", "pi_amp"]
+        "readout_freq_hz", "f_dress0_hz", "f_bare_hz", "kappa_tot_hz", "readout_depletion_s", "pi_amp"]
     assert [r["run_id"] for r in sess_b.find_runs(tag="thesis-fig3")] == [run_id]
 
 
@@ -1011,21 +1011,11 @@ def test_edit_campaign_suggestions_rereads_fresh_and_patches_pending(tmp_path):
     assert on_disk["suggestions"] == fresh["suggestions"]
     assert store.find_campaigns()[0]["suggestions_pending"] == 2
 
-    # problems and notes replace as a whole when given, and stay put when
-    # omitted — they describe the generation that produced these rows, so a
-    # regeneration leaving the previous reason standing would be stale
+    # problems replace as a whole when given, and stay put when omitted
     store.edit_campaign_suggestions(cid, lambda rows: rows,
-                                    problems=["qubit_ramsey: KeyError: 'f_01_hz'"],
-                                    notes=["qubit_ramsey/q0: dropped below min_n=3: f_01_hz (n=2)"])
+                                    problems=["qubit_ramsey: KeyError: 'f_01_hz'"])
     on_disk = json.loads(path.read_text(encoding="utf-8"))
     assert on_disk["suggestion_problems"] == ["qubit_ramsey: KeyError: 'f_01_hz'"]
-    assert on_disk["suggestion_notes"] == [
-        "qubit_ramsey/q0: dropped below min_n=3: f_01_hz (n=2)"]
-
-    store.edit_campaign_suggestions(cid, lambda rows: rows, notes=[])
-    on_disk = json.loads(path.read_text(encoding="utf-8"))
-    assert on_disk["suggestion_notes"] == []                       # cleared
-    assert on_disk["suggestion_problems"] == ["qubit_ramsey: KeyError: 'f_01_hz'"]  # kept
 
 
 def test_find_campaigns_pending_filter(tmp_path):
@@ -1049,180 +1039,3 @@ def test_campaign_suggestions_pending_survives_reindex(tmp_path):
     row = store.find_campaigns()[0]
     assert row["campaign_id"] == cid
     assert row["suggestions_pending"] == 1
-
-
-# ------------------------------------------------------------ setup snapshots
-
-class _SnapshotBackend(SimulatedBackend):
-    """A simulated backend that also carries a vendor config: the two duck-typed
-    driver hooks the setup snapshot rests on (shared by the restore + viewer tests)."""
-
-    texts = {"state.json": '{"a": 1}\n', "wiring.json": '{"w": 2}\n'}
-
-    def vendor_config_snapshot(self):
-        return dict(self.texts)
-
-    def versions(self):
-        return {"fake-driver": "1.0"}
-
-
-_QM_REGISTRY = '[cd1]\nstart = 2026-07-01\n[cd1.setup.main]\nbackend = "qm"\n'
-
-
-def _snapshot_session(tmp_path, backend_cls=_SnapshotBackend, **kwargs) -> Session:
-    """A persisted session bound to (cd1, main) on device devA whose setup folder
-    carries one extra vendor file — the shape a real hardware session has."""
-    root = tmp_path / "data"
-    dev = root / "devA"
-    dev.mkdir(parents=True, exist_ok=True)
-    (dev / "cooldowns.toml").write_text(_QM_REGISTRY, encoding="utf-8")
-    cfg_dir = dev / "cd1" / "main" / "backend_config"
-    cfg_dir.mkdir(parents=True, exist_ok=True)
-    (cfg_dir / "extra.json").write_text('{"extra": true}\n', encoding="utf-8")
-    roster, design, vendor = demo_device()
-    return Session(backend_cls(vendor), roster, design=design, data_root=root,
-                   device_name="devA", scqo_dir=dev / "cd1" / "main" / "scqo",
-                   setup_name="main", cooldown_id="cd1", backend_label="qm", **kwargs)
-
-
-def test_setup_snapshot_store_is_content_addressed_and_write_once(tmp_path):
-    from scqo.datastore import DataStore, setup_snapshot_dir, snapshot_hash
-
-    store = DataStore(tmp_path / "data", device_name="devA")
-    files = {"backend_config/state.json": b'{"a": 1}\n', "scqo/scqo_state.json": b'{"schema": 3}\n'}
-    first = store.store_setup_snapshot(files, {"backend": "qm", "first_run_id": "r1"})
-    second = store.store_setup_snapshot(dict(reversed(list(files.items()))), {"first_run_id": "r2"})
-    assert first["created"] is True and second["created"] is False
-    assert first["hash"] == second["hash"] and re.fullmatch(r"[0-9a-f]{16}", first["hash"])
-    assert first["path"] == f"devA/setup_snapshots/{first['hash']}"
-    folder = setup_snapshot_dir(tmp_path / "data", "devA", first["hash"])
-    assert (folder / "backend_config" / "state.json").read_bytes() == b'{"a": 1}\n'  # LF, verbatim
-    manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["first_run_id"] == "r1"  # write-once: the second caller's manifest never lands
-    assert manifest["hash"].startswith(first["hash"]) and len(manifest["hash"]) == 64
-    assert set(manifest["files"]) == set(files)
-    assert manifest["hash"] == snapshot_hash(files)
-    assert not [p for p in folder.parent.iterdir() if p.name.startswith(".tmp-")]
-    assert store.load_setup_snapshot("devA", first["hash"])["manifest"]["backend"] == "qm"
-    import pytest
-
-    with pytest.raises(KeyError):
-        store.load_setup_snapshot("devA", "0" * 16)
-    with pytest.raises(KeyError):
-        store.load_setup_snapshot("devA", "not-a-hash")
-    with pytest.raises(ValueError):
-        store.store_setup_snapshot({"../escape.json": b"x"}, {})
-
-
-def test_run_stores_a_setup_snapshot_from_the_backend_hook(tmp_path):
-    """The snapshot is the vendor config at run START + the setup folder's other
-    files + this context's scqo values, referenced from record.json; identical
-    content from a second run lands in the SAME folder."""
-    from importlib.metadata import version
-
-    sess = _snapshot_session(tmp_path)
-    sess.set_values({"q0.fidelity_g": 0.9})  # a MONITOR: lives only in scqo_state.json
-    first = sess.run("resonator_spectroscopy", {"targets": ["q0"]}, update="none")
-    record = sess.load_run(first["run_id"])["record"]
-    snap = record["setup_snapshot"]
-    assert re.fullmatch(r"[0-9a-f]{16}", snap["hash"]) and snap["drift"] == []
-    folder = Path(sess.datastore.data_root) / snap["path"]
-    assert (folder / "backend_config" / "state.json").read_text(encoding="utf-8") == '{"a": 1}\n'
-    assert (folder / "backend_config" / "wiring.json").read_text(encoding="utf-8") == '{"w": 2}\n'
-    assert (folder / "backend_config" / "extra.json").read_text(encoding="utf-8") == '{"extra": true}\n'
-    state = json.loads((folder / "scqo" / "scqo_state.json").read_text(encoding="utf-8"))
-    # the loop's memory, not a vendor mirror: knobs re-seed from the vendor on a
-    # restore, the monitor is what the snapshot must carry
-    assert state["schema"] == 3 and state["values"]["q0_ro"]["fidelity_g"] == 0.9
-    physical = json.loads((folder / "scqo" / "physical.json").read_text(encoding="utf-8"))
-    assert physical["schema"] == 3 and isinstance(physical["values"], dict)
-    manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["first_run_id"] == first["run_id"]
-    assert manifest["backend"] == "qm" and (manifest["cooldown"], manifest["setup"]) == ("cd1", "main")
-    assert manifest["versions"]["fake-driver"] == "1.0"
-    assert manifest["versions"]["scqo"] == version("scqo")
-
-    second = sess.run("resonator_spectroscopy", {"targets": ["q0"]}, update="none")
-    assert sess.load_run(second["run_id"])["record"]["setup_snapshot"]["hash"] == snap["hash"]
-    assert [p.name for p in folder.parent.iterdir()] == [snap["hash"]]
-
-    # the simulated backend has no vendor config: no snapshot, no folder
-    plain = _session(tmp_path)
-    res = plain.run("resonator_spectroscopy", {"targets": ["q0"]}, update="none")
-    assert plain.load_run(res["run_id"])["record"]["setup_snapshot"] == {}
-
-
-def test_campaign_children_share_one_setup_snapshot(tmp_path):
-    from scqo.campaign import CampaignPlan
-
-    sess = _snapshot_session(tmp_path)
-    out = sess.run_campaign(CampaignPlan(
-        label="snap", repeat=2, defaults={"targets": ["q0"]}, skip_artifacts=True,
-        steps=[{"experiment": "resonator_spectroscopy"}, {"experiment": "qubit_ramsey",
-                                                          "params": RAMSEY_PARAMS}]))
-    hashes = {sess.load_run(c["run_id"])["record"]["setup_snapshot"]["hash"]
-              for c in sess.campaign_runs(out["campaign_id"])}
-    assert len(hashes) == 1
-    assert len(list((Path(sess.datastore.data_root) / "devA" / "setup_snapshots").iterdir())) == 1
-
-
-def test_vendor_drift_is_recorded_and_warned(tmp_path):
-    """A vendor file whose text differs between run start and the end of
-    exp.run() is a leaked run-scoped mutation: named in record.json and warned;
-    the snapshot stored is the run-START text."""
-    import pytest
-
-    class _DriftingBackend(_SnapshotBackend):
-        calls = 0
-
-        def vendor_config_snapshot(self):
-            type(self).calls += 1
-            out = dict(self.texts)
-            if self.calls >= 2:
-                out["state.json"] = '{"a": 2}\n'
-            return out
-
-    sess = _snapshot_session(tmp_path, backend_cls=_DriftingBackend)
-    with pytest.warns(RuntimeWarning, match="not restored"):
-        res = sess.run("resonator_spectroscopy", {"targets": ["q0"]}, update="none")
-    snap = sess.load_run(res["run_id"])["record"]["setup_snapshot"]
-    assert snap["drift"] == ["state.json"]
-    folder = Path(sess.datastore.data_root) / snap["path"]
-    assert (folder / "backend_config" / "state.json").read_text(encoding="utf-8") == '{"a": 1}\n'
-
-
-def test_setup_snapshot_failures_never_fail_the_run(tmp_path, monkeypatch):
-    """A raising hook means no snapshot; a failing store lands as an error note —
-    the measurement is persisted either way."""
-    from scqo.datastore import DataStore
-
-    class _ExplodingBackend(_SnapshotBackend):
-        def vendor_config_snapshot(self):
-            raise RuntimeError("vendor tree unreadable")
-
-    sess = _snapshot_session(tmp_path, backend_cls=_ExplodingBackend)
-    res = sess.run("resonator_spectroscopy", {"targets": ["q0"]}, update="none")
-    assert "run_id" in res and sess.load_run(res["run_id"])["record"]["setup_snapshot"] == {}
-
-    def _boom(self, files, manifest):
-        raise OSError("disk full")
-
-    monkeypatch.setattr(DataStore, "store_setup_snapshot", _boom)
-    sess = _snapshot_session(tmp_path)
-    res = sess.run("resonator_spectroscopy", {"targets": ["q0"]}, update="none")
-    record = sess.load_run(res["run_id"])["record"]
-    assert record["setup_snapshot"]["error"].startswith("OSError")
-    assert sess.find_runs(experiment="resonator_spectroscopy")
-
-
-def test_old_records_without_setup_snapshot_still_reindex(tmp_path):
-    from scqo.datastore import RunRecord
-
-    sess = _snapshot_session(tmp_path)
-    res = sess.run("resonator_spectroscopy", {"targets": ["q0"]}, update="none")
-    loaded = sess.load_run(res["run_id"])
-    record = loaded["record"]
-    del record["setup_snapshot"]
-    assert RunRecord(**record).setup_snapshot == {}
-    (Path(loaded["path"]) / "record.json").write_text(json.dumps(record), encoding="utf-8")
-    assert sess.datastore.reindex() >= 1

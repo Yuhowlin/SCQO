@@ -4,7 +4,7 @@ Port of :mod:`scqo.experiments.resonator_spectroscopy`. The physics half is
 preserved (cosmetically reflowed); what moved is the device surface in ``update()`` and the
 anchor spelling: the operating choice lands on the target's READOUT CHANNEL
 (``readout_freq_hz``) and the fit's physical content (``f_dress0_hz``,
-``kappa_tot_hz``) on the attached RESONATOR mode.
+``f_bare_hz``, ``kappa_tot_hz``) on the attached RESONATOR mode.
 """
 
 from __future__ import annotations
@@ -56,8 +56,8 @@ class ResonatorSpectroscopyParameters(TargetSelection, AveragingParameters,
 
 class ResonatorSpectroscopyResult(Result):
     """``fit[target]``: readout_freq_hz (new absolute), dip_detuning_hz,
-    old_readout_freq_hz, plus the physical f_dress0_hz / kappa_tot_hz that
-    update() proposes on the target's resonator mode."""
+    old_readout_freq_hz, plus the physical f_dress0_hz / f_bare_hz / kappa_tot_hz
+    that update() proposes on the target's resonator mode."""
 
 
 @register
@@ -68,7 +68,7 @@ class ResonatorSpectroscopy(Experiment):
     description: ClassVar[str] = (
         "Sweep readout frequency around each resonator and locate the "
         "transmission dip; updates each target's readout channel "
-        "readout_freq_hz and proposes the dip position (f_dress0_hz) and "
+        "readout_freq_hz and proposes the dip position (f_dress0_hz, f_bare_hz) and "
         "linewidth (kappa_tot_hz) on the attached resonator mode, plus "
         "depletion_factor / (2 pi x kappa_tot_hz) as the readout channel's "
         "readout_depletion_s knob — this is the experiment that calibrates the "
@@ -140,6 +140,7 @@ class ResonatorSpectroscopy(Experiment):
                 # the same fit, under its physical names: the dip IS the
                 # dressed resonator frequency, the FWHM IS kappa
                 "f_dress0_hz": new_freq,
+                "f_bare_hz": new_freq,
                 "kappa_tot_hz": float(r["fwhm"]),
             }
             result.outcomes[target] = (Outcome.SUCCESSFUL if bool(r["success"])
@@ -155,7 +156,7 @@ class ResonatorSpectroscopy(Experiment):
             self.device.channel(target, "readout").readout_freq_hz = (
                 fit["readout_freq_hz"])
             res_view = self.device.component(self.device.resonator_of(target))
-            for field in ("f_dress0_hz", "kappa_tot_hz"):
+            for field in ("f_dress0_hz", "f_bare_hz", "kappa_tot_hz"):
                 if field in fit:
                     setattr(res_view, field, fit[field])
             # One fit, two roles, two homes — the same split qubit_relaxation
