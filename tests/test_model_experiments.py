@@ -2003,10 +2003,27 @@ def test_pair_swap_angle_compensation_reaches_the_probe(session):
     assert fit["n_theta_ok"] == fit["n_coupler_flux_v"]
 
 
-def test_readout_frequency_extracts_and_persists_dips_and_chi(session):
-    """readout_frequency extracts dressed resonator frequencies f_dress0_hz and f_dress1_hz,
-    computes chi_hz = (f_dress0_hz - f_dress1_hz) / 2, and updates resonator facts."""
+def test_readout_frequency_default_none_mode_touches_channel_only(session):
+    """Default dip_fit_method='none' optimizes fidelity without touching resonator facts."""
     out = session.run("readout_frequency", {"targets": ["q0"], "num_shots": 300},
+                      update="apply")
+    assert out.get("error") is None, out.get("error")
+
+    fit = out["fit"]["q0"]
+    assert math.isfinite(fit["readout_freq_hz"])
+    assert "f_dress1_hz" not in fit
+    assert "chi_hz" not in fit
+    assert "f_dress0_hz" not in fit
+
+    # Resonator mode is completely untouched
+    phys = session.physical_state()
+    assert "q0_res" not in phys
+
+
+def test_readout_frequency_lorentzian_extracts_and_persists_dips_and_chi(session):
+    """dip_fit_method='lorentzian' extracts f_dress0_hz, f_dress1_hz, chi_hz and updates resonator facts."""
+    out = session.run("readout_frequency", {"targets": ["q0"], "num_shots": 300,
+                                            "dip_fit_method": "lorentzian"},
                       update="apply")
     assert out.get("error") is None, out.get("error")
 
@@ -2024,13 +2041,15 @@ def test_readout_frequency_extracts_and_persists_dips_and_chi(session):
     assert phys["q0_res"]["f_dress0_hz"] == pytest.approx(fit["f_dress0_hz"])
 
 
-def test_readout_frequency_average_mode_extracts_dips(session):
-    """readout_frequency in average mode also resolves f_dress1_hz and chi_hz."""
+def test_readout_frequency_circle_extracts_dips(session):
+    """dip_fit_method='circle' fits complex S21 and persists resonator facts."""
     out = session.run("readout_frequency", {"targets": ["q0"], "readout_mode": "average",
-                                           "num_shots": 200}, update="apply")
+                                            "num_shots": 200, "dip_fit_method": "circle"},
+                      update="apply")
     assert out.get("error") is None, out.get("error")
     fit = out["fit"]["q0"]
     assert math.isfinite(fit["f_dress1_hz"])
     assert math.isfinite(fit["chi_hz"])
     assert session.physical_state()["q0_res"]["f_dress1_hz"] == pytest.approx(fit["f_dress1_hz"])
+
 
