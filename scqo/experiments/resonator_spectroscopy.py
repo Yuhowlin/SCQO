@@ -191,13 +191,18 @@ class ResonatorSpectroscopy(Experiment):
                 # the dispersive dip is one Lamb shift away, and only a
                 # two-branch punchout resolves both. readout_depletion_s is an
                 # operating choice too, so it stays with the tone.
-                res_view.f_bare_hz = fit["f_bare_hz"]
-                res_view.kappa_tot_hz = fit["kappa_tot_hz"]
+                for field in ("f_bare_hz", "kappa_tot_hz"):
+                    if field in fit:
+                        setattr(res_view, field, fit[field])
                 continue
             self.device.channel(target, "readout").readout_freq_hz = (
                 fit["readout_freq_hz"])
-            res_view.f_dress0_hz = fit["f_dress0_hz"]
-            res_view.kappa_tot_hz = fit["kappa_tot_hz"]
+            # per-field, because a SUBCLASS may narrow what estimate() returns
+            # (tests/test_quickwins.py::_PartialExperiment supplies the readout
+            # knob alone) and a missing physical name must not fail the writeback
+            for field in ("f_dress0_hz", "kappa_tot_hz"):
+                if field in fit:
+                    setattr(res_view, field, fit[field])
             # One fit, two roles, two homes — the same split qubit_relaxation
             # makes with t1_s: the LINEWIDTH is sample physics (a resonator fact
             # above), while depletion_factor / (2 pi x kappa) is an operating
