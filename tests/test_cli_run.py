@@ -62,7 +62,13 @@ def _run_cli(tmp_path: Path, *args: str, parameters_toml: str | None = None) -> 
         [sys.executable, "-m", "scqo.cli", *args],
         capture_output=True,
         text=True,
-        env={**os.environ, "SCQO_CONFIG": str(config), "SCQO_USER_CONFIG": "none"},
+        # Both ends of the pipe pinned to UTF-8: the child encodes stdout per
+        # PYTHONIOENCODING (set in some shells here, unset in others) while
+        # text=True decodes with the ANSI codepage (cp950), and any mismatch
+        # kills the reader thread on the first non-ASCII byte -> stdout is None.
+        encoding="utf-8",
+        env={**os.environ, "SCQO_CONFIG": str(config), "SCQO_USER_CONFIG": "none",
+             "PYTHONIOENCODING": "utf-8"},
         cwd=tmp_path,  # an arbitrary directory — NOT a repo
     )
 
@@ -133,22 +139,22 @@ def test_default_run_suggests_then_accept_by_run_id(tmp_path):
     proc = _run_cli(tmp_path, "run", "resonator_spectroscopy", "--targets", "q0")
     assert proc.returncode == 0, proc.stderr
     result = _result(proc)  # stdout parses despite the extra stderr output
-    # the knob lands on the readout CHANNEL, the three facts on the resonator MODE
+    # the knob lands on the readout CHANNEL, the two facts on the resonator MODE
     assert [s["field"] for s in result["suggestions"]] == [
-        "readout_freq_hz", "f_dress0_hz", "f_bare_hz", "kappa_tot_hz", "readout_depletion_s"]
+        "readout_freq_hz", "f_dress0_hz", "kappa_tot_hz", "readout_depletion_s"]
     assert [s["entity"] for s in result["suggestions"]] == [
-        "q0_ro", "q0_res", "q0_res", "q0_res", "q0_ro"]
+        "q0_ro", "q0_res", "q0_res", "q0_ro"]
     assert {s["status"] for s in result["suggestions"]} == {"pending"}
     assert "suggested updates" in proc.stderr
     assert f"scqo accept {result['run_id']}" in proc.stderr
 
     # the pending run is findable three ways (all datastore-only)
     listing = _run_cli(tmp_path, "accept")
-    assert result["run_id"] in listing.stdout and "pending:5" in listing.stdout
+    assert result["run_id"] in listing.stdout and "pending:4" in listing.stdout
     table = _run_cli(tmp_path, "accept", result["run_id"], "--list")
     assert table.returncode == 0 and "readout_freq_hz" in table.stdout
     found = _run_cli(tmp_path, "find", "--pending")
-    assert result["run_id"] in found.stdout and "pend:5" in found.stdout
+    assert result["run_id"] in found.stdout and "pend:4" in found.stdout
 
     # non-TTY accept with no selectors applies ALL pending
     accept = _run_cli(tmp_path, "accept", result["run_id"], "--comment", "looks right")
@@ -158,7 +164,7 @@ def test_default_run_suggests_then_accept_by_run_id(tmp_path):
     # order the record's suggestions list keeps — so readout_depletion_s lands
     # next to the other readout-channel knob rather than last.
     assert [a["field"] for a in summary["applied"]] == [
-        "readout_freq_hz", "readout_depletion_s", "f_bare_hz", "f_dress0_hz", "kappa_tot_hz"]
+        "readout_freq_hz", "readout_depletion_s", "f_dress0_hz", "kappa_tot_hz"]
     assert summary["pending_left"] == 0
 
     # the change history carries the ORIGINATING run id
@@ -279,7 +285,7 @@ def test_reapply_rolls_back_from_the_cli(tmp_path):
     # order the record's suggestions list keeps — so readout_depletion_s lands
     # next to the other readout-channel knob rather than last.
     assert [a["field"] for a in summary["applied"]] == [
-        "readout_freq_hz", "readout_depletion_s", "f_bare_hz", "f_dress0_hz", "kappa_tot_hz"]
+        "readout_freq_hz", "readout_depletion_s", "f_dress0_hz", "kappa_tot_hz"]
     assert summary["applied"][0]["after"] == value_a
 
     history = _run_cli(tmp_path, "state", "--history")

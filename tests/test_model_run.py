@@ -45,9 +45,9 @@ def test_run_suggest_accept_roundtrip(session):
     # the linewidth and dip position are resonator FACTS (never pushed).
     assert proposed == {
         ("q0_ro", "readout_freq_hz", "knob"), ("q0_ro", "readout_depletion_s", "knob"),
-        ("q0_res", "f_dress0_hz", "fact"), ("q0_res", "f_bare_hz", "fact"), ("q0_res", "kappa_tot_hz", "fact"),
+        ("q0_res", "f_dress0_hz", "fact"), ("q0_res", "kappa_tot_hz", "fact"),
         ("q1_ro", "readout_freq_hz", "knob"), ("q1_ro", "readout_depletion_s", "knob"),
-        ("q1_res", "f_dress0_hz", "fact"), ("q1_res", "f_bare_hz", "fact"), ("q1_res", "kappa_tot_hz", "fact"),
+        ("q1_res", "f_dress0_hz", "fact"), ("q1_res", "kappa_tot_hz", "fact"),
     }
     # nothing applied yet
     assert session.physical_state() == {}
@@ -56,7 +56,6 @@ def test_run_suggest_accept_roundtrip(session):
     assert session.physical_state()["q0_res"]["kappa_tot_hz"] > 0
     fitted = session.device_state()["q0_ro"]["readout_freq_hz"]
     assert abs(fitted - 5.95e9) < 5e6                 # near the design f_r
-    assert session.physical_state()["q0_res"]["f_bare_hz"] == pytest.approx(fitted)
     assert session.history()[-1]["run_id"] == out["run_id"]
 
 
@@ -65,8 +64,6 @@ def test_run_apply_mode_is_immediate(session):
                       update="apply")
     assert out.get("error") is None
     assert session.physical_state()["q0_res"]["f_dress0_hz"] == pytest.approx(
-        session.device_state()["q0_ro"]["readout_freq_hz"])
-    assert session.physical_state()["q0_res"]["f_bare_hz"] == pytest.approx(
         session.device_state()["q0_ro"]["readout_freq_hz"])
     record = session.load_run(out["run_id"])["record"]
     assert record["updated_device"] is True

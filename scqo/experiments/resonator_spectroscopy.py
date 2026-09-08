@@ -3,8 +3,9 @@
 Port of :mod:`scqo.experiments.resonator_spectroscopy`. The physics half is
 preserved (cosmetically reflowed); what moved is the device surface in ``update()`` and the
 anchor spelling: the operating choice lands on the target's READOUT CHANNEL
-(``readout_freq_hz``) and the fit's physical content (``f_dress0_hz``,
-``f_bare_hz``, ``kappa_tot_hz``) on the attached RESONATOR mode.
+(``readout_freq_hz``) and the fit's physical content (the dip frequency and
+``kappa_tot_hz``) on the attached RESONATOR mode. WHICH frequency the dip is —
+``f_dress0_hz`` or ``f_bare_hz`` — is the ``dip_branch`` question below.
 """
 
 from __future__ import annotations
@@ -52,12 +53,28 @@ class ResonatorSpectroscopyParameters(TargetSelection, AveragingParameters,
     baseline_order: int = Field(
         1, ge=0, le=2,
         description="lorentzian only: polynomial background order.")
+    dip_branch: Literal["dress0", "bare"] = Field(
+        "dress0",
+        description=(
+            "WHICH resonator frequency this sweep's dip is — the readout power "
+            "decides, so only the operator can say. At low power the qubit "
+            "stays in |0> and dresses its resonator, and the dip is "
+            "f_dress0_hz ('dress0', the default: the frequency the readout "
+            "tone is parked on). Driven hard enough the qubit saturates, stops "
+            "dressing it, and the dip walks to the bare mode f_bare_hz "
+            "('bare'). ONE run at ONE power measures ONE of them, never both — "
+            "they differ by the Lamb shift, and a bare frequency filed as "
+            "dressed (or the reverse) silently breaks every g computed from "
+            "the pair. Use resonator_spectroscopy_power_amp to resolve BOTH "
+            "branches and the power that separates them."),
+    )
 
 
 class ResonatorSpectroscopyResult(Result):
-    """``fit[target]``: readout_freq_hz (new absolute), dip_detuning_hz,
-    old_readout_freq_hz, plus the physical f_dress0_hz / f_bare_hz / kappa_tot_hz
-    that update() proposes on the target's resonator mode."""
+    """``fit[target]``: dip_detuning_hz, old_readout_freq_hz, dip_branch and
+    the physical kappa_tot_hz, plus — under ``dip_branch="dress0"`` — the new
+    absolute readout_freq_hz and f_dress0_hz, or under ``"bare"`` the
+    f_bare_hz that update() proposes on the target's resonator mode."""
 
 
 @register
@@ -68,11 +85,15 @@ class ResonatorSpectroscopy(Experiment):
     description: ClassVar[str] = (
         "Sweep readout frequency around each resonator and locate the "
         "transmission dip; updates each target's readout channel "
-        "readout_freq_hz and proposes the dip position (f_dress0_hz, f_bare_hz) and "
+        "readout_freq_hz and proposes the dip position (f_dress0_hz) and "
         "linewidth (kappa_tot_hz) on the attached resonator mode, plus "
         "depletion_factor / (2 pi x kappa_tot_hz) as the readout channel's "
         "readout_depletion_s knob — this is the experiment that calibrates the "
-        "photon-depletion wait every other experiment leaves after a readout.")
+        "photon-depletion wait every other experiment leaves after a readout. "
+        "Run at punchout power the dip is the BARE resonator instead: set "
+        "dip_branch='bare' and it proposes f_bare_hz + kappa_tot_hz and "
+        "touches no readout-channel knob, because a saturated qubit's dip "
+        "says nothing about where to park the readout tone.")
     Parameters: ClassVar[type] = ResonatorSpectroscopyParameters
     Result: ClassVar[type] = ResonatorSpectroscopyResult
     Contract: ClassVar[DatasetContract] = DatasetContract(
@@ -133,16 +154,25 @@ class ResonatorSpectroscopy(Experiment):
             old = old_freqs[target]
             center = float(r["detuning"])
             new_freq = float(r.get("full_freq", old + center))
-            result.fit[target] = {
-                "readout_freq_hz": new_freq,
+            fit = {
                 "dip_detuning_hz": center,
                 "old_readout_freq_hz": old,
-                # the same fit, under its physical names: the dip IS the
-                # dressed resonator frequency, the FWHM IS kappa
-                "f_dress0_hz": new_freq,
-                "f_bare_hz": new_freq,
+                # record-only provenance: which branch the operator declared,
+                # so the run says what its frequency MEANS without the params
+                "dip_branch": self.params.dip_branch,
+                # the FWHM IS kappa on either branch
                 "kappa_tot_hz": float(r["fwhm"]),
             }
+            if self.params.dip_branch == "bare":
+                # the qubit is saturated and no longer dressing the resonator,
+                # so the same fit is the BARE mode under its own name
+                fit["f_bare_hz"] = new_freq
+            else:
+                # the dip IS the dressed resonator frequency, and it is what
+                # the readout tone parks on
+                fit["readout_freq_hz"] = new_freq
+                fit["f_dress0_hz"] = new_freq
+            result.fit[target] = fit
             result.outcomes[target] = (Outcome.SUCCESSFUL if bool(r["success"])
                                        else Outcome.FAILED)
         return result
@@ -153,12 +183,21 @@ class ResonatorSpectroscopy(Experiment):
         for target, fit in self.result.fit.items():
             if self.result.outcomes[target] is not Outcome.SUCCESSFUL:
                 continue
+            res_view = self.device.component(self.device.resonator_of(target))
+            if self.params.dip_branch == "bare":
+                # NOTHING lands on the readout channel here. The only operating
+                # quantity this run could offer is where to park the readout
+                # tone, and that is a frequency a punched-out sweep cannot see:
+                # the dispersive dip is one Lamb shift away, and only a
+                # two-branch punchout resolves both. readout_depletion_s is an
+                # operating choice too, so it stays with the tone.
+                res_view.f_bare_hz = fit["f_bare_hz"]
+                res_view.kappa_tot_hz = fit["kappa_tot_hz"]
+                continue
             self.device.channel(target, "readout").readout_freq_hz = (
                 fit["readout_freq_hz"])
-            res_view = self.device.component(self.device.resonator_of(target))
-            for field in ("f_dress0_hz", "f_bare_hz", "kappa_tot_hz"):
-                if field in fit:
-                    setattr(res_view, field, fit[field])
+            res_view.f_dress0_hz = fit["f_dress0_hz"]
+            res_view.kappa_tot_hz = fit["kappa_tot_hz"]
             # One fit, two roles, two homes — the same split qubit_relaxation
             # makes with t1_s: the LINEWIDTH is sample physics (a resonator fact
             # above), while depletion_factor / (2 pi x kappa) is an operating
