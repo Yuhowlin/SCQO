@@ -62,13 +62,7 @@ def _run_cli(tmp_path: Path, *args: str, parameters_toml: str | None = None) -> 
         [sys.executable, "-m", "scqo.cli", *args],
         capture_output=True,
         text=True,
-        # Both ends of the pipe pinned to UTF-8: the child encodes stdout per
-        # PYTHONIOENCODING (set in some shells here, unset in others) while
-        # text=True decodes with the ANSI codepage (cp950), and any mismatch
-        # kills the reader thread on the first non-ASCII byte -> stdout is None.
-        encoding="utf-8",
-        env={**os.environ, "SCQO_CONFIG": str(config), "SCQO_USER_CONFIG": "none",
-             "PYTHONIOENCODING": "utf-8"},
+        env={**os.environ, "SCQO_CONFIG": str(config), "SCQO_USER_CONFIG": "none"},
         cwd=tmp_path,  # an arbitrary directory — NOT a repo
     )
 
