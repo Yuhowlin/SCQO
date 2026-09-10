@@ -149,3 +149,33 @@ def test_contract_validation_with_population():
         },
     )
     CrosstalkCompensatedSQRB.Contract.validate(ds_bench)
+
+
+def test_cal_stage_repetitions():
+    # 1. Default fallback
+    p_def = CrosstalkCompensatedSQRBParameters()
+    assert p_def.get_cal_stage_repetitions() == [5, 10, 20]
+
+    # 2. Comma separated string
+    p_comma = CrosstalkCompensatedSQRBParameters(cal_stage_repetitions="2, 8, 24")
+    assert p_comma.get_cal_stage_repetitions() == [2, 8, 24]
+
+    # 3. Slice string: "10:30:5"
+    p_slice = CrosstalkCompensatedSQRBParameters(cal_stage_repetitions="10:30:5")
+    assert p_slice.get_cal_stage_repetitions() == [10, 15, 20, 25, 30]
+
+    # 4. Single int
+    p_int = CrosstalkCompensatedSQRBParameters(cal_stage_repetitions=12)
+    assert p_int.get_cal_stage_repetitions() == [12]
+
+    # 5. List of ints
+    p_list = CrosstalkCompensatedSQRBParameters(cal_stage_repetitions=[4, 8, 16])
+    assert p_list.get_cal_stage_repetitions() == [4, 8, 16]
+
+
+def test_parameters_batch_size_and_zoom():
+    p = CrosstalkCompensatedSQRBParameters(zoom_factor=2.5, **{"batch_size": 3})
+    assert p.zoom_factor == 2.5
+    assert p.benchmark_batch_size == 3
+    assert p.target_gate == "x180"
+

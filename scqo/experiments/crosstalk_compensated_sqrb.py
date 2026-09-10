@@ -111,6 +111,31 @@ class CrosstalkCompensatedSQRBParameters(
             arr[0] = 1
             return arr
 
+    target_gate: str = Field(
+        "x180",
+        description="Target gate repeated on drive qubit and cancel element in calibrate mode: x180, y180, x90, y90."
+    )
+
+    benchmark_batch_size: int = Field(
+        1,
+        gt=0,
+        description="Number of depths per execution batch to prevent OPX memory overload."
+    )
+    benchmark_sequence_batch_size: int | None = Field(
+        None,
+        gt=0,
+        description="Chunk size for sequences per batch. If None, computed adaptively from max_gates_per_batch and depth."
+    )
+    max_gates_per_batch: int = Field(
+        120,
+        gt=0,
+        description="Maximum Clifford gates per QUA compilation batch to avoid QOP memory exhaustion and compile timeouts."
+    )
+    conditions: list[str] | None = Field(
+        None,
+        description="List of conditions to benchmark (e.g. ['isolated', 'simultaneous', 'compensated'])."
+    )
+
     # Active compensation knobs
     cancel_amp: float = Field(
         0.0,
@@ -124,14 +149,18 @@ class CrosstalkCompensatedSQRBParameters(
     phase_rate: float | None = Field(
         None,
         description=(
-            "Phase evolution rate per gate slot in radians (Delta phi). "
-            "If None, computed automatically from theoretical detuning (f_d - f_p) and slot duration."
+            "Phase evolution rate per atomic pulse subslot in radians (Delta phi). "
+            "If None, computed automatically from theoretical detuning (f_d - f_p) and atomic pulse duration."
         )
     )
     clifford_duration_ns: int = Field(
-        40,
+        16,
         gt=0,
-        description="Duration of each Clifford slot in ns for theoretical phase rate calculation."
+        description="Duration of each atomic pulse subslot in ns for theoretical phase rate calculation."
+    )
+    strict_timing: bool = Field(
+        True,
+        description="Whether to enforce strict_timing_() in QUA to eliminate inter-gate calculation gaps."
     )
 
     # Execution mode
@@ -139,9 +168,44 @@ class CrosstalkCompensatedSQRBParameters(
         "benchmark",
         description=(
             "'benchmark' runs 3 SQRB curves (isolated, simultaneous, compensated). "
-            "'calibrate' sweeps cancel_amp and init_phase at a fixed cal_depth to find optimal values."
+            "'calibrate' runs multi-stage zoom-in sweeps of cancel_amp and init_phase with probe idle in |0>."
         )
     )
+
+    # Multi-stage zoom-in calibration parameters
+    cal_stage_repetitions: list[int] | str | int | None = Field(
+        default_factory=lambda: [5, 10, 20],
+        description="Clifford depths or pulse repetitions for each zoom-in stage in calibrate mode."
+    )
+    zoom_factor: float = Field(
+        2.0,
+        gt=1.0,
+        description="Range contraction factor per zoom-in stage (span /= zoom_factor)."
+    )
+
+    def get_cal_stage_repetitions(self) -> list[int]:
+        """Generate list of gate counts for each zoom-in calibration stage."""
+        val = self.cal_stage_repetitions
+        if val is not None:
+            if isinstance(val, str):
+                cleaned = val.strip()
+                if "," in cleaned:
+                    return [max(1, int(x.strip())) for x in cleaned.split(",") if x.strip()]
+                elif ":" in cleaned:
+                    parts = cleaned.split(":")
+                    if len(parts) == 2:
+                        return list(range(int(parts[0]), int(parts[1]) + 1, max(1, (int(parts[1]) - int(parts[0])) // 3)))
+                    elif len(parts) >= 3:
+                        return list(range(int(parts[0]), int(parts[1]) + 1, int(parts[2])))
+                try:
+                    return [max(1, int(cleaned))]
+                except ValueError:
+                    pass
+            elif isinstance(val, (int, float)):
+                return [max(1, int(val))]
+            elif isinstance(val, (list, tuple, np.ndarray)):
+                return [max(1, int(x)) for x in val]
+        return [5, 10, 20]
 
     # Calibration mode sweep parameters
     min_cancel_amp: float = Field(
@@ -209,6 +273,8 @@ class CrosstalkCompensatedSQRBParameters(
     @classmethod
     def _resolve_targets_and_qubits(cls, data: Any) -> Any:
         if isinstance(data, dict):
+            if "batch_size" in data:
+                data["benchmark_batch_size"] = data.pop("batch_size")
             targets = data.get("targets")
             if targets:
                 if isinstance(targets, str):
@@ -247,7 +313,7 @@ class CrosstalkCompensatedSQRBContract(DatasetContract):
 
     def validate(self, ds: xr.Dataset) -> None:
         if "cancel_amp" in ds.coords and "init_phase" in ds.coords:
-            required_coords = {"target", "cancel_amp", "init_phase", "sequence_idx"}
+            required_coords = {"target", "cancel_amp", "init_phase"}
         else:
             required_coords = {"target", "condition", "sequence_idx", "depth"}
 
@@ -300,7 +366,6 @@ class CrosstalkCompensatedSQRB(Experiment):
             return {
                 "cancel_amp": self.params.get_cancel_amps(),
                 "init_phase": self.params.get_init_phases(),
-                "sequence_idx": np.arange(self.params.num_random_sequences, dtype=int),
             }
         return {
             "condition": np.array(["isolated", "simultaneous", "compensated"]),
@@ -330,27 +395,37 @@ class CrosstalkCompensatedSQRB(Experiment):
         if self.params.mode == "calibrate":
             amps = coords["cancel_amp"]
             phases = coords["init_phase"]
-            n_seq = len(coords["sequence_idx"])
-            cal_depth = self.params.cal_depth
+            stage_reps = self.params.get_cal_stage_repetitions()
 
-            # Simulate P0 as 2D bowl centered at opt_amp, opt_phi
+            # Simulate cancellation response across stage gate repetitions with probe idle in |0>
             A_grid, P_grid = np.meshgrid(amps, phases, indexing="ij")
-            err_dist = (A_grid - opt_amp) ** 2 + 0.0005 * (np.sin((P_grid - opt_phi) / 2)) ** 2
-            p_effective = p_sim + (p_iso - p_sim) * np.exp(-err_dist / 0.002)
-            base_pop = 0.5 + 0.5 * (p_effective ** cal_depth)
+            residual_drive = np.sqrt(
+                (A_grid - opt_amp) ** 2 + 0.001 * (np.sin((P_grid - opt_phi) / 2)) ** 2
+            )
+            p1_acc = np.zeros_like(residual_drive)
+            for r in stage_reps:
+                theta = 2.0 * np.pi * residual_drive * r
+                p1_acc += (np.sin(theta / 2)) ** 2
+            p1_sim = p1_acc / len(stage_reps)
+            p1_sim = np.clip(p1_sim + rng.normal(0, 0.015, p1_sim.shape), 0.0, 1.0)
 
-            # Broadcast across sequence_idx: shape (len(amps), len(phases), n_seq)
-            pop = np.tile(base_pop[:, :, None], (1, 1, n_seq))
-            noise = rng.normal(0, 0.01, pop.shape)
-            pop = np.clip(pop + noise, 0.0, 1.0)
+            if "sequence_idx" in coords:
+                n_seq = len(coords["sequence_idx"])
+                pop_seq = np.tile(p1_sim[:, :, None], (1, 1, n_seq))
+                p1_t = np.repeat(pop_seq[None, ...], n_targets, axis=0)
+                if self.params.use_state_discrimination:
+                    return {"state": (("target", "cancel_amp", "init_phase", "sequence_idx"), p1_t)}
+                return {
+                    "I": (("target", "cancel_amp", "init_phase", "sequence_idx"), p1_t),
+                    "Q": (("target", "cancel_amp", "init_phase", "sequence_idx"), np.zeros_like(p1_t)),
+                }
 
-            # Target dimension: (n_targets, cancel_amp, init_phase, sequence_idx)
-            pop_t = np.repeat(pop[None, ...], n_targets, axis=0)
+            p1_t = np.repeat(p1_sim[None, ...], n_targets, axis=0)
             if self.params.use_state_discrimination:
-                return {"state": (("target", "cancel_amp", "init_phase", "sequence_idx"), 1.0 - pop_t)}
+                return {"state": (("target", "cancel_amp", "init_phase"), p1_t)}
             return {
-                "I": (("target", "cancel_amp", "init_phase", "sequence_idx"), pop_t),
-                "Q": (("target", "cancel_amp", "init_phase", "sequence_idx"), np.zeros_like(pop_t)),
+                "I": (("target", "cancel_amp", "init_phase"), p1_t),
+                "Q": (("target", "cancel_amp", "init_phase"), np.zeros_like(p1_t)),
             }
 
         # Benchmark mode: 3 conditions over depths
@@ -392,6 +467,50 @@ class CrosstalkCompensatedSQRB(Experiment):
             ds_probe = self.dataset.sel(target=probe)
         else:
             ds_probe = self.dataset
+
+        # Populate synthetic stage_history for offline/simulated calibrate runs if not already set by hardware
+        if self.params.mode == "calibrate" and "stage_history" not in ds_probe.attrs:
+            try:
+                import json
+                stage_reps = self.params.get_cal_stage_repetitions()
+                history = []
+                cur_min_a = float(self.params.min_cancel_amp)
+                cur_max_a = float(self.params.max_cancel_amp)
+                cur_min_p = float(self.params.min_init_phase)
+                cur_max_p = float(self.params.max_init_phase)
+                zoom = float(self.params.zoom_factor)
+                opt_a = 0.035
+                opt_phi = 0.85
+                for s_idx, r in enumerate(stage_reps):
+                    s_amps = np.linspace(cur_min_a, cur_max_a, int(self.params.num_cancel_amps))
+                    s_phases = np.linspace(cur_min_p, cur_max_p, int(self.params.num_init_phases))
+                    A, P = np.meshgrid(s_amps, s_phases, indexing="ij")
+                    res_drive = np.sqrt((A - opt_a) ** 2 + 0.001 * (np.sin((P - opt_phi) / 2)) ** 2)
+                    p_val = np.sin(2.0 * np.pi * res_drive * r / 2) ** 2
+                    min_idx = np.unravel_index(np.argmin(p_val), p_val.shape)
+                    best_a = float(s_amps[min_idx[0]])
+                    best_p = float(s_phases[min_idx[1]])
+                    history.append({
+                        "stage": s_idx + 1,
+                        "repetitions": int(r),
+                        "cancel_amps": s_amps.tolist(),
+                        "init_phases": s_phases.tolist(),
+                        "p_vals": p_val.tolist(),
+                        "best_cancel_amp": best_a,
+                        "best_init_phase": best_p,
+                        "min_signal": float(p_val[min_idx]),
+                    })
+                    span_a = (cur_max_a - cur_min_a) / zoom
+                    span_p = (cur_max_p - cur_min_p) / zoom
+                    cur_min_a = max(0.0, best_a - span_a / 2.0)
+                    cur_max_a = best_a + span_a / 2.0
+                    cur_min_p = best_p - span_p / 2.0
+                    cur_max_p = best_p + span_p / 2.0
+                ds_probe.attrs["stage_history"] = json.dumps(history)
+                if self.dataset is not None:
+                    self.dataset.attrs["stage_history"] = json.dumps(history)
+            except Exception:
+                pass
 
         estimator = CrosstalkCompensatedSQRBEstimator()
         out_dir = str(self.artifact_dir) if self.artifact_dir is not None else None
