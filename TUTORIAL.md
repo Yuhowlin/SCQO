@@ -14,7 +14,8 @@ whoever set up the PC): a venv activated and a lab config in place (your own
 inside them, so use the full path or run from the repos' parent folder) — and an
 instrument env only to measure:
 `.venv-qblox` for `scqo run`/`scqo state` on the Qblox
-cluster, `.venv-qm` on the OPX1000. Cooldowns are no longer a tag you maintain:
+cluster, `.venv-qm` on the Quantum Machines instruments (OPX1000 or OPX+). (Contributing rather than measuring? The venv you
+TEST in is a different question — [ENVIRONMENTS.md](ENVIRONMENTS.md).) Cooldowns are no longer a tag you maintain:
 the manager registers each cycle (`scqo device cooldown`), and every run you take is
 auto-stamped with it — findable via `scqo find --cooldown`.
 
@@ -71,22 +72,22 @@ scqo run                                         # no arguments = show the menu
 ```
 pair_swap_chevron                   qubit_spectroscopy_cryoscope
 pair_swap_flux_map                  qubit_spectroscopy_flux_pulse
-pair_zz_coupler                     qubit_spectroscopy_overlap
-qc_n_stark_amp                      qubit_sqrb
-qc_n_swap_amp                       qubit_stark_phase_echo
-qubit_deterministic_benchmarking    qubit_t1_ade
-qubit_drag_alternating              qubit_t1_bayesian
-qubit_drag_equator                  qubit_thermal_population
-qubit_echo                          qubit_tomography
-qubit_echo_flux_pulse               qubit_xyz_delay
-qubit_parity_switch_continuous      readout_frequency
-qubit_parity_switch_discrete        readout_power
-qubit_pi_pulse_error                resonator_spectroscopy
-qubit_power_rabi                    resonator_spectroscopy_flux
-qubit_ramsey                        resonator_spectroscopy_power_amp
-qubit_ramsey_cryoscope              resonator_spectroscopy_power_chain
-qubit_relaxation                    single_shot_readout
-qubit_relaxation_flux_pulse         single_shot_readout_gef
+pair_zz_coupler                     qubit_sqrb
+qc_n_stark_amp                      qubit_stark_phase_echo
+qc_n_swap_amp                       qubit_t1_ade
+qubit_deterministic_benchmarking    qubit_t1_bayesian
+qubit_drag_alternating              qubit_thermal_population
+qubit_drag_equator                  qubit_tomography
+qubit_echo                          qubit_xyz_delay
+qubit_echo_flux_pulse               readout_frequency
+qubit_parity_switch_continuous      readout_power
+qubit_parity_switch_discrete        resonator_spectroscopy
+qubit_pi_pulse_error                resonator_spectroscopy_flux
+qubit_power_rabi                    resonator_spectroscopy_power_amp
+qubit_ramsey                        resonator_spectroscopy_power_chain
+qubit_ramsey_cryoscope              single_shot_readout
+qubit_relaxation                    single_shot_readout_gef
+qubit_relaxation_flux_pulse
 qubit_spectroscopy
 # capabilities: state_readout(14) flux(4) qubit_reset(30) flux_pulse(3) amplitude(4) drive_detuning(4) readout_detuning(5) none(0)
 # filter: scqo run --capability <name>    detail: scqo run <name> --help
@@ -222,7 +223,7 @@ vendor's own view of it to `./scqo_preview/<experiment>_<timestamp>/`
 `--no-open`. On Qblox that is the interactive pulse diagram
 (`pulse_diagram.html`, zoomable in the browser) plus the absolute
 `timing_table.html`; on QM it is the generated QUA script (`qua_script.py`)
-plus — when the OPX1000 gateway answers — `simulated_waveforms.html`, the
+plus — when the QM gateway answers — `simulated_waveforms.html`, the
 gateway simulator's actual analog outputs (tried automatically, skipped with
 a warning when the cluster is unreachable; `--simulate-ns N` widens the
 simulated window from its 20 µs default, `--no-simulate` guarantees a fully
@@ -515,11 +516,21 @@ Things worth knowing before you leave one running overnight:
   replayed through each experiment's own `update()` and stored on the campaign as
   **pending suggested updates** (one `t1_s` series proposes both the fact and the
   derived thermalization wait, exactly like a single run would). The plan's
-  `[writeback]` table picks the statistic. Review and decide them like a run's:
+  `[writeback]` table picks the statistic. The campaign ends by showing them and
+  asking, exactly as a single `scqo run` does; from a pipe or a script it prints the
+  table and the command to come back with:
 
   ```bash
   scqo accept --campaign <campaign_id>
   ```
+
+  Two things worth knowing about that prompt. It hands the INSTRUMENT BACK before it
+  asks, so walking away from it costs nothing — a decision only writes the config
+  files, and the values reach hardware at the next run. And a campaign whose repeats
+  did not reach `[writeback] min_n` (default 3) proposes nothing and SAYS SO, at the
+  end of the run and again in `scqo campaign --show <id>`: run more repeats, or lower
+  the floor in the plan. `scqo run <name> --repeat 2` is the easy way to meet this —
+  it is a 1-step campaign and carries the same floor.
 
   Same interactive review, same era/staleness guards — and the applied values carry
   the CAMPAIGN as their provenance: `scqo state --sources` and the viewer link them
@@ -596,6 +607,16 @@ when suggested updates are still undecided, and the folder path.)
         resonator_spectroscopy_plotdata.nc                 arrays to redraw without refitting
 ```
 
+Beside the day folders, `<data_root>/SQ_demo/setup_snapshots/<hash16>/` holds the **setup
+snapshot** the run executed against: `backend_config/` (the vendor config exactly as the
+session held it in memory at run start — QM `state.json` + `wiring.json`, Qblox
+`dut_config.json` + `hw_config.json`, plus any other file of the setup's folder), `scqo/`
+(this context's `scqo_state.json` + `physical.json` values) and `manifest.json` (hash,
+per-file checksums, driver/vendor versions, the first run that produced it). Identical
+content is stored once — `record.json` points at it via `setup_snapshot.hash`, and
+`setup_snapshot.drift` lists vendor files that changed DURING the run without being
+restored (also warned at run time). Simulated runs have no snapshot.
+
 (A Ramsey run looks the same with its own artifacts: `ramsey_time_domain.png`,
 `ramsey_fft_spectrum.png`, etc.)
 
@@ -622,6 +643,25 @@ scqo campaign --show <campaign_id> --plot
 
 `repeats.jsonl` deliberately stores no fitted numbers — the child runs' `result.json`
 stays the one place every number lives.
+
+### Re-running an old configuration
+
+`scqo restore <run_id> --setup <name>` turns a run's setup snapshot back into a NEW named
+setup of the device's ACTIVE cooldown cycle (`<device>/<cid>/<name>/backend_config/` +
+`scqo/`, and a `[<cid>.setup.<name>]` block appended to `cooldowns.toml` with a note naming
+the run). Then select it and re-run with the run's own parameters:
+
+```powershell
+scqo restore 20260903-151504-chipA-qubit_ramsey-01 --setup replay_0903
+scqo user --setup replay_0903
+scqo run qubit_ramsey --params <run folder>\parameters.json
+```
+
+The current setup is untouched — compare the two eras through `scqo find --setup`. A run
+from a DIFFERENT cooldown is refused (frequencies shift between cooldowns); `--force`
+overrides. The restored context starts with an empty change history, so `scqo state
+--sources` shows its values as `(no record)`; a version WARNING means the snapshot was
+written by other driver/vendor versions and a QM `__class__` path may no longer import.
 
 **The folder is the truth.** The SQLite index (`<data_root>/index.sqlite`) is only a
 cache — if it is ever missing or stale, rebuild it losslessly:
@@ -742,7 +782,7 @@ invisible process on the server and no window ever appears (clean strays with
 
 ```
 ssh <your-account>@<server>            # password prompt on first login
-D:\github\.venv-qblox\Scripts\Activate.ps1     # (or .venv-qm for the OPX1000)
+D:\github\.venv-qblox\Scripts\Activate.ps1     # (or .venv-qm for Quantum Machines)
 scqo run resonator_spectroscopy --targets q1 --tag mytest    # any directory works
 scqo find --limit 5
 exit
@@ -1061,6 +1101,20 @@ band, *fused* cross-references) BEFORE editing; per-run truth is
 `power_context` in each record.json. If the row is `[realizer]`, the tracked
 neutral value now lies — re-assert it through the front door
 (`scqo set q1.readout_power_dbm=...`) or revert your edit.
+Those constraints are not prose you have to hunt for: each row carries them as
+its own sub-lines — `coupled:` what must move in the SAME edit (change the LO
+and the downconverter goes with it), `edit:` how to do it safely (the governed
+`scqo set` for a `[realizer]`, or the file plus its precondition — "no live
+session, a save() would revert you") and `counterpart:` the other instrument's
+name for the same knob.
+
+**Playbook — the job needs a vendor tool, not a scqo command:** writing a
+measured cryoscope filter into the vendor config, releasing a cluster whose
+locks a dead session still holds, calibrating mixers. Those ship with the
+DRIVER, so `scqo -h` cannot list them and there is nothing to memorize:
+`scqo state --fields` ends with this backend's operator commands, each with its
+flags and any `CAUTION:`. `scqo doctor` points there when you have forgotten
+where to look.
 
 **Playbook — "set integration time to 2000 ns":** find the row with
 `scqo state --fields`; the number you type is in **the row's unit, not yours**
@@ -1181,6 +1235,25 @@ every application, a √iSWAP (θ = π/4) cycles every 4, θ = π/8 every 8. You
 the angle off the map by counting; no fit needed. (The peak transfer over N
 still reaches ~1 at N ≈ (π/2)/θ, so `min_transfer` keeps its meaning.)
 
+**But every REPEATED-swap map is contaminated by the phase between the swaps.**
+The members accumulate a relative phase φ during the pulse, the gap and the idle,
+and an exchange followed by a Z rotation does not commute: the per-round
+composite obeys `cos θ_eff = cos(φ/2)·cos θ`, so the period reports θ_eff ≥ θ,
+and the transfer PEAK moves too — the composite rotation axis tilts off the
+equator by `cos θ·sin(φ/2)`, so the amplitude where transfer is maximal is not
+where the detuning is zero but where the pulse's own Z accumulation cancels φ,
+an offset of roughly `φ / t_p`. On a 40 ns swap that is comparable to the
+resonance linewidth. This is not theoretical: two 5Q4C runs differing ONLY in
+`operation_gap_ns` fitted 0.993 and 1.561 rad for a physically identical swap.
+
+**A single pulse has no between-swap phase, which is why the chevron is the
+authority for both numbers.** `pair_swap_chevron` sweeps amplitude × DURATION,
+so the arch gives the resonance amplitude and the full-swap time `t_π` directly,
+and `θ = (π/2)·(t_p / t_π)` for any gate length — phase-free. Set
+`coupler_flux_v` to take that arch at a chosen coupler amplitude (step 1b), which
+is what makes it usable on a QCQ pair at all. Use `qc_n_swap_amp` to AMPLIFY a
+residual around a point the chevron already fixed, not to locate it.
+
 ### Step 0 — prerequisites
 
 - accepted `single_shot_readout` on both members (the pair maps read out jointly
@@ -1209,6 +1282,37 @@ growing as the coupler activates. Then pick the operating point:
   where the transfer column reads `sin²θ_target` — e.g. θ = π/4 → the P ≈ 0.5
   contour. Narrow the window and re-run until the contour is resolved by a few
   grid points.
+
+### Step 1b — the angle and the resonance, phase-free
+
+```
+scqo run pair_swap_chevron --targets q1_q2 --set coupler_flux_v=0.08 --set swap_operation=partial_swap --set drive_side=high --set flux_side=high
+```
+
+The flux map fixes the duration and shows you WHERE the resonance line runs; this
+sweeps the duration at ONE coupler amplitude and tells you what that setting
+actually buys:
+
+- `best_flux_amp_v` — the resonance control amplitude AT that coupler setting.
+  It moves with the coupler, which is the whole reason this step exists: the
+  angle knob drags the resonance knob with it.
+- `best_swap_time_ns` — the full-swap time `t_π`, hence `J = π/(2 t_π)` and
+  `θ = (π/2)·(t_p / t_π)` for the gate length you intend to bake.
+
+The volts convert against the `swap_operation` macro's own coupler pulse, the
+same reference `qc_unidirectional_trotter`'s `swap_coupler_flux` uses, so a
+coupler amplitude surveyed here transfers to the chain unchanged. Two conditions
+the probe refuses by name: the macro's coupler pulse must be SQUARE (a shaped one
+zero-pads under the swept duration instead of stretching), and it must not be
+baked at zero amplitude (it is the divisor). Engaging the coupler also puts the
+duration axis on the 4 ns clock from 16 ns up — a coupler pulse can only be
+stretched, never baked sub-clock — so set `min_swap_time_ns = 16` and give
+`max_swap_time_ns` at least 2·t_π at the SMALLEST coupler amplitude you will
+test, or the map never reaches a full swap and `min_transfer` reports FAILED.
+
+Repeat it per coupler amplitude (a campaign step each) to get the two curves the
+angle work needs: `V_resonance(V_coupler)` and `θ(V_coupler)`. Each run records
+its own `coupler_flux_v` in `result.fit`, so the curves read off the run records.
 
 ### Step 2 — materialize the operation (once per pair per angle)
 
@@ -1251,6 +1355,41 @@ Window the amplitude sweep around the registered control-z amplitude and give
 `readout_mode=shot` keeps every shot (per-member states) when the downstream
 analysis wants raw trajectories (the collisional-model notebooks).
 
+### Step 3b — the resonance and the phase compensation, together
+
+```
+scqo run qc_swap_flux_stark --targets q1_q2 --set swap_operation=partial_swap --set swap_count=8
+```
+
+Step 3 amplifies the residual, but it cannot tell you WHICH residual: the
+between-swap phase φ inflates the apparent angle AND moves the amplitude where
+the transfer peaks, so the flux knob and the Stark compensation are not
+independent. This map freezes the count and sweeps both amplitudes instead —
+the control flux (the resonance knob) against the Stark tone's amplitude (the
+phase knob) — so the working point is read off one surface rather than guessed
+from two one-dimensional scans.
+
+What the map looks like, and how to read it: the transfer forms a **ridge** along
+the line where the total per-round phase nulls (the detuning winds its own phase
+during the pulse, and the Stark tone subtracts one), and the detuning envelope
+picks one bright segment out of that ridge. The peak of that segment is
+`best_flux_amp_v` / `best_stark_amp` in `result.fit`. Two conditions on the run:
+
+- **`swap_count` must be at least 2**, and the probe defaults to 4. At N = 1 the
+  single Stark tone plays after the only swap, where it can do nothing but
+  imprint a phase — the map comes out flat along the Stark axis. The phase this
+  compensates only exists BETWEEN swaps.
+- **Pick N so that N swaps are roughly one full transfer** (θ ≈ π/(2N)). The peak
+  is a working point for the run's own N, and only near that condition is it the
+  compensating point: closer to a full per-round swap the maximum trades a
+  nonzero φ for a better angle, which is the same trap that makes
+  `qc_n_stark_amp`'s `best_stark_amp` unusable there.
+
+Prerequisite: the control member needs the named off-resonant `stark` xy
+operation (`quam_config/register_stark.py` in scqo-qm); the probe refuses by name
+if it is missing. Like every map in this section it is record-only — nothing is
+written back.
+
 ### Pin the workflow
 
 `~/.scqo/parameters.toml`:
@@ -1282,8 +1421,18 @@ flux_side = "low"
   ("promote to a coupled binding"), and no experiment proposes a composite knob
   yet — the future closed loop gives the flux map and `qc_n_swap_amp` real
   `update()`s.
-- **The chevron** (`pair_swap_chevron`) is the directly-coupled sibling survey
-  (member flux × duration); on a QCQ pair the flux map is the entry point.
+- **The chevron** (`pair_swap_chevron`) is the sibling survey (member flux ×
+  duration). With `coupler_flux_v` unset it is the directly-coupled-pair tool it
+  started as; set it and the chevron carries the pair's coupler too, which is
+  step 1b above. The flux map is still the ENTRY point on a QCQ pair — it is the
+  only 2D view of the resonance line against coupler bias — but the chevron is
+  what turns one point on that line into an angle you can trust, because it is
+  the only survey here with no repeated swap in it.
+- **The chevron does not FIT.** `best_flux_amp_v` / `best_swap_time_ns` are the
+  argmax of the arch, which is the right pair of coordinates but not a fitted
+  vertex. The plotdata carries the whole map, so a hyperbola fit
+  (`ω(δ) = √(ω_min² + δ²)`, vertex = resonance, `ω_min = 2J`) is offline work
+  today — the natural second automation after the angle estimator above.
 
 ## 13. Troubleshooting
 
@@ -1311,7 +1460,7 @@ roster-vs-vendor wiring), and tells you what is wrong and how to fix it.
 ## 14. What the system does NOT include yet
 
 Everything above is real: **both instruments are hardware-proven** through this path
-(Qblox cluster and OPX1000, since 2026-07-05), the catalog holds 35 experiments, and
+(Qblox cluster and Quantum Machines, since 2026-07-05), the catalog holds 35 experiments, and
 the GUI you read about in section 4 (viewer + datasette) is shipped. Still ahead:
 
 - **Device-level inference** (Phase 3): combining runs into EJ/EC, anharmonicity,

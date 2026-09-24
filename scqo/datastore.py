@@ -48,10 +48,12 @@ separation) and aggregate centrally by collecting folders + ``reindex``.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
 import re
+import shutil
 import sqlite3
 import sys
 from contextlib import contextmanager
@@ -79,6 +81,13 @@ SETUP_KEYS = ("backend", "note")  # the ONLY keys a setup table may carry (paths
 CAMPAIGNS_SUBDIR = "campaigns"  # per device: <device>/campaigns/<campaign_id>/ (see new_campaign_dir)
 CAMPAIGN_FILE = "campaign.json"  # the campaign manifest: plan + status + statistics
 CAMPAIGN_REPEATS_FILE = "repeats.jsonl"  # append-only per-repeat skeleton beside it
+SETUP_SNAPSHOTS_SUBDIR = "setup_snapshots"  # per device: <device>/setup_snapshots/<hash16>/ (see store_setup_snapshot)
+SNAPSHOT_MANIFEST_FILE = "manifest.json"  # a snapshot's own manifest: hash, per-file checksums, versions, first run
+#: the vendor's config files under their canonical names, per backend family: what a
+#: setup's backend_config/ folder holds, what the doctor checks for, what a setup
+#: snapshot serialises from memory.
+VENDOR_CONFIG_FILES = {"qblox": ("dut_config.json", "hw_config.json"),
+                       "qm": ("state.json", "wiring.json")}
 # Cooldown ids, setup names and campaign labels all travel as CLI arguments, index
 # values, URL query params and path segments — keep them plain.
 SLUG_RE = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -206,6 +215,19 @@ class RunRecord(BaseModel):
     #: provenance only, never re-applied). record.json-only — deliberately NOT
     #: an index column.
     power_context: dict = Field(default_factory=dict)
+    #: reference to the deduplicated SETUP SNAPSHOT this run executed against
+    #: (<device>/setup_snapshots/<hash16>/: the vendor config as held in memory at
+    #: run START + this context's scqo_state/physical values + a manifest), plus
+    #: `drift` = the vendor files that changed between run start and the end of
+    #: exp.run() without being restored. record.json-only like power_context;
+    #: {} for the simulated backend; {"error": ...} when storing failed.
+    setup_snapshot: dict = Field(default_factory=dict)
+    #: package versions the run was ANALYSED with (scqo, scqat, the driver's
+    #: own ``versions()`` hook). Every run carries its own: the setup
+    #: snapshot's manifest records the versions of the FIRST run that produced
+    #: that snapshot, so it cannot answer "was this fitted before or after the
+    #: fit was corrected?". record.json-only, like power_context.
+    versions: dict = Field(default_factory=dict)
     tags: list[str] = Field(default_factory=list)
     note: str = ""
     path: str  # run folder, relative to data_root (forward slashes)
@@ -418,6 +440,8 @@ class DataStore:
         note: str = "",
         power_context: dict | None = None,
         campaign: tuple[str, int, int] | None = None,
+        setup_snapshot: dict | None = None,
+        versions: dict | None = None,
     ) -> RunRecord:
         """Write the run folder (``record.json`` last) and upsert the index row.
 
@@ -434,6 +458,21 @@ class DataStore:
         _write_json(run_dir / "result.json", result)
         _write_json(run_dir / "device_before.json", device_before)
         _write_json(run_dir / "device_after.json", device_after)
+
+        # The setup snapshot ({"files": {relpath: bytes}, "manifest": {...}, "drift":
+        # [...]}) is content-addressed under <device>/setup_snapshots/ BEFORE the
+        # record that references it lands. A failure here must never lose the
+        # measurement: it is recorded as {"error": ...} and record.json still lands.
+        snapshot_ref: dict = {}
+        snap = setup_snapshot or {}
+        if snap.get("files"):
+            try:
+                ref = self.store_setup_snapshot(snap["files"], snap.get("manifest") or {})
+                snapshot_ref = {"hash": ref["hash"], "path": ref["path"],
+                                "drift": list(snap.get("drift") or [])}
+            except Exception as err:  # provenance must never fail a run
+                snapshot_ref = {"error": f"{type(err).__name__}: {err}",
+                                "drift": list(snap.get("drift") or [])}
 
         outcomes = {q: str(o) for q, o in result.get("outcomes", {}).items()}
         cooldown, setup = self.run_stamps()
@@ -457,6 +496,8 @@ class DataStore:
             updated_device=updated_device,
             suggestions=list(suggestions or []),
             power_context=_scrub(dict(power_context or {})),
+            setup_snapshot=snapshot_ref,
+            versions=dict(versions or {}),
             tags=list(tags or []),
             note=note,
             path=run_dir.relative_to(self.data_root).as_posix(),
@@ -568,6 +609,75 @@ class DataStore:
         import xarray as xr
 
         return xr.load_dataset(self._run_dir(run_id) / "dataset.nc")
+
+    # ------------------------------------------------------------ setup snapshots
+
+    def store_setup_snapshot(self, files: dict[str, bytes], manifest: dict) -> dict:
+        """Store one setup snapshot content-addressed under
+        ``<device>/setup_snapshots/<hash16>/`` and return its reference
+        ``{"hash", "path", "created"}`` (``path`` relative to data_root, like
+        ``RunRecord.path``).
+
+        ``files`` maps relative paths (``backend_config/state.json``,
+        ``scqo/scqo_state.json``, ...) to the exact bytes to store. The hash covers
+        those paths and bytes only — never the manifest, which carries run-specific
+        fields — so identical content from any number of runs (a campaign's N x M
+        children) lands ONCE. Write-once: an existing folder is left untouched;
+        otherwise the files and the manifest (the caller's fields plus ``hash`` and a
+        per-file sha256) are written into a temp sibling and renamed into place, so a
+        reader never sees a half-written snapshot. The folder is a sibling of the day
+        folders like ``campaigns/``: invisible to reindex's ``*/*/*/record.json``
+        glob and mirrored with the device folder.
+        """
+        if not files:
+            raise ValueError("a setup snapshot needs at least one file")
+        for relpath in files:
+            parts = Path(relpath).parts
+            if not parts or Path(relpath).is_absolute() or ".." in parts:
+                raise ValueError(f"snapshot file path must be relative and inside the snapshot: {relpath!r}")
+        full = snapshot_hash(files)
+        hash16 = full[:16]
+        target = self.data_root / self.device_name / SETUP_SNAPSHOTS_SUBDIR / hash16
+        rel = target.relative_to(self.data_root).as_posix()
+        if target.is_dir():
+            return {"hash": hash16, "path": rel, "created": False}
+        tmp = target.parent / f".tmp-{hash16}-{os.getpid()}"
+        shutil.rmtree(tmp, ignore_errors=True)
+        try:
+            for relpath, content in files.items():
+                dest = tmp / relpath
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(content)
+            payload = dict(manifest)
+            payload["hash"] = full
+            payload["files"] = {relpath: hashlib.sha256(content).hexdigest()
+                                for relpath, content in sorted(files.items())}
+            (tmp / SNAPSHOT_MANIFEST_FILE).write_text(_dumps(payload), encoding="utf-8")
+            try:
+                os.rename(tmp, target)
+            except OSError:
+                if not target.is_dir():
+                    raise
+                shutil.rmtree(tmp, ignore_errors=True)  # lost a race: theirs is identical
+                return {"hash": hash16, "path": rel, "created": False}
+        except Exception:
+            shutil.rmtree(tmp, ignore_errors=True)
+            raise
+        return {"hash": hash16, "path": rel, "created": True}
+
+    def load_setup_snapshot(self, device: str, hash16: str) -> dict:
+        """``{"dir": Path, "manifest": dict}`` of one stored snapshot; KeyError when
+        the folder or its manifest is missing (a pre-feature run, a bad id, or a
+        store that was not mirrored along)."""
+        try:
+            folder = setup_snapshot_dir(self.data_root, device, hash16)
+        except ValueError as err:
+            raise KeyError(str(err)) from None
+        manifest_path = folder / SNAPSHOT_MANIFEST_FILE
+        if not manifest_path.is_file():
+            raise KeyError(f"no setup snapshot {hash16!r} for device {device!r} under {folder.parent}")
+        return {"dir": folder,
+                "manifest": json.loads(manifest_path.read_text(encoding="utf-8"))}
 
     # ---------------------------------------------------------------- campaigns
     def new_campaign_dir(self, label: str) -> tuple[str, Path]:
@@ -821,12 +931,16 @@ class DataStore:
         campaign_id: str,
         editor,
         problems: list[str] | None = None,
+        notes: list[str] | None = None,
     ) -> dict:
         """Edit a campaign's suggestion list ATOMICALLY: lock, re-read, edit, write.
 
         The campaign twin of :meth:`edit_suggestions`, over ``campaign.json``.
         ``editor(rows)`` receives the FRESH stored list and returns the list to
-        store; ``problems`` (when given) replaces ``suggestion_problems``.
+        store; ``problems`` (when given) replaces ``suggestion_problems`` and
+        ``notes`` replaces ``suggestion_notes``. Both are REPLACED rather than
+        merged: they describe the generation that produced these rows, so a
+        regeneration that leaves the old text behind is a stale explanation.
 
         The lock protects edit-vs-edit only. ``persist_campaign`` is a LOCKLESS
         whole-file write owned by the running-campaign process (rewritten after
@@ -845,6 +959,8 @@ class DataStore:
                 editor(list(manifest.get("suggestions", []))))
             if problems is not None:
                 manifest["suggestion_problems"] = list(problems)
+            if notes is not None:
+                manifest["suggestion_notes"] = list(notes)
             _write_json(campaign_dir / CAMPAIGN_FILE, manifest)
         pending = sum(1 for s in manifest["suggestions"]
                       if s.get("status") == "pending")
@@ -1311,6 +1427,32 @@ def setup_backend_config_dir(data_root: str | Path, device: str, cooldown: str,
     none. :func:`load_cooldowns` injects it as ``setup["instrument_config"]`` so
     factories/doctor/viewer read one key regardless."""
     return _setup_dir(data_root, device, cooldown, setup_name) / BACKEND_CONFIG_SUBDIR
+
+
+def snapshot_hash(files: dict[str, bytes]) -> str:
+    """sha256 over the sorted (relative path, bytes) pairs of a setup snapshot,
+    length-prefixed so no two file sets can collide by concatenation. The
+    manifest is never part of it (it carries run-specific fields)."""
+    h = hashlib.sha256()
+    for relpath in sorted(files):
+        content = files[relpath]
+        h.update(relpath.encode("utf-8"))
+        h.update(b"\0")
+        h.update(len(content).to_bytes(8, "big"))
+        h.update(content)
+    return h.hexdigest()
+
+
+def setup_snapshot_dir(data_root: str | Path, device: str, hash16: str) -> Path:
+    """``<data_root>/<device>/setup_snapshots/<hash16>/`` — the content-addressed
+    home of one setup snapshot (:meth:`DataStore.store_setup_snapshot`). ``hash16``
+    is the first 16 hex digits of the snapshot hash; anything else is refused (it
+    becomes a path segment and a URL), and so is a non-slug device name."""
+    if not re.fullmatch(r"[0-9a-f]{16}", hash16 or ""):
+        raise ValueError(f"a setup snapshot id is 16 lowercase hex digits, got {hash16!r}")
+    if not device or not SLUG_RE.match(device):
+        raise ValueError(f"a device name is letters/digits/_/- only, got {device!r}")
+    return Path(data_root) / device / SETUP_SNAPSHOTS_SUBDIR / hash16
 
 
 def setup_state_path(data_root: str | Path, device: str, cooldown: str,

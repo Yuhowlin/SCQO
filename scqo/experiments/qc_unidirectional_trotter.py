@@ -14,12 +14,21 @@ path, leaving a one-way (cascaded) coupling source -> sink. The picture to read
 off the figure is therefore: the source decays, the sink fills, and the relay
 stays near zero because it is emptied every round.
 
-The angles are baked, not swept: each swap is the SAME named pair operation at
-its fixed amplitude (calibrate it with ``pair_swap_flux_map`` + ``qc_n_swap_amp``
-— TUTORIAL section 12), and each qubit's Stark compensation is a fixed amplitude
+The angles are baked, not swept: each swap plays a named pair operation at its
+fixed amplitude (calibrate it with ``pair_swap_flux_map`` + ``qc_n_swap_amp`` —
+TUTORIAL section 12), and each qubit's Stark compensation is a fixed amplitude
 FACTOR of the ``stark`` operation's baked amplitude. The only swept axis is the
 Trotter-step count; ``round_count = 0`` is the prep-only baseline, the same
 convention as ``qc_n_swap_amp`` / ``qc_n_stark_amp``.
+
+Each pair names its OWN operation (``first_pair`` / ``second_pair`` are
+``{"pair": ..., "operation": ...}``), because a chip does not carry the same
+gate on every couple: 5Q4C has ``partial_swap`` and ``iswap`` on one pair and
+only ``iswap`` on the next, which one shared operation name cannot express. The
+reserved operation ``"idle"`` plays NOTHING and waits the length that pair's
+swap would have taken (``idle_reference_operation``) — the control arm, with the
+round's timing left identical so the comparison is about the swap and not about
+when everything else happened.
 
 WHAT THE SINK DOES **NOT** DO is reach unity, and that is the sequence, not a
 miscalibration. The second swap is an exchange like the first, so the sink also
@@ -28,8 +37,8 @@ therefore a DISSIPATIVE cascade: the sink settles at roughly (first-swap
 transfer) x (current source population) and then follows the source down, so its
 peak is a fraction of an excitation, reached within a few rounds. Capturing the
 excitation instead would need the angles shaped in time, which a fixed named
-operation cannot express — read ``min_transfer`` as "something arrived", never as
-"the transfer was good".
+operation cannot express — so a sink peak around 0.1 is the healthy case, and
+"something arrived" is the most any single run of this sequence can say.
 
 TARGETS are the chain QUBITS (not a pair composite): they are the qubits
 initialized and read out, and **their order is the chain order**, which is also
@@ -48,8 +57,15 @@ without a second acquisition).
 RECORD-ONLY for the DEVICE: there is no ``update()`` and nothing lands on the
 device surface; the per-qubit summary lives in ``result.fit``. A scqat estimator
 (``qc_unidirectional_trotter``) draws the transport curves and the joint map
-under ``analysis/chain/``, but it only VISUALIZES them and proposes nothing; the
-SUCCESS verdict (``min_transfer``) is made here in ``estimate()``.
+under ``analysis/chain/``, but it only VISUALIZES them and proposes nothing.
+
+There is deliberately NO transport verdict. A run reports SUCCESSFUL when it
+produced a usable trace for that qubit, and nothing more: the sequence has an
+``"idle"`` control arm whose chain is broken ON PURPOSE, so any fixed floor on
+the sink's peak would report a correct control run as a failure. What counts as
+enough transport is a question for the analysis layer, once the hardware has
+said what these curves actually look like; ``sink_p_max`` is carried in
+``result.fit`` as DATA so that judgement can be made later.
 """
 
 from __future__ import annotations
@@ -77,6 +93,56 @@ from . import register
 #: a whole, so filing them under one member would misattribute them.
 CHAIN_LABEL = "chain"
 
+#: the reserved ``operation`` value that plays no pulse at all — the round step
+#: waits instead, for as long as that pair's swap would have taken. It lives in
+#: the NEUTRAL layer rather than in a driver because ``simulate()`` needs it too:
+#: the operation NAME is the only signal either half has that a step contributes
+#: no exchange.
+IDLE = "idle"
+
+#: the exact keys a pair spec carries — the roster name of the pair, and the
+#: operation played on it. Two, both required.
+PAIR_SPEC_KEYS = ("pair", "operation")
+
+
+def pair_specs(params) -> tuple[tuple[str, str], tuple[str, str]]:
+    """``((pair, operation), (pair, operation))`` for the two round steps.
+
+    The key-set check lives here rather than in a nested pydantic model on
+    purpose: a nested model renders as a ``$ref`` in ``model_json_schema()``, and
+    the CLI's schema epilog (``cli/_engine.py``) prints the field's ``type`` and
+    ``description`` straight out of that schema — so the catalog, which is the
+    decision surface an operator AND an AI read, would lose the type and gain an
+    indirection. A plain ``dict[str, str]`` keeps the surface flat and puts the
+    refusal here, where ``compensation_amps`` and ``swap_coupler_flux`` are
+    already checked.
+
+    Callers that only want the topology use ``chain_roles`` (which validates
+    through this). This is for the two that also need to know WHICH operation
+    each step plays: ``simulate()`` and the driver probe.
+    """
+    problems: list[str] = []
+    out: list[tuple[str, str]] = []
+    for field in ("first_pair", "second_pair"):
+        spec = getattr(params, field)
+        unknown = sorted(set(spec) - set(PAIR_SPEC_KEYS))
+        blank = [key for key in PAIR_SPEC_KEYS if not spec.get(key)]
+        if unknown or blank:
+            detail = []
+            if blank:
+                detail.append(f"missing or empty {blank}")
+            if unknown:
+                detail.append(f"unknown key(s) {unknown}")
+            problems.append(
+                f"{field}={spec!r}: " + " and ".join(detail) + " — it takes "
+                f"exactly {{'pair': <roster pair>, 'operation': <macro name, or "
+                f"{IDLE!r} to play nothing>}}")
+            continue
+        out.append((spec["pair"], spec["operation"]))
+    if problems:
+        raise ValueError("qc_unidirectional_trotter: " + "; ".join(problems))
+    return out[0], out[1]
+
 
 def chain_roles(roster, params) -> tuple[str, str, str, str]:
     """``(source, relay, sink, prep)`` — the chain topology, from the two pairs.
@@ -87,11 +153,17 @@ def chain_roles(roster, params) -> tuple[str, str, str, str]:
     naming every problem — before any instrument time is booked. Called from
     ``define_sweep`` (the earliest hook that can see both params and roster;
     ``validate_targets`` sees only targets) and reused by the driver probe.
+
+    The topology is the same whichever operation each step plays: an ``IDLE``
+    step still names a real pair, and which member is the relay is a fact of
+    the roster, not of the pulse. So this returns four names and nothing about
+    the operations — those come from ``pair_specs``.
     """
+    (first_name, first_op), (second_name, second_op) = pair_specs(params)
+
     problems: list[str] = []
     members: dict[str, list[str]] = {}
-    for field in ("first_pair", "second_pair"):
-        name = getattr(params, field)
+    for field, name in (("first_pair", first_name), ("second_pair", second_name)):
         entity = roster.entities.get(name)
         if entity is None:
             problems.append(f"{field}={name!r} is not in the roster")
@@ -115,8 +187,8 @@ def chain_roles(roster, params) -> tuple[str, str, str, str]:
     shared = [m for m in first if m in second]
     if len(shared) != 1:
         raise ValueError(
-            f"qc_unidirectional_trotter: {params.first_pair} {first} and "
-            f"{params.second_pair} {second} share {len(shared)} member(s) "
+            f"qc_unidirectional_trotter: {first_name} {first} and "
+            f"{second_name} {second} share {len(shared)} member(s) "
             f"{shared} — the chain needs exactly ONE, the relay both swaps touch")
     relay = shared[0]
     source = next(m for m in first if m != relay)
@@ -141,11 +213,19 @@ def chain_roles(roster, params) -> tuple[str, str, str, str]:
                 f"channel — nothing to play {params.stark_operation!r} on")
     # The swap coupler flux names PAIRS, and only the two the chain declares:
     # a third name is a typo that would otherwise be silently ignored.
+    operation_of = {first_name: first_op, second_name: second_op}
     for pair in sorted(getattr(params, "swap_coupler_flux", {}) or {}):
-        if pair not in (params.first_pair, params.second_pair):
+        if pair not in operation_of:
             problems.append(
                 f"swap_coupler_flux names {pair!r}, which is neither first_pair "
-                f"({params.first_pair!r}) nor second_pair ({params.second_pair!r})")
+                f"({first_name!r}) nor second_pair ({second_name!r})")
+            continue
+        if operation_of[pair] == IDLE:
+            problems.append(
+                f"swap_coupler_flux names {pair!r}, whose operation is {IDLE!r} — "
+                f"an idle step plays no pulse at all, so it has no coupler "
+                f"amplitude to set. Drop it from swap_coupler_flux, or give that "
+                f"pair a real swap operation")
             continue
         entity = roster.entities.get(pair)
         couplers = (getattr(entity, "roles", {}) or {}).get("coupler", ())
@@ -167,15 +247,27 @@ class QcUnidirectionalTrotterParameters(TargetSelection, AveragingParameters,
     """Inputs for the unidirectional-coupling Trotter chain. ``targets`` are the
     chain QUBITS, in chain order."""
 
-    first_pair: str = Field(
+    first_pair: dict[str, str] = Field(
         ...,
-        description="Pair component swapped FIRST each round, carrying the excitation "
-                    "from the chain source into the relay (e.g. 'q1_q2').")
-    second_pair: str = Field(
+        description="The FIRST round step, carrying the excitation from the chain source "
+                    "into the relay, as {'pair': <roster pair>, 'operation': <name>} — "
+                    "e.g. {'pair': 'q1_q2', 'operation': 'partial_swap'}. Exactly those "
+                    "two keys. 'operation' is a named pair operation played at its FIXED "
+                    "baked amplitude (the driver resolves it on the vendor pair and "
+                    "refuses a missing one by name); a partial swap — not a full iswap — "
+                    "is the Trotter step, since the angle is what discretizes the "
+                    "continuous cascaded coupling. The reserved value 'idle' plays "
+                    "nothing and waits as long as that pair's swap would have taken "
+                    "(idle_reference_operation), which is the control arm: the round "
+                    "keeps its timing, so the comparison isolates the swap.")
+    second_pair: dict[str, str] = Field(
         ...,
-        description="Pair component swapped SECOND each round, carrying the relay into "
-                    "the chain sink (e.g. 'q2_q3'). It must share exactly ONE member "
-                    "with first_pair — that shared member is the relay.")
+        description="The SECOND round step, carrying the relay into the chain sink, in "
+                    "the same {'pair': ..., 'operation': ...} form — e.g. {'pair': "
+                    "'q2_q3', 'operation': 'iswap'}. Its pair must share exactly ONE "
+                    "member with first_pair's; that shared member is the relay. Each "
+                    "step names its OWN operation because a chip does not carry the same "
+                    "gate on every couple, and 'idle' is accepted here too.")
     reset_qubit: str = Field(
         ...,
         description="Qubit whose parametric-reset macro fires after both swaps, dumping "
@@ -196,12 +288,14 @@ class QcUnidirectionalTrotterParameters(TargetSelection, AveragingParameters,
         description="N_max: the Trotter step is applied 0, 1, ... max_rounds times, one "
                     "sweep point each. 0 is the prep-only baseline, so the axis always "
                     "carries max_rounds + 1 points.")
-    swap_operation: str = Field(
+    idle_reference_operation: str = Field(
         "partial_swap",
-        description="The named pair operation repeated on BOTH pairs each round, played "
-                    "at its FIXED baked amplitude (the driver resolves it on each vendor "
-                    "pair). A partial swap — not a full iswap — is the Trotter step: the "
-                    "angle is what discretizes the continuous cascaded coupling.")
+        description="Which named pair operation sets how long an 'idle' step waits: the "
+                    "idle plays nothing, but holds that pair's channels for the length "
+                    "of THIS operation's flux pulse, so an idle round and a swapping "
+                    "round take the same time and the two are comparable. Only consulted "
+                    "when a step names 'idle', and resolved per pair on the vendor tree "
+                    "(the driver refuses by name when the pair does not carry it).")
     reset_operation: str = Field(
         "reset",
         description="The named MACRO on reset_qubit applied each round — the mid-circuit "
@@ -219,9 +313,10 @@ class QcUnidirectionalTrotterParameters(TargetSelection, AveragingParameters,
                     "so calibrate the curve with pair_swap_angle and read the volts off "
                     "it. A pair absent from the map plays its baked coupler amplitude; "
                     "{} leaves both pairs alone, which is the pre-existing behaviour. "
-                    "Only first_pair and second_pair may be named, and the driver "
-                    "refuses a coupler that has no flux channel or is baked at zero "
-                    "amplitude (unsettable, since it is the divisor of the "
+                    "Only first_pair and second_pair may be named — and not one whose "
+                    "operation is 'idle', which plays no pulse to set an amplitude on. "
+                    "The driver refuses a coupler that has no flux channel or is baked "
+                    "at zero amplitude (unsettable, since it is the divisor of the "
                     "volts->amplitude-scale conversion).")
     stark_operation: str = Field(
         "stark",
@@ -248,16 +343,6 @@ class QcUnidirectionalTrotterParameters(TargetSelection, AveragingParameters,
         description="Idle gap (ns) inserted between the operations of a round, so each "
                     "flux pulse settles before the next fires. 0 disables; the QM backend "
                     "requires a multiple of 4 ns.")
-    min_transfer: float = Field(
-        0.05, ge=0.0, le=1.0,
-        description="Peak SINK population below which the run is reported FAILED — no "
-                    "transport was seen along the chain. The floor is LOW on purpose and "
-                    "is not the pair experiments' near-full-swap threshold: this chain "
-                    "dumps the relay every round, so the sink also decays and settles "
-                    "near (first-swap transfer) x (source population) — a peak around 0.1 "
-                    "is healthy, not broken. The verdict needs the sink among the "
-                    "targets; a run that does not read it out cannot judge transport and "
-                    "reports FAILED. Pure reporting: this experiment writes nothing back.")
 
 
 class QcUnidirectionalTrotterResult(Result):
@@ -267,10 +352,12 @@ class QcUnidirectionalTrotterResult(Result):
     ``n_round_count``, repeated on every row so one target's record is readable
     on its own.
 
-    The OUTCOME is the chain's, not the qubit's: SUCCESSFUL requires both that
-    this qubit's own trace is finite AND that the sink's peak population reached
-    ``min_transfer``, because a qubit's curve says nothing about transport on
-    its own. Record-only: no ``update()``, nothing written to the device."""
+    The OUTCOME is ACQUISITION, not physics: SUCCESSFUL means this qubit came
+    back with a finite trace. There is no transport threshold — an ``"idle"``
+    control arm breaks the chain on purpose, so any fixed floor on
+    ``sink_p_max`` would report a correct run as a failure. That number is
+    carried here as DATA; how much transport is enough is the analysis layer's
+    question. Record-only: no ``update()``, nothing written to the device."""
 
 
 def _exchange_matrix(i: int, j: int, p: float, n_modes: int) -> np.ndarray:
@@ -365,8 +452,20 @@ class QcUnidirectionalTrotter(Experiment):
         # empties over many rounds. The SECOND is large: draining the relay into
         # the sink faster than the source refills it is what keeps the relay near
         # |0> and makes the reset a drain rather than the dominant loss.
+        #
+        # An IDLE step exchanges NOTHING. It still costs the round its time, but
+        # time is not a coordinate here — the axis is the step COUNT — so the
+        # idle's only trace in this model is the exchange it does not perform.
+        # The angles are still drawn for the idle steps, so that idling one pair
+        # leaves the OTHER pair's angle exactly where it was and the two runs
+        # differ by the one thing under test.
+        (_first_name, first_op), (_second_name, second_op) = pair_specs(self.params)
         p_first = float(np.sin(rng.uniform(0.30, 0.50)) ** 2)
         p_second = float(np.sin(rng.uniform(0.80, 1.10)) ** 2)
+        if first_op == IDLE:
+            p_first = 0.0
+        if second_op == IDLE:
+            p_second = 0.0
         reset_fidelity = float(rng.uniform(0.90, 0.99))
         relaxation = float(rng.uniform(0.005, 0.02))   # per round, per qubit
         step = (_exchange_matrix(0, 1, p_first, n_modes)
@@ -385,7 +484,9 @@ class QcUnidirectionalTrotter(Experiment):
         never produce. The chain state is propagated as a distribution over
         ``(source, relay, sink)`` basis states — exchange, exchange, relay reset,
         relaxation — and the marginals are its partial trace, so shot mode draws
-        genuinely correlated outcomes.
+        genuinely correlated outcomes. A step whose operation is ``IDLE``
+        contributes no exchange, which is what makes the offline round trip show
+        the control arm going flat.
 
         A target that is not a chain member is initialized and read out but
         never touched, so it stays in |0>."""
@@ -477,8 +578,10 @@ class QcUnidirectionalTrotter(Experiment):
             source=source, relay=relay, sink=sink)
 
         per_qubit = analysis.get("per_qubit", {})
+        # DATA, not a verdict: the sink's peak is reported on every row and
+        # judged nowhere. A run may be an idle control arm, where no transport
+        # is the correct result — see the Result docstring.
         sink_peak = float(analysis.get("sink_p_max", float("nan")))
-        chain_ok = bool(np.isfinite(sink_peak) and sink_peak >= self.params.min_transfer)
         result = QcUnidirectionalTrotterResult()
         for name in targets:
             fit = {k: float(v) for k, v in per_qubit.get(name, {}).items()}
@@ -486,7 +589,7 @@ class QcUnidirectionalTrotter(Experiment):
             fit["n_round_count"] = float(analysis.get("n_round_count", 0))
             result.fit[name] = fit
             own_ok = bool(np.isfinite(fit.get("p_max", float("nan"))))
-            result.outcomes[name] = (Outcome.SUCCESSFUL if own_ok and chain_ok
+            result.outcomes[name] = (Outcome.SUCCESSFUL if own_ok
                                      else Outcome.FAILED)
         return result
 

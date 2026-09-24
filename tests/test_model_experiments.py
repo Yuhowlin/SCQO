@@ -28,7 +28,8 @@ from scqo.testing import (
 #: zero suggestions is their CORRECT outcome.
 RECORD_ONLY = {"qubit_sqrb", "qubit_tomography", "qubit_echo_flux_pulse",
                "qubit_relaxation_flux_pulse", "pair_swap_chevron", "pair_swap_flux_map",
-               "qc_n_swap_amp", "qc_n_stark_amp", "qc_unidirectional_trotter",
+               "qc_n_swap_amp", "qc_n_stark_amp", "qc_swap_flux_stark",
+               "qc_unidirectional_trotter",
                "crosstalk_compensated_sqrb",
                "pair_swap_angle", "qc_trotter_compensation",
                "qubit_t1_ade", "qubit_t1_bayesian",
@@ -71,15 +72,18 @@ CHAIN_QUBITS = ("q0", "q1", "q2")
 
 #: the chain topology on that device — q0 (source) -> q1 (relay, reset) -> q2
 #: (sink). Supplied as defaults because targets are the only params the
-#: every-experiment sweep passes.
+#: every-experiment sweep passes. Each step names its own operation; both
+#: default steps swap, so the sweep exercises the transporting chain.
+FIRST_STEP = {"pair": "q0_q1", "operation": "partial_swap"}
+SECOND_STEP = {"pair": "q1_q2", "operation": "partial_swap"}
 TROTTER_DEFAULTS = {"qc_unidirectional_trotter": {
-    "first_pair": "q0_q1", "second_pair": "q1_q2", "reset_qubit": "q1",
+    "first_pair": FIRST_STEP, "second_pair": SECOND_STEP, "reset_qubit": "q1",
     "compensation_amps": {"q0": 0.3, "q1": 0.2, "q2": 0.25}},
     # the compensation scan takes the SAME chain, but its swept qubit may not
     # also appear in the fixed map (two sources of truth for one amplitude), so
     # q0 is the target and only the sink keeps a fixed tone.
     "qc_trotter_compensation": {
-        "first_pair": "q0_q1", "second_pair": "q1_q2", "reset_qubit": "q1",
+        "first_pair": FIRST_STEP, "second_pair": SECOND_STEP, "reset_qubit": "q1",
         "compensation_target": "q0", "compensation_amps": {"q2": 0.25}}}
 
 #: what the module fixture runs on; _fresh_parity_session keeps the parity-only set.
@@ -154,6 +158,63 @@ def test_record_only_experiments_propose_nothing(session, name):
     either leave the set or fail here."""
     assert name in CORE, f"{name} is not in the core catalog"
     assert _suggest(session, name, target=_targets_for(name)) == set()
+
+
+def _stark_phase_echo(session, **params):
+    """A hand-driven qubit_stark_phase_echo up to (but not including) estimate().
+
+    Driven by hand because the report this feature needs — the stark operation's
+    BAKED amplitude — comes from a driver's probe(), and the simulated backend has
+    no operations to read it from."""
+    cls = registry.get("qubit_stark_phase_echo")
+    experiment = cls(session.backend, cls.Parameters(targets=["q0"], **params))
+    experiment.sweep_axes = experiment.define_sweep()
+    experiment.dataset = session.backend.acquire(experiment)
+    return experiment
+
+
+def test_stark_phase_echo_reports_the_full_turn_amplitude(session):
+    """The actionable answer is the amplitude buying a full turn of Stark phase,
+    read off the MEASURED curve. The offline sim is exactly quadratic, so here (and
+    only here) it must agree with sqrt(2*pi/k) — that agreement is what makes the
+    hardware DISAGREEMENT evidence of saturation rather than of a broken read."""
+    out = session.run("qubit_stark_phase_echo", {"targets": ["q0"]}, update="none")
+    assert out.get("error") is None, out.get("error")
+    fit = out["fit"]["q0"]
+    expected = math.sqrt(2 * math.pi / abs(fit["stark_coeff_rad_per_amp2"]))
+    assert fit["amp_2pi_factor"] == pytest.approx(expected, rel=0.02)
+    # no probe report on the simulated backend -> no absolute frame, and the
+    # missing scale is a NaN rather than a silently plausible number
+    assert math.isnan(fit["amp_2pi_digital"])
+
+
+def test_stark_phase_echo_absolute_amp_axis_follows_the_probe_report(session):
+    """A probe that reports the baked amplitude gets the absolute axis attached and
+    the same answer reported in the frame an operator can act on."""
+    experiment = _stark_phase_echo(session)
+    experiment.probe_stark_amp = {"q0": 0.25}
+    experiment.attach_acquisition_coords()
+
+    factors = experiment.sweep_axes["stark_amp"]
+    absolute = experiment.dataset.coords["digital_amp"]
+    assert absolute.dims == ("target", "stark_amp")
+    assert absolute.values[0] == pytest.approx(0.25 * factors)
+    assert absolute.attrs["reference_operation"] == "stark"
+
+    fit = experiment.estimate().fit["q0"]
+    assert fit["amp_2pi_digital"] == pytest.approx(0.25 * fit["amp_2pi_factor"])
+
+
+def test_stark_phase_echo_skips_the_absolute_axis_without_a_report(session):
+    """Provenance must never fail a measurement that already reached the
+    instrument: no report (or a target missing from one) simply leaves the axis
+    off."""
+    experiment = _stark_phase_echo(session)
+    experiment.attach_acquisition_coords()          # nothing reported at all
+    assert "digital_amp" not in experiment.dataset.coords
+    experiment.probe_stark_amp = {"q7": 0.25}       # reported, but not for q0
+    experiment.attach_acquisition_coords()
+    assert "digital_amp" not in experiment.dataset.coords
 
 
 def test_parametric_drive_amp_finds_the_seeded_resonance(session):
@@ -972,6 +1033,7 @@ def test_spectroscopy_cryoscope_drive_shape_parameters():
     ("pair_swap_flux_map", ("qubit_flux_v", "coupler_flux_v")),
     ("qc_n_swap_amp", ("flux_amp_v", "swap_count")),
     ("qc_n_stark_amp", ("stark_amp", "swap_count")),
+    ("qc_swap_flux_stark", ("flux_amp_v", "stark_amp")),
 ])
 def test_pair_swap_maps_summarize_the_transfer(session, name, axes):
     """The record-only payload: the peak of the UNDRIVEN member's population
@@ -1039,7 +1101,7 @@ def test_unidirectional_trotter_transports_source_to_sink(session):
     assert fit[sink]["p_max"] > 0.05               # ...and something arrives
     assert fit[sink]["n_at_max"] > 0               # transport takes rounds
     assert fit[sink]["p_max"] == fit[source]["sink_p_max"], (
-        "the chain verdict number is repeated on every row")
+        "the sink's peak is repeated on every row")
 
 
 def test_unidirectional_trotter_round_axis_starts_at_the_bare_prep(session):
@@ -1070,10 +1132,25 @@ def test_unidirectional_trotter_shot_mode_reconstructs_the_joint(session):
             plain["fit"][qubit]["p_max"], abs=0.06)
 
 
+def _step(pair, operation="partial_swap"):
+    """One round step, spelled the way Parameters take it."""
+    return {"pair": pair, "operation": operation}
+
+
 BROKEN_CHAINS = [
-    ({"first_pair": "q0_q1", "second_pair": "q0_q1"}, "share 2 member"),
-    ({"first_pair": "q0_q1", "second_pair": "nope"}, "not in the roster"),
-    ({"first_pair": "q0", "second_pair": "q1_q2"}, "not a qubit_pair"),
+    ({"second_pair": _step("q0_q1")}, "share 2 member"),
+    ({"second_pair": _step("nope")}, "not in the roster"),
+    ({"first_pair": _step("q0")}, "not a qubit_pair"),
+    # the SHAPE gates: the spec is exactly {pair, operation}, so a typo'd key or
+    # a missing half is refused by name rather than read as an absent pair.
+    ({"first_pair": {"pairs": "q0_q1", "operation": "partial_swap"}},
+     "unknown key(s) ['pairs']"),
+    ({"first_pair": {"pair": "q0_q1"}}, "missing or empty ['operation']"),
+    ({"first_pair": {"pair": "", "operation": "partial_swap"}},
+     "missing or empty ['pair']"),
+    # the angle knob has nothing to turn on a step that plays no pulse
+    ({"first_pair": _step("q0_q1", "idle"),
+      "swap_coupler_flux": {"q0_q1": 0.04}}, "whose operation is 'idle'"),
     # the channel-existence gates: a resonator mode has neither a z line to
     # play the parametric reset on, nor an xy line for a Stark tone; the tracked
     # coupler has flux but no drive, so it isolates the second gate alone.
@@ -1091,14 +1168,31 @@ def test_unidirectional_trotter_refuses_a_broken_chain(session, override, messag
     assert message in (out.get("error") or ""), out.get("error")
 
 
-def test_unidirectional_trotter_needs_the_sink_to_judge_transport(session):
-    """A run that does not read the sink out cannot see transport, so it reports
-    FAILED rather than passing on the qubits it did measure."""
+def test_unidirectional_trotter_reports_no_sink_summary_without_the_sink(session):
+    """A run that does not read the sink out has no sink summary — but it still
+    measured the qubits it named, so those succeed. The OUTCOME is acquisition,
+    not transport: there is no threshold to fail against."""
     out = session.run("qc_unidirectional_trotter",
                       {"targets": ["q0", "q1"]}, update="none")
     assert out.get("error") is None, out.get("error")
-    assert set(out["outcomes"].values()) == {"failed"}
+    assert set(out["outcomes"].values()) == {"successful"}
     assert math.isnan(out["fit"]["q0"]["sink_p_max"])
+
+
+def test_unidirectional_trotter_idle_step_stops_the_transport(session):
+    """The control arm: idling the FIRST step leaves the excitation on the
+    source, because nothing ever carries it into the relay. The run is a
+    perfectly good run — no transport is the correct answer here, which is
+    exactly why the experiment has no transport verdict."""
+    out = _trotter(session, max_rounds=12,
+                   first_pair=_step("q0_q1", "idle"))
+    source, _relay, sink = CHAIN_QUBITS
+    assert set(out["outcomes"].values()) == {"successful"}
+    assert out["fit"][sink]["p_max"] < 0.05, "nothing can reach the sink"
+    # the source keeps what it was given (only relaxation touches it)
+    assert out["fit"][source]["p_final"] > 0.5
+    # ...against the swapping run, which drains it
+    assert _trotter(session, max_rounds=12)["fit"][source]["p_final"] < 0.1
 
 
 READOUT_SWEEPS = [
@@ -2001,3 +2095,105 @@ def test_pair_swap_angle_compensation_reaches_the_probe(session):
     fit = _angle(session, num_coupler_points=7, operation_gap_ns=20,
                  compensation_amps={"q0": 0.3})["fit"]["q0_q1"]
     assert fit["n_theta_ok"] == fit["n_coupler_flux_v"]
+
+
+def test_readout_frequency_default_none_mode_touches_channel_only(session):
+    """Default dip_fit_method='none' optimizes fidelity without touching resonator facts."""
+    before = dict(session.physical_state().get("q0_res", {}))
+    out = session.run("readout_frequency", {"targets": ["q0"], "num_shots": 300},
+                      update="apply")
+    assert out.get("error") is None, out.get("error")
+
+    fit = out["fit"]["q0"]
+    assert math.isfinite(fit["readout_freq_hz"])
+    assert "f_dress1_hz" not in fit
+    assert "chi_hz" not in fit
+    assert "f_dress0_hz" not in fit
+
+    # The resonator mode is untouched -- as a DELTA, never as an absence: the
+    # session fixture is module-scoped, so q0_res may already carry facts from
+    # any test that ran before this one.
+    assert not [s for s in out["suggestions"] if s["entity"] == "q0_res"]
+    assert session.physical_state().get("q0_res", {}) == before
+
+
+def test_readout_frequency_lorentzian_extracts_and_persists_dips_and_chi(session):
+    """dip_fit_method='lorentzian' extracts f_dress0_hz, f_dress1_hz, chi_hz and updates resonator facts."""
+    out = session.run("readout_frequency", {"targets": ["q0"], "num_shots": 300,
+                                            "dip_fit_method": "lorentzian"},
+                      update="apply")
+    assert out.get("error") is None, out.get("error")
+
+    fit = out["fit"]["q0"]
+    assert math.isfinite(fit["f_dress0_hz"])
+    assert math.isfinite(fit["f_dress1_hz"])
+    assert math.isfinite(fit["chi_hz"])
+    assert fit["chi_hz"] == pytest.approx((fit["f_dress0_hz"] - fit["f_dress1_hz"]) / 2.0)
+
+    # Applied to resonator component
+    phys = session.physical_state()
+    assert "q0_res" in phys
+    assert phys["q0_res"]["f_dress1_hz"] == pytest.approx(fit["f_dress1_hz"])
+    assert phys["q0_res"]["chi_hz"] == pytest.approx(fit["chi_hz"])
+    assert phys["q0_res"]["f_dress0_hz"] == pytest.approx(fit["f_dress0_hz"])
+
+
+def test_readout_frequency_circle_extracts_dips(session):
+    """dip_fit_method='circle' fits complex S21 and persists resonator facts."""
+    out = session.run("readout_frequency", {"targets": ["q0"], "readout_mode": "average",
+                                            "num_shots": 200, "dip_fit_method": "circle"},
+                      update="apply")
+    assert out.get("error") is None, out.get("error")
+    fit = out["fit"]["q0"]
+    assert math.isfinite(fit["f_dress1_hz"])
+    assert math.isfinite(fit["chi_hz"])
+    assert session.physical_state()["q0_res"]["f_dress1_hz"] == pytest.approx(fit["f_dress1_hz"])
+
+
+
+def test_resonator_spectroscopy_dip_branch_dress0_is_the_default(session):
+    """The dip is f_dress0_hz and the readout tone parks on it: the four
+    suggestions this experiment has always made, unchanged by the bare branch
+    existing."""
+    out = session.run("resonator_spectroscopy", {"targets": ["q0"]})
+    assert out.get("error") is None, out.get("error")
+    assert [(s["entity"], s["field"]) for s in out["suggestions"]] == [
+        ("q0_ro", "readout_freq_hz"), ("q0_res", "f_dress0_hz"),
+        ("q0_res", "kappa_tot_hz"), ("q0_ro", "readout_depletion_s")]
+    assert out["fit"]["q0"]["dip_branch"] == "dress0"
+
+
+def test_resonator_spectroscopy_bare_branch_proposes_the_bare_mode_only(session):
+    """At punchout power the same dip is f_bare_hz. It is proposed INSTEAD of
+    f_dress0_hz, never alongside it — the two differ by the Lamb shift, and a
+    stored pair that is really one number pins resonator_spectroscopy_flux's
+    dispersive pull to exactly zero. Nothing lands on the readout channel: a
+    saturated qubit's dip cannot say where to park the readout tone."""
+    out = session.run("resonator_spectroscopy",
+                      {"targets": ["q0"], "dip_branch": "bare"})
+    assert out.get("error") is None, out.get("error")
+    assert [(s["entity"], s["field"]) for s in out["suggestions"]] == [
+        ("q0_res", "f_bare_hz"), ("q0_res", "kappa_tot_hz")]
+
+    fit = out["fit"]["q0"]
+    assert fit["dip_branch"] == "bare"
+    assert math.isfinite(fit["f_bare_hz"])
+    assert "f_dress0_hz" not in fit and "readout_freq_hz" not in fit
+
+
+def test_resonator_spectroscopy_branches_never_write_both_frequencies(session):
+    """update='apply' takes every suggestion by definition, so the branches must
+    be exclusive in the PROPOSAL, not at accept time: whichever mode a run
+    declares, only that one frequency reaches the resonator."""
+    phys_before = session.physical_state().get("q0_res", {})
+    dress0_before = phys_before.get("f_dress0_hz")
+    tone_before = session.device_state()["q0_ro"]["readout_freq_hz"]
+    out = session.run("resonator_spectroscopy",
+                      {"targets": ["q0"], "dip_branch": "bare"}, update="apply")
+    assert out.get("error") is None, out.get("error")
+    res = session.physical_state()["q0_res"]
+    assert math.isfinite(res["f_bare_hz"])
+    # a delta, not an absence -- the session fixture is module-scoped
+    assert res.get("f_dress0_hz") == dress0_before
+    # the standing tone is left exactly where it was
+    assert session.device_state()["q0_ro"]["readout_freq_hz"] == tone_before

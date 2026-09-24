@@ -147,6 +147,7 @@ EXPECTED_CAPABILITIES = {
     "pair_swap_flux_map": ["qubit_reset"],
     "qc_n_stark_amp": ["qubit_reset"],
     "qc_n_swap_amp": ["qubit_reset"],
+    "qc_swap_flux_stark": ["qubit_reset"],
     # the Trotter chain: qubit_reset only. Its Stark compensation is a fixed
     # per-qubit FACTOR of the stark operation's baked amplitude, not a swept
     # window of a target knob, so it carries no `amplitude` capability (same
@@ -164,7 +165,6 @@ EXPECTED_CAPABILITIES = {
     "readout_power": ["qubit_reset", "amplitude"],
     "readout_frequency": ["qubit_reset", "readout_detuning"],
     "qubit_spectroscopy": ["qubit_reset", "drive_detuning"],
-    "qubit_spectroscopy_overlap": ["qubit_reset", "drive_detuning"],
     "qubit_tomography": ["qubit_reset"],
     "qubit_drag_equator": ["qubit_reset"],
     "qubit_drag_alternating": ["qubit_reset"],
@@ -604,12 +604,11 @@ def test_the_amplitude_capability_is_derived_from_the_mixin():
 # --------------------------------------------------------------------------
 # drive_detuning capability: the swept drive-frequency window
 # --------------------------------------------------------------------------
-#: the four carriers — every drive-frequency window in the registry. The
+#: the three carriers — every drive-frequency window in the registry. The
 #: readout-side detuning sweeps share the axis NAME but are relative to
 #: readout_freq_hz, and carry the SIBLING readout_detuning capability instead.
 DRIVE_DETUNING_CARRIERS = {
     "qubit_spectroscopy",
-    "qubit_spectroscopy_overlap",
     "qubit_spectroscopy_cryoscope",
     "qubit_spectroscopy_flux_pulse",
 }

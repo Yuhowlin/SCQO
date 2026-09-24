@@ -82,11 +82,15 @@ def _cli(tmp_path: Path, *args: str) -> subprocess.CompletedProcess:
         config = _lab(tmp_path)
     return subprocess.run(
         [sys.executable, "-m", "scqo.cli", *args],
-        capture_output=True, text=True,
+        # Both ends of the pipe pinned to UTF-8: the child encodes stdout per
+        # PYTHONIOENCODING (set in some shells here, unset in others) while
+        # text=True decodes with the ANSI codepage (cp950), and any mismatch
+        # kills the reader thread on the first non-ASCII byte -> stdout is None.
+        capture_output=True, text=True, encoding="utf-8",
         # SCQO_USER_CONFIG=none and an empty parameters file keep the runner's real
         # ~/.scqo out of the test (a lab default could make a step fail here).
         env={**os.environ, "SCQO_CONFIG": str(config), "SCQO_USER_CONFIG": "none",
-             "MPLBACKEND": "Agg"},
+             "MPLBACKEND": "Agg", "PYTHONIOENCODING": "utf-8"},
         cwd=tmp_path,
     )
 
@@ -273,6 +277,85 @@ def test_no_figure_is_attempted_when_there_is_nothing_to_draw(capsys):
     plot_statistics(None, {"campaign_id": "cid", "statistics": {"x": {}}})
     plot_statistics(object(), {"campaign_id": None, "statistics": {"x": {}}})
     plot_statistics(object(), {"campaign_id": "cid", "statistics": {}})
+    assert capsys.readouterr().err == ""
+
+
+# ------------------------------------------------- the accept step at the end
+
+def test_a_finished_campaign_offers_its_accept_step(tmp_path):
+    """The reported bug: a campaign wrote pending suggestions to campaign.json
+    and then never mentioned them, so the accept step appeared not to exist.
+
+    Subprocess = never a TTY, which is the shape that must print the
+    paste-ready command instead of prompting."""
+    proc = _cli(tmp_path, "campaign", _plan(tmp_path, PLAN3))
+    assert proc.returncode == 0, proc.stderr
+    cid = _cli(tmp_path, "campaign", "--list").stdout.split()[0]
+
+    assert "suggested updates" in proc.stderr
+    assert "t1_s" in proc.stderr and "thermalization_time_s" in proc.stderr
+    # the REAL id, not None: the hint has to be pasteable
+    assert f"scqo accept --campaign {cid}" in proc.stderr
+    # ...and none of it on stdout, which stays the parseable result
+    assert "suggested updates" not in proc.stdout
+
+
+def test_repeat_run_offers_the_accept_step_like_a_single_run(tmp_path):
+    """`scqo run --repeat N` diverts into the campaign path, so adding the flag
+    used to REMOVE the accept prompt a plain `scqo run` gives."""
+    proc = _cli(tmp_path, "run", "qubit_relaxation", "--targets", "q0",
+                "--repeat", "3", "--skip-artifacts")
+    assert proc.returncode == 0, proc.stderr
+    assert "suggested updates" in proc.stderr
+    assert "scqo accept --campaign " in proc.stderr
+
+
+def test_a_short_campaign_says_why_it_proposed_nothing(tmp_path):
+    """Two repeats is below the default min_n=3 floor, so nothing is proposed —
+    which used to be indistinguishable from the feature not existing."""
+    proc = _cli(tmp_path, "campaign", _plan(tmp_path))  # PLAN: repeat = 2
+    assert proc.returncode == 0, proc.stderr
+    assert "suggested updates" not in proc.stderr
+    assert "min_n=3" in proc.stderr and "qubit_relaxation/q0" in proc.stderr
+
+    # and it is PERSISTED: read the morning after, the scrollback long gone
+    cid = _cli(tmp_path, "campaign", "--list").stdout.split()[0]
+    shown = _cli(tmp_path, "campaign", "--show", cid)
+    assert "writeback notes:" in shown.stdout
+    assert "min_n=3" in shown.stdout
+    assert "lower [writeback] min_n in the plan" in shown.stdout
+
+
+def test_json_stdout_stays_parseable_with_an_accept_step(tmp_path):
+    proc = _cli(tmp_path, "campaign", _plan(tmp_path, PLAN3), "--json")
+    assert proc.returncode == 0, proc.stderr
+    manifest = json.loads(proc.stdout)  # the whole point of --json
+    assert manifest["suggestions"]
+    assert "scqo accept --campaign " in proc.stderr
+
+
+def test_unsaved_suggestions_never_print_an_accept_command(capsys):
+    """Generated in memory but not stored: there is no id to come back to, so
+    naming one would send the operator after a campaign that does not exist.
+    `sess` is untouched on every non-prompting path, hence object()."""
+    from scqo.cli._campaign import offer_suggestions
+
+    rows = [{"entity": "q0", "field": "t1_s", "role": "fact",
+             "before": None, "after": 4.1e-5, "status": "pending"}]
+
+    offer_suggestions(object(), {"campaign_id": None, "suggestions": rows})
+    err = capsys.readouterr().err
+    assert "t1_s" in err and "no data_root" in err
+    assert "scqo accept --campaign" not in err
+
+    offer_suggestions(object(), {"campaign_id": "cid", "suggestions": rows,
+                                 "persist_error": "OSError: disk full"})
+    err = capsys.readouterr().err
+    assert "NOT stored" in err and "disk full" in err
+    assert "scqo accept --campaign" not in err
+
+    # nothing proposed and nothing to explain: silence, not an empty header
+    offer_suggestions(object(), {"campaign_id": "cid", "suggestions": []})
     assert capsys.readouterr().err == ""
 
 

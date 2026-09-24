@@ -21,6 +21,7 @@ from pydantic import Field, model_validator
 
 from .._scqat import per_qubit_results
 from ..contract import DatasetContract
+from ..estimate_inputs import acquisition_note, note_acquisition
 from ._capabilities.detuning import (
     ReadoutDetuningSweepParameters,
     readout_detuning_sweep,
@@ -130,8 +131,9 @@ class ResonatorSpectroscopyPowerChain(Experiment):
         The boundary writes go through ``self.device`` (the Session's
         RecordingDevice): 2 ChangeRecords + coupled echoes per qubit. The
         per-point steps use the backend's RAW vendor views — unrecorded
-        acquisition detail, captured per point into ``self._chain_steps`` for
-        the dataset/figure. Ascending order: each acquisition runs at constant
+        acquisition detail, noted per point onto the DATASET for the figure
+        (never onto the instance — an offline re-fit gets a fresh one).
+        Ascending order: each acquisition runs at constant
         power and every jump is upward, so ring-down from a previous (lower)
         point cannot contaminate.
         """
@@ -164,7 +166,7 @@ class ResonatorSpectroscopyPowerChain(Experiment):
         for view in views.values():
             view.readout_power_dbm = top  # recorded boundary write (+ coupled echo)
 
-        self._chain_steps: list[dict] = []
+        chain_steps: list[dict] = []
         try:
             slices = []
             for p in power_grid:  # ascending — constant power within each acquisition
@@ -175,7 +177,7 @@ class ResonatorSpectroscopyPowerChain(Experiment):
                     ctx = self.backend.power_context(targets) or {}
                 except Exception:  # provenance must never fail a measurement
                     ctx = {}
-                self._chain_steps.append(ctx)
+                chain_steps.append(ctx)
                 self._current_power_dbm = p
                 self.sweep_axes = {"detuning_hz": detuning}  # the per-point 1D contract
                 try:
@@ -197,8 +199,10 @@ class ResonatorSpectroscopyPowerChain(Experiment):
                     "readout chain revert failed for " + "; ".join(revert_errors)
                 )
         self.Contract.validate(self.dataset)
-        self.result = self.estimate()
-        return self.result
+        # On the DATASET, not the instance: an offline re-fit builds a fresh
+        # instance and would silently draw the map with no chain provenance.
+        note_acquisition(self.dataset, "chain_steps", chain_steps)
+        return self.run_estimate()
 
     def simulate(self, coords: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         """Per-POINT simulator: called once per power point with only the detuning
@@ -303,7 +307,7 @@ class ResonatorSpectroscopyPowerChain(Experiment):
             power_axis_kind=("target", ["absolute dBm"] * n_q),
             mode_label=("target", ["chain-stepped (slow)"] * n_q),
         )
-        steps = getattr(self, "_chain_steps", [])
+        steps = acquisition_note(self.dataset, "chain_steps", []) or []
         n_power = prepared.sizes.get("power", 0)
         if len(steps) != n_power or not any(
             step.get(q) for step in steps for q in targets

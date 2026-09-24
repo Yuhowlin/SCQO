@@ -156,6 +156,43 @@ def test_missing_driver_names_repo_and_venv(tmp_path):
     assert "uv pip install -e" in str(err.value)
 
 
+def test_hardware_setup_with_push_config_refuses_without_traceback(tmp_path, monkeypatch):
+    """A hardware setup whose lab config says state_sync = "push" is refused by
+    make_session (core, one place for every driver) and surfaced as SystemExit
+    text naming the fix; the same setup builds once the config says pull."""
+    from scqo.testing import InMemoryDevice, SimulatedBackend
+
+    class _FakeDriver:
+        name = "qblox"
+
+        def load(self):
+            return lambda cfg, setup, roster: SimulatedBackend(InMemoryDevice(roster, {}))
+
+    monkeypatch.setattr(_backends, "entry_points", lambda group: [_FakeDriver()])
+    _registry(tmp_path, '[cd1]\nstart = 2026-01-01\n'
+                        '[cd1.setup.qblox_main]\nbackend = "qblox"\n')
+    data_root = (tmp_path / "data").as_posix()
+    config = _config(tmp_path, f'[lab]\ndevice = "chipT"\ndata_root = \'{data_root}\'\n'
+                               'state_sync = "push"\n')
+    with pytest.raises(SystemExit) as err:
+        _backends.build_session(config)
+    assert 'state_sync = "pull"' in str(err.value)
+    assert "'qblox'" in str(err.value)
+    # the refusal is the config, not the driver: drop the key and the setup builds
+    config = _config(tmp_path, f'[lab]\ndevice = "chipT"\ndata_root = \'{data_root}\'\n')
+    sess, cfg = _backends.build_session(config)
+    assert sess.backend_label == "qblox"
+    assert cfg.state_sync == "pull"
+
+
+def test_state_sync_typo_refuses_without_traceback(tmp_path):
+    """A config parse error reaches the terminal as text, not a traceback."""
+    config = _config(tmp_path, '[lab]\nstate_sync = "pul"\n')
+    with pytest.raises(SystemExit) as err:
+        _backends.build_session(config)
+    assert "state_sync" in str(err.value)
+
+
 def test_ensure_demo_experiments_is_idempotent_and_never_shadows():
     _backends.ensure_demo_experiments()
     first = {e["name"]: e for e in registry.catalog()}

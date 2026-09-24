@@ -1,6 +1,6 @@
 [project]
 name = "scqo"
-version = "3.8.0"
+version = "3.12.0"
 description = "Superconducting Qubit Orchestration — instrument-agnostic experiment API shared by QM and Qblox backends"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
@@ -47,7 +47,7 @@ dependencies = [
                         # gets wrong numbers. Unusual for this stack, where the floors are
                         # usually silent; the experiment is simply unusable below it.
                         # See RELEASES.toml [v3-4-0].
-                        # The NEXT cut raises the floor to scqat v0.23.0, LOUD the same
+                        # As of v3.7.0 the floor is scqat v0.23.0, LOUD the same
                         # way twice over: pair_swap_angle and qc_trotter_compensation
                         # each lazy-import their own estimator subpackage, neither of
                         # which exists below it. It ALSO carries a silent half worth
@@ -57,6 +57,37 @@ dependencies = [
                         # plausible-looking angle that is several percent wrong with a
                         # collapsed R^2. That affects swap_oscillation too, so an older
                         # scqat does not merely lack the new experiments.
+                        # As of v3.10.0 the floor is scqat v0.24.0, LOUD and — unlike
+                        # every floor before it — UNCONDITIONAL: readout_frequency now
+                        # passes dip_fit_method into ReadoutFreqFidelityEstimator on
+                        # EVERY run, including its 'none' default, and the base
+                        # estimator validates kwargs against an allowlist, so an older
+                        # scqat raises ValueError('Unknown keyword argument(s)') at
+                        # estimate — after the instrument time is spent, and for every
+                        # readout_frequency run rather than only an opted-in one.
+                        # qubit_stark_phase_echo independently needs the same tag: its
+                        # estimate() reads results['amp_2pi'], a KeyError below it.
+                        # See RELEASES.toml [v3-10-0].
+                        # As of v3.11.0 the floor is scqat v0.25.0, and this one
+                        # is SILENT - the first since v3.3.0. qc_n_stark_amp
+                        # lifts fourteen compensation scalars out of the
+                        # estimator's results through .get(key, nan) while the
+                        # outcome comes from the INDEPENDENT transfer verdict, so
+                        # an older scqat imports fine, runs fine, reports
+                        # SUCCESSFUL and leaves every compensation number NaN.
+                        # Nothing raises and nothing warns: the only symptom is
+                        # NaN where a number belongs, after the instrument time
+                        # is spent. COMPENSATION_KEYS has no test behind it
+                        # either, so neither the suite nor CI catches the
+                        # pairing. See RELEASES.toml [v3-11-0].
+                        # As of v3.12.0 the floor is scqat v0.26.0, and it has
+                        # TWO shapes. pair_swap_flux_map is SILENT: the v0.25.0
+                        # estimator swallows the new swap_time_ns kwarg, so the
+                        # run reports SUCCESSFUL with every coupling key NaN
+                        # (lifted through .get(key, nan)). qc_swap_flux_stark is
+                        # LOUD but late: estimate() imports the new estimator
+                        # package, an ImportError after the instrument time is
+                        # spent. See RELEASES.toml [v3-12-0].
     "netcdf4>=1.6",     # datastore: dataset.nc has a string qubit coord (needs netCDF4, not the scipy netCDF3 fallback)
     "tomli>=2.0; python_version<'3.11'",  # labconfig TOML parsing on py3.10
 ]

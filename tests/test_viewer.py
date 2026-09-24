@@ -698,6 +698,24 @@ def test_campaign_page_statistics_children_and_suggestions(lab):
     assert f"scqo accept --campaign {cid}" in page
 
 
+def test_campaign_page_explains_an_empty_writeback(lab):
+    """A campaign below the min_n floor proposes nothing. The CLI says why at
+    the end of the run and again in --show; the viewer is the third reader of
+    the same stored text, next to the writeback problems it already renders."""
+    cid = lab["campaign"]["campaign_id"]
+    path = Path(lab["campaign"]["data_path"]) / "campaign.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest["suggestion_notes"] = [
+        "qubit_relaxation/q0: only 2 successful repeats, below the writeback "
+        "floor min_n=3 - nothing proposed"]
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    page = lab["client"].get(f"/campaign/{cid}").text
+    assert "writeback notes:" in page
+    assert "below the writeback floor min_n=3" in page
+    assert "lower <code>[writeback] min_n</code> in the plan" in page
+
+
 def test_campaign_statistics_png_serves_and_degrades(lab):
     c = lab["client"]
     cid = lab["campaign"]["campaign_id"]
@@ -863,3 +881,46 @@ def test_setup_export_xlsx_missing_openpyxl_is_a_clear_503(lab, monkeypatch):
     resp = lab["client"].get("/setup/devV/cdV/sim_main/export.xlsx")
     assert resp.status_code == 503
     assert "openpyxl" in resp.json()["detail"]
+
+
+def test_run_page_shows_the_setup_snapshot_and_serves_its_files(tmp_path):
+    """The run page links the run's setup snapshot files through a device-level
+    endpoint that never escapes the snapshot folder, and prints the restore
+    command; a drifted run says so."""
+    from tests.test_datastore import _SnapshotBackend, _snapshot_session
+
+    sess = _snapshot_session(tmp_path)
+    res = sess.run("resonator_spectroscopy", {"targets": ["q0"]}, update="none")
+    snap = sess.load_run(res["run_id"])["record"]["setup_snapshot"]
+    c = TestClient(create_app(tmp_path / "data"))
+
+    page = c.get(f"/run/{res['run_id']}").text
+    assert "Setup snapshot" in page and snap["hash"] in page
+    assert f"scqo restore {res['run_id']} --setup" in page
+    url = f"/device/devA/setup_snapshot/{snap['hash']}/backend_config/state.json"
+    assert url in page
+    assert "drifted" not in page
+
+    r = c.get(url)
+    assert r.status_code == 200 and r.text == '{"a": 1}\n'
+    assert c.get(f"/device/devA/setup_snapshot/{snap['hash']}/manifest.json").status_code == 200
+    assert c.get(f"/device/devA/setup_snapshot/{snap['hash']}/..%2f..%2fcooldowns.toml").status_code == 404
+    assert c.get(f"/device/devA/setup_snapshot/{'0' * 16}/manifest.json").status_code == 404
+    assert c.get("/device/devA/setup_snapshot/not-a-hash/manifest.json").status_code == 404
+    assert c.get(f"/device/..%2fdevA/setup_snapshot/{snap['hash']}/manifest.json").status_code == 404
+
+    class _DriftingBackend(_SnapshotBackend):
+        calls = 0
+
+        def vendor_config_snapshot(self):
+            type(self).calls += 1
+            out = dict(self.texts)
+            if self.calls >= 2:
+                out["wiring.json"] = '{"w": 3}\n'
+            return out
+
+    drifting = _snapshot_session(tmp_path, backend_cls=_DriftingBackend)
+    with pytest.warns(RuntimeWarning):
+        res2 = drifting.run("resonator_spectroscopy", {"targets": ["q0"]}, update="none")
+    page2 = c.get(f"/run/{res2['run_id']}").text
+    assert "drifted" in page2 and "wiring.json" in page2

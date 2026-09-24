@@ -21,6 +21,7 @@ _COMMANDS = {
     "suggest": ("suggest", "attach YOUR manually-read value to a run (fit failed, figure didn't)"),
     "set": ("set", "write a value directly (recorded manual write - experience values, no run)"),
     "tag": ("tag", "retro-tag / annotate a saved run"),
+    "restore": ("restore", "recreate a run's setup snapshot as a NEW named setup (re-run an old config)"),
     "state": ("state", "current calibration table + change history (who/what/when)"),
     "user": ("user", "show or set YOUR selection: device + setup (writes user.toml)"),
     "device": ("device", "device admin (manager): add, list, cooldown start/end"),

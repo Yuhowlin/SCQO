@@ -140,8 +140,7 @@ class QubitSpectroscopyFluxPulse(Experiment):
         with drive_power_boundary(self, self.params.drive_power_dbm):
             self.dataset = self.backend.acquire(self)
         self.Contract.validate(self.dataset)
-        self.result = self.estimate()
-        return self.result
+        return self.run_estimate()
 
     def simulate(self, coords: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         flux = coords["flux_bias_v"]

@@ -64,7 +64,10 @@ Fragment `kind`, which drives the notes and the coupling floors:
    feature). Build the new `[vX-Y-Z]` block FROM the fragments, then `git rm` the
    consumed fragments in the same commit.
 
-1. **CI green** on SCQO main (3 OS). Driver + contrib test suites green in their venvs.
+1. **CI green** on SCQO main (3 OS). Driver suites green in the environment
+   [ENVIRONMENTS.md](ENVIRONMENTS.md) names for each — scqo-qblox in BOTH its `uv run` env
+   and `.venv-qblox`, scqo-qm in `.venv-qm`. SCQO's own full suite needs `--extra viewer`
+   or it silently collects 917 of 984.
 2. **Version metadata matches the tag**: bump `version` in SCQO's `pyproject.toml` to
    the release number (the `scqo --version` a user sees). scqat manages its own
    version line with the same rule (its release checklist).
@@ -80,9 +83,16 @@ Fragment `kind`, which drives the notes and the coupling floors:
 4. **Record the combo in RELEASES.toml**: all three tags + the scqat pin + a notes line
    that names any REQUIRED upgrade action (e.g. v0.4.0's editable reinstalls).
 5. **Push everything**; verify with `git ls-remote --tags origin` per repo.
-6. **Server upgrade** = INSTALL §5: `git fetch --tags && git checkout vX.Y.Z` in the
-   three repos (+ scqat at its pinned tag), re-run the §1 `uv pip install -e` lines
-   when the notes say so, restart the viewer, then `scqo doctor` on a student account.
+6. **Server upgrade — NOT part of cutting a release, and not tracked as owed.** The lab
+   server is upgraded when its operator decides to, and they will ask. Do not add a
+   "SERVER UPGRADE" line to the `RELEASES.toml` notes, do not carry "the server is N cuts
+   behind" forward from one block to the next, and do not list it as outstanding work in a
+   status report (standing instruction, restated 2026-09-04). Anything an upgrade needs
+   belongs in **UPGRADE REQUIRES** anyway, which is written for whoever runs it, whenever
+   they run it. When asked, the procedure is INSTALL §5: `git fetch --tags && git checkout
+   vX.Y.Z` in the three repos (+ scqat at its pinned tag), re-run the §1
+   `uv pip install -e` lines when the notes say so, restart the viewer, then `scqo doctor`
+   from a non-installer account.
 
 Never move a pushed tag. A fix after tagging = a new patch release (this is how
 v0.4.1 exists).

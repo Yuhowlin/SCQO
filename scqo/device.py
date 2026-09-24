@@ -246,6 +246,45 @@ class _RecordingCompositeView(CompositeView):
             self._parent._record_only(self.name, field, value)
 
 
+def entity_view(parent, name: str) -> EntityView:
+    """The view for one roster entity, over any parent that answers the
+    recording protocol (``roster`` + ``_get_knob`` / ``_store`` / ``_set_knob``
+    / ``_record_only``): the live :class:`RecordingDevice`, or the
+    acquisition-time :class:`scqo.estimate_inputs.FrozenDevice`. Sharing the
+    generated view classes is what makes their READ semantics identical by
+    construction rather than by a second implementation that can drift."""
+    e = parent.roster.entities.get(name)
+    if isinstance(e, Channel):
+        return _recording_channel_view(e.kind)(parent, name)
+    if isinstance(e, Composite):
+        return _RecordingCompositeView(parent, name)
+    if e is None:
+        raise KeyError(f"unknown entity {name!r}")
+    from .entities import Line
+    if isinstance(e, Line):
+        riding = [c.name for c in parent.roster.channels().values()
+                  if c.line == name]
+        raise KeyError(
+            f"{name!r} is a line — it carries no knobs; the channels "
+            f"riding it: {riding or '(none)'}")
+    channels = [c.name for c in parent.roster.channels_of(name)]
+    raise KeyError(
+        f"{name!r} is a {type(e).__name__.lower()} — it carries no "
+        f"knobs; address its channels {channels or '(none wired)'}")
+
+
+def resonator_of(roster, target: str) -> str:
+    """The NAME of the target's attached resonator (unique qubit ref) — the
+    topology hop update() and estimate() both take."""
+    hits = [m.name for m in roster.modes().values()
+            if m.kind == "resonator" and m.refs.get("qubit") == target]
+    if len(hits) != 1:
+        raise KeyError(
+            f"{target!r} has {'no' if not hits else 'several'} attached "
+            f"resonator(s){': ' + str(sorted(hits)) if hits else ''}")
+    return hits[0]
+
+
 # ---------------------------------------------------------------- recorder
 
 class RecordingDevice:
@@ -354,24 +393,7 @@ class RecordingDevice:
     # ------------------------------------------------------------- surface
 
     def component(self, name: str) -> EntityView:
-        e = self.roster.entities.get(name)
-        if isinstance(e, Channel):
-            return _recording_channel_view(e.kind)(self, name)
-        if isinstance(e, Composite):
-            return _RecordingCompositeView(self, name)
-        if e is None:
-            raise KeyError(f"unknown entity {name!r}")
-        from .entities import Line
-        if isinstance(e, Line):
-            riding = [c.name for c in self.roster.channels().values()
-                      if c.line == name]
-            raise KeyError(
-                f"{name!r} is a line — it carries no knobs; the channels "
-                f"riding it: {riding or '(none)'}")
-        channels = [c.name for c in self.roster.channels_of(name)]
-        raise KeyError(
-            f"{name!r} is a {type(e).__name__.lower()} — it carries no "
-            f"knobs; address its channels {channels or '(none wired)'}")
+        return entity_view(self, name)
 
     def channel(self, target: str, kind: str) -> EntityView:
         """The view of the target's DEFAULT channel of one kind — how
@@ -382,13 +404,7 @@ class RecordingDevice:
     def resonator_of(self, target: str) -> str:
         """The NAME of the target's attached resonator (unique qubit ref) —
         update() proposes resonator facts under it."""
-        hits = [m.name for m in self.roster.modes().values()
-                if m.kind == "resonator" and m.refs.get("qubit") == target]
-        if len(hits) != 1:
-            raise KeyError(
-                f"{target!r} has {'no' if not hits else 'several'} attached "
-                f"resonator(s){': ' + str(sorted(hits)) if hits else ''}")
-        return hits[0]
+        return resonator_of(self.roster, target)
 
     def snapshot(self) -> dict:
         """The merged runtime view (run before/after records): knobs from

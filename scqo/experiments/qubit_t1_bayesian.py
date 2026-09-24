@@ -28,6 +28,7 @@ from pydantic import Field, model_validator
 
 from .._scqat import per_qubit_results
 from ..contract import DatasetContract
+from ..estimate_inputs import acquisition_note, note_acquisition
 from ._capabilities.qubit_reset import QubitResetParameters
 from ._sim import stable_seed
 from ..parameters import TargetSelection
@@ -193,6 +194,16 @@ class QubitT1Bayesian(Experiment):
     def readout_coords(self) -> dict[str, Any]:
         return {"probe_idx": np.arange(self.params.num_probes)}
 
+    def attach_acquisition_coords(self) -> None:
+        """The priors the blocks actually started from, onto the dataset.
+
+        ``estimate()`` reports them (``t1_prior_s``), and an offline re-fit
+        runs on a FRESH instance where ``define_sweep()`` never ran — so the
+        instance attribute would simply not be there."""
+        super().attach_acquisition_coords()
+        note_acquisition(self.dataset, "t1_prior_s",
+                         {t: float(v) for t, v in self._t1_prior_s.items()})
+
     def simulate(self, coords: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         p = self.params
         n_blocks = coords["block_idx"].size
@@ -265,6 +276,7 @@ class QubitT1Bayesian(Experiment):
             self.dataset, QubitT1BayesianEstimator(), artifact_dir=self.artifact_dir,
             ci=self.params.ci,
         )
+        priors = acquisition_note(self.dataset, "t1_prior_s", {}) or {}
 
         result = QubitT1BayesianResult()
         for qubit in self.params.targets:
@@ -272,7 +284,12 @@ class QubitT1Bayesian(Experiment):
             fit = {
                 "t1_median_s": float(r["t1_median_s"]),
                 "k_final_median": float(r["k_final_median"]),
-                "t1_prior_s": float(self._t1_prior_s[qubit]),
+                # the noted value is what the blocks actually started from; the
+                # fallback re-resolves it off the same frozen surface (a run
+                # acquired before the note existed)
+                "t1_prior_s": float(priors.get(qubit)
+                                    if priors.get(qubit) is not None
+                                    else self.resolve_t1_prior_s(qubit)),
             }
             if r.get("has_validation"):
                 fit["t1_lin_s"] = float(r["t1_lin_s"])

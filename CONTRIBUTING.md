@@ -70,18 +70,25 @@ one parent, under their own names**:
 Do not rename the folders and do not nest them. Then:
 
 ```bash
-cd <parent>
-uv venv .venv --python 3.12
-uv pip install --python .venv/bin/python -e "./SCQO[viewer]" -e ./scqat pytest httpx
+cd SCQO
+uv run --extra viewer pytest -q     # builds SCQO/.venv from uv.lock on first use
 ```
 
-On Windows the interpreter is `.venv\Scripts\python.exe`. Full environment detail,
-including the driver venvs, is in [INSTALL.md](INSTALL.md) §1.
+That is the whole setup: `[tool.uv.sources]` resolves `scqat` as `{ path = "../scqat",
+editable = true }`, so `uv run` reproduces the sibling editable from the tracked lockfile.
+The sibling layout above is still required — without `../scqat`, uv fails with a
+resolution error naming the missing path.
 
-**Editable installs freeze their recorded version at install time.** After switching
-branches or pulling, re-run the install line — otherwise `scqo doctor` and
-`importlib.metadata.version` keep reporting the old number while the code is new. This
-is the single most common source of "impossible" behaviour in this stack.
+**Which environment for which repo: [ENVIRONMENTS.md](ENVIRONMENTS.md).** The answers
+differ per repo on purpose (scqo-qm forbids `uv run` outright), and that file is the only
+authority. Lab-machine deployment detail, including the shared driver venvs, is in
+[INSTALL.md](INSTALL.md) §1.
+
+**Editable installs freeze their recorded version at install time** — the hand-built kind,
+`uv pip install -e`. After switching branches or pulling, re-run the install line, or
+`scqo doctor` and `importlib.metadata.version` keep reporting the old number while the code
+is new. This is the single most common source of "impossible" behaviour in this stack.
+`uv run` re-syncs on every invocation and is exempt.
 
 ---
 

@@ -1,0 +1,6 @@
+name = "qblox-pin-and-qm-launcher"
+repos = { scqo = "2c1348a", scqo-qm = "acf55f0" }
+kind = "fix"
+coupling = ""
+validated = "offline 2026-09-20 — SCQO 1025 / scqat 762 / scqo-qm 647 / scqo-qblox 336 in both envs, all zero-skip; no hardware"
+notes = '''UPGRADE REQUIRES: repin any existing .venv-qblox. The old INSTALL.md section 1 line pinned only qblox-scheduler, so an env built from it now holds qblox-instruments 1.3.1 instead of the 1.3.0 proven against Cluster firmware 2.1.0 — rerun that line, which pins both halves. The suite passes at either version in BOTH environments, so the mandatory second test run does NOT catch this; only an explicit version comparison does, and ENVIRONMENTS.md now carries that command. Also fixed: qm.bat resolves .venv-qm relative to the repo instead of a baked-in D:\github, so the launcher works wherever the sibling parent directory lives; and the QM session lock timeout goes 120 s -> 300 s, so a neighbouring job still holding the cluster locks no longer reads as a failure.'''

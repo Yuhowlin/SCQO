@@ -14,7 +14,7 @@ from scqo.checks import profile_residency_checks
 
 
 def _doctor(tmp_path: Path, config_body: str | None) -> subprocess.CompletedProcess:
-    env = {**os.environ, "SCQO_USER_CONFIG": "none"}
+    env = {**os.environ, "SCQO_USER_CONFIG": "none", "PYTHONIOENCODING": "utf-8"}
     if config_body is not None:
         config = tmp_path / "config.toml"
         config.write_text(config_body, encoding="utf-8")
@@ -27,7 +27,11 @@ def _doctor(tmp_path: Path, config_body: str | None) -> subprocess.CompletedProc
         env["HOME"] = str(tmp_path)
     return subprocess.run(
         [sys.executable, "-m", "scqo.cli", "doctor"],
-        capture_output=True, text=True, env=env, cwd=tmp_path,
+        # Both ends of the pipe pinned to UTF-8: the child encodes stdout per
+        # PYTHONIOENCODING (set in some shells here, unset in others) while
+        # text=True decodes with the ANSI codepage (cp950), and any mismatch
+        # kills the reader thread on the first non-ASCII byte -> stdout is None.
+        capture_output=True, text=True, encoding="utf-8", env=env, cwd=tmp_path,
     )
 
 
@@ -138,13 +142,14 @@ def test_no_config_warns_but_passes(tmp_path):
 def test_malformed_user_overlay_is_caught_not_crashed(tmp_path):
     user = tmp_path / "user.toml"
     user.write_text("not [valid toml", encoding="utf-8")
-    env = {**os.environ, "SCQO_USER_CONFIG": str(user)}
+    env = {**os.environ, "SCQO_USER_CONFIG": str(user), "PYTHONIOENCODING": "utf-8"}
     config = tmp_path / "config.toml"
     config.write_text("[lab]\n", encoding="utf-8")
     env["SCQO_CONFIG"] = str(config)
     proc = subprocess.run(
         [sys.executable, "-m", "scqo.cli", "doctor"],
-        capture_output=True, text=True, env=env, cwd=tmp_path,
+        # UTF-8 on both ends of the pipe -- see the note in _doctor()
+        capture_output=True, text=True, encoding="utf-8", env=env, cwd=tmp_path,
     )
     assert proc.returncode == 1
     assert "[FAIL] config" in proc.stdout
@@ -278,10 +283,11 @@ def test_doctor_renders_the_profile_witness_rows(tmp_path):
     data_root = tmp_path / "Users" / "bob" / "data"
     foreign_cfg.write_text(f"[lab]\ndata_root = '{data_root.as_posix()}'\n", encoding="utf-8")
     env = {**os.environ, "SCQO_USER_CONFIG": "none", "SCQO_CONFIG": str(foreign_cfg),
-           "USERPROFILE": str(home), "HOME": str(home)}
+           "USERPROFILE": str(home), "HOME": str(home), "PYTHONIOENCODING": "utf-8"}
     proc = subprocess.run(
         [sys.executable, "-m", "scqo.cli", "doctor"],
-        capture_output=True, text=True, env=env, cwd=tmp_path,
+        # UTF-8 on both ends of the pipe -- see the note in _doctor()
+        capture_output=True, text=True, encoding="utf-8", env=env, cwd=tmp_path,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr  # WARNs never fail doctor
     assert "venv base" in proc.stdout
@@ -290,3 +296,16 @@ def test_doctor_renders_the_profile_witness_rows(tmp_path):
     # ASCII-safe token from the INSTALL §1 pointer (the § itself can mangle when
     # subprocess stdout round-trips through the OS locale encoding on Windows)
     assert "UV_PYTHON_INSTALL_DIR" in proc.stdout
+
+
+def test_doctor_points_at_the_vendor_surface(tmp_path):
+    """A backend's vendor-only knobs and its operator CLIs are not scqo
+    subcommands, so `scqo -h` cannot show them. Doctor carries the pointer, and
+    it must render on a machine with NO config at all - it is placed before the
+    config loads precisely so it survives the case where the config is what is
+    broken, and so it can never construct a backend (doctor touches no
+    instrument)."""
+    proc = _doctor(tmp_path, None)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "[OK  ] vendor knobs" in proc.stdout
+    assert "scqo state --fields" in proc.stdout

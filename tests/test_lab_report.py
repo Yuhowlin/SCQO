@@ -128,6 +128,21 @@ def test_the_sweet_spot_maximum_never_stands_in_for_the_idle_frequency():
         assert q1[derived] is None, derived
 
 
+def test_the_readout_tone_never_stands_in_for_the_dressed_frequency():
+    """readout_freq_hz is a KNOB — the operating choice, which
+    `readout_frequency` moves to the fidelity optimum between f_dress0 and
+    f_dress1. With only the knob, the dressed frequency is REPORTED MISSING,
+    and so are the g and kappa computed from it."""
+    ctx = {"device": "d", "cooldown": "c", "setup_name": "s", "cycle": {},
+           "state_rows": _rows(("q1_ro", "readout_freq_hz", 7.1e9)),
+           "physical_rows": _rows(("q1", "f_01_hz", 5e9),
+                                  ("q1_res", "f_bare_hz", 7e9),
+                                  ("q1_res", "q_c", 1e4))}
+    q1 = extract_chip_metrics(ctx)["per_qubit"]["q1"]
+    assert q1["f_dress_ghz"] is None
+    assert q1["g_mhz"] is None and q1["kappa_mhz"] is None
+
+
 def test_an_empty_context_reports_no_qubits():
     """Not a phantom q1 with every cell blank, which reads as a measured
     failure rather than an empty context."""

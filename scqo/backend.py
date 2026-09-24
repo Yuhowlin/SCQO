@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 import xarray as xr
 
 from .device import DeviceModel
-from .fieldmap import Unrealized, VendorBinding, VendorOnly
+from .fieldmap import OperatorCommand, Unrealized, VendorBinding, VendorOnly
 
 if TYPE_CHECKING:
     from .experiment import Experiment
@@ -45,6 +45,13 @@ class Backend(ABC):
     ``simulate_ns``/``no_simulate``); accept ``**options`` and refuse an
     option you cannot honour by name — never silently. Best-effort artifacts
     signal failure with :class:`PreviewWarning`.
+
+    Two more optional provenance hooks, resolved the same way and with benign
+    ``{}`` defaults below: ``vendor_config_snapshot()`` (the in-memory vendor
+    config as files, stored per run under ``<device>/setup_snapshots/``) and
+    ``versions()`` (the driver + vendor lib versions stamped into that
+    snapshot's manifest). ``release_instruments()`` is the one optional hook
+    that ACTS on the instrument rather than describing it.
     """
 
     @property
@@ -75,6 +82,47 @@ class Backend(ABC):
         """
         return {}
 
+    def vendor_config_snapshot(self) -> dict[str, str]:
+        """The vendor config this backend holds IN MEMORY, as ``{canonical
+        filename: file text}`` serialised exactly as its ``save()`` would write
+        (same file split, indent and key order; LF newlines; trailing newline).
+
+        ``Session.run`` takes it at run START and stores it, with the context's
+        scqo values, content-addressed under ``<device>/setup_snapshots/`` — the
+        restorable record of what the run executed against (``scqo restore``
+        turns it back into a named setup). It is taken again after the run: a
+        file whose text moved is reported as ``setup_snapshot.drift`` (a
+        run-scoped mutation that missed its restore). Provenance only: never
+        write to disk, never touch the instrument, never raise — degrade to
+        ``{}``, the default here (the simulated backend has no vendor config).
+        """
+        return {}
+
+    def release_instruments(self) -> list[str]:
+        """Drop any live instrument connection; return what was released.
+
+        Called before the CLI blocks on an interactive prompt: an operator who
+        walks away from "apply which updates?" must not pin the instrument.
+        Safe there because a decision only writes the in-memory config tree and
+        the JSON stores — the values reach hardware at the next ``acquire()``,
+        which reconnects.
+
+        The default ``[]`` is right for a backend holding nothing between
+        acquisitions — the simulated one, and QM, whose ``qm_session`` closes
+        the QuantumMachine in its own ``finally``. Implement it where a
+        connection OUTLIVES the run. Never raise, and never connect in order to
+        disconnect: a backend that never dialled returns ``[]`` without dialling.
+        """
+        return []
+
+    def versions(self) -> dict[str, str]:
+        """``{distribution: version}`` of the driver and its vendor libraries,
+        stamped into the setup snapshot's manifest so a later ``scqo restore``
+        can warn when the environment differs (a QM state file names its QUAM
+        classes by dotted path). Default ``{}``; never raise.
+        """
+        return {}
+
     def field_bindings(self) -> dict[str, dict[str, VendorBinding]]:
         """This backend's declared field -> vendor-parameter catalog, PER CATEGORY.
 
@@ -101,3 +149,22 @@ class Backend(ABC):
         and doubling as the backlog of neutral-field candidates. Default ``{}``.
         """
         return {}
+
+    def operator_commands(self) -> tuple[OperatorCommand, ...]:
+        """This backend's vendor OPERATOR commands (:class:`scqo.fieldmap.OperatorCommand`).
+
+        Inventory only — SCQO never runs these. They are the vendor-side jobs the
+        neutral core deliberately does not own (writing a measured filter into
+        the vendor config, releasing a cluster's locks, calibrating mixers), so
+        ``scqo -h`` cannot list them and an operator would otherwise have to
+        memorize them. Rendered by ``scqo state --fields`` (``--json`` for
+        machines) beside :meth:`vendor_only`, the two halves of the same
+        question.
+
+        Zero-argument ON PURPOSE, unlike the per-target ``distortion_apply_command``
+        hint hook: half the inventory takes no target, and ``--fields`` is a
+        schema view with none in hand. Entries carry ``<placeholder>`` arguments
+        instead. Pure data — no instrument, no vendor config, no failure mode.
+        Default ``()``; never raise.
+        """
+        return ()

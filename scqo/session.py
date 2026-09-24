@@ -25,14 +25,27 @@ knobs/monitors through the recording device (vendor-push-first).
 
 from __future__ import annotations
 
+import json
+import time
+import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from .datastore import DataStore
+from .datastore import BACKEND_CONFIG_SUBDIR, SCQO_SUBDIR, DataStore
 from .design import Design
 from .device import CompositeView, RecordingDevice
+from .estimate_inputs import embed_run, is_embedded
 from .roster import Roster
-from .stores import Store, _current_operator, _now, physical_store, state_store
+from .stores import (
+    PHYSICAL_FILE,
+    STATE_FILE,
+    STATE_SCHEMA,
+    Store,
+    _current_operator,
+    _now,
+    physical_store,
+    state_store,
+)
 from .suggestions import (
     Suggestion,
     decision_editor,
@@ -42,6 +55,10 @@ from .suggestions import (
     reject_suggestions,
     select_suggestions,
 )
+
+#: a file in a setup's backend_config/ folder larger than this is left out of the
+#: snapshot (a stray waveform dump must not multiply the store)
+_SNAPSHOT_EXTRA_FILE_MAX = 8 * 1024 * 1024
 
 if TYPE_CHECKING:  # lazy at runtime: campaign.py is only needed by run_campaign
     from .campaign import CampaignPlan
@@ -262,6 +279,10 @@ class Session:
                 exp.artifact_dir = run_dir / "analysis"
 
         device_before = self.device.snapshot()
+        # the vendor config this run compiles against, as the backend holds it in
+        # memory NOW (the setup snapshot); re-taken after exp.run() for the drift check
+        vendor_before = self._vendor_snapshot() if self.datastore is not None else {}
+        drift: list[str] = []
         self.device.set_context(experiment, run_id)
         updated = False
         suggestions: list[Suggestion] = []
@@ -270,7 +291,9 @@ class Session:
                 result = exp.run()
             except Exception as err:
                 result = self._failure(cls, exp, err)
+                drift = self._vendor_drift(vendor_before, run_id, experiment)
             else:
+                drift = self._vendor_drift(vendor_before, run_id, experiment)
                 if mode != "none" and result.any_success:
                     capture = SuggestionCapture(self.device, self.physical,
                                                 self.roster)
@@ -310,6 +333,17 @@ class Session:
             self.device.set_context(None, None)
 
         payload = result.model_dump(mode="json")
+        if (result.error is None and exp.dataset is not None
+                and not is_embedded(exp.dataset)):
+            # A run() override that called estimate() directly instead of
+            # run_estimate(): the measurement is fine, but its dataset.nc has
+            # no acquisition-time snapshot and can never be re-fitted offline.
+            # Named here because a fork/contrib experiment is the one place the
+            # AST test in this repo cannot reach. Only on a SUCCESSFUL run: a
+            # failure before estimate() has no snapshot for an honest reason.
+            payload["dataset_warning"] = (
+                f"{type(exp).__name__}.run() bypassed run_estimate(): "
+                f"dataset.nc is not self-contained")
         suggestion_dicts = [s.model_dump(mode="json") for s in suggestions]
         if self.datastore is not None:
             try:
@@ -318,6 +352,13 @@ class Session:
                     list(getattr(exp.params, "targets", []))) or {}
             except Exception:
                 power_context = {}
+            versions = self._versions()
+            if exp.dataset is not None:
+                embed_run(exp.dataset, {
+                    "run_id": run_id, "device": self.datastore.device_name,
+                    "backend": self.backend_label,
+                    "cooldown": self.cooldown_id, "setup": self.setup_name,
+                    "started_at": started_at, "versions": versions})
             try:
                 self.datastore.persist_run(
                     run_id=run_id, run_dir=run_dir, experiment=experiment,
@@ -328,11 +369,16 @@ class Session:
                     backend=self.backend_label, updated_device=updated,
                     suggestions=suggestion_dicts,
                     power_context=power_context,
+                    setup_snapshot={
+                        "files": self._setup_snapshot_files(vendor_before),
+                        "manifest": self._snapshot_manifest(run_id),
+                        "drift": drift},
                     tags=list(dict.fromkeys(
                         [*self.default_tags, *(tags or []),
                          *getattr(exp, "seed_tags", [])])),
                     note=note,
-                    campaign=campaign)
+                    campaign=campaign,
+                    versions=versions)
             except Exception as err:  # never lose a measurement over a save
                 payload["datastore_error"] = f"{type(err).__name__}: {err}"
             else:
@@ -412,6 +458,8 @@ class Session:
         tags: list[str] | None = None,
         note: str = "",
         on_progress=None,
+        monotonic=time.monotonic,
+        sleep=time.sleep,
     ) -> dict:
         """Walk a :class:`~scqo.campaign.CampaignPlan`'s steps ``repeat`` times.
 
@@ -472,9 +520,19 @@ class Session:
         ``repeat_done``: stopping mid-repeat would leave a half-walked bundle
         whose quantities no longer share a drift epoch, which is exactly the
         invariant the interleaved ordering exists to protect.
-        """
-        import time
 
+        ``monotonic`` and ``sleep`` are a TEST SEAM, not an extension point. They
+        exist because this method is the only place in ``Session`` that reads a
+        clock for anything but a timestamp, and because a test could otherwise
+        only reach the cadence gate by really waiting or by monkeypatching the
+        stdlib for the whole process — both of which have produced failures that
+        were about the machine's speed rather than the code (v3.6.0 and v3.8.0
+        each repaired one). A fake that advances virtual time on ``sleep`` makes
+        the gate, the ``max_duration_s`` budget and the overrun branch
+        deterministic. Production callers must leave both alone; the defaults are
+        bound once at definition, so passing anything else changes what "now"
+        means for the whole campaign.
+        """
         from .campaign import CampaignPlan, aggregate
 
         plan = plan if isinstance(plan, CampaignPlan) else CampaignPlan(**dict(plan))
@@ -495,7 +553,7 @@ class Session:
                 "repeated re-tuning.")
 
         started_at = _now()
-        started_mono = time.monotonic()
+        started_mono = monotonic()
         manifest: dict[str, Any] = {
             "schema": 1,
             "campaign_id": None,
@@ -568,7 +626,7 @@ class Session:
                 return
             try:
                 pending["ended_at"] = _now()
-                pending["duration_s"] = (time.monotonic() - started_mono
+                pending["duration_s"] = (monotonic() - started_mono
                                          - pending["elapsed_s"])
                 pending["failed"] = not any(s["ok"] for s in pending["steps"])
                 pending["partial"] = True
@@ -592,7 +650,7 @@ class Session:
                 # The budget gates CONTINUING, never starting: repeat 0 always runs, so
                 # a campaign never returns zero measurements for having been slow to set
                 # up. Checked BEFORE a repeat, so a repeat is never cut in half either.
-                elapsed = time.monotonic() - started_mono
+                elapsed = monotonic() - started_mono
                 if (repeat_idx and plan.max_duration_s is not None
                         and elapsed >= plan.max_duration_s):
                     stop_reason = f"max_duration_s ({plan.max_duration_s:g} s) elapsed"
@@ -617,13 +675,13 @@ class Session:
                 overran_by_s = 0.0
                 if plan.period_s is not None and repeat_idx:
                     due = started_mono + repeat_idx * plan.period_s
-                    wait = due - time.monotonic()
+                    wait = due - monotonic()
                     if wait > 0:
                         # Announce the gap BEFORE sleeping: an unannounced five-minute
                         # pause is indistinguishable from a hang.
                         on_progress({"kind": "cadence_wait",
                                             "repeat_idx": repeat_idx, "wait_s": wait})
-                        time.sleep(wait)
+                        sleep(wait)
                     else:
                         overran_by_s = -wait
 
@@ -631,7 +689,7 @@ class Session:
                 row = {
                     "repeat_idx": repeat_idx,
                     "started_at": _now(),
-                    "elapsed_s": time.monotonic() - started_mono,
+                    "elapsed_s": monotonic() - started_mono,
                     "overran_by_s": overran_by_s,
                     "steps": [],
                 }
@@ -644,7 +702,7 @@ class Session:
                                     "overran_by_s": overran_by_s,
                                     "durations_s": [r["duration_s"] for r in rows]})
                 for step_idx, step in enumerate(plan.steps):
-                    step_mono = time.monotonic()
+                    step_mono = monotonic()
                     try:
                         payload = self.run(
                             step.experiment,
@@ -667,7 +725,7 @@ class Session:
                         "fit": payload.get("fit") or {},
                         "error": payload.get("error") or payload.get("datastore_error"),
                         "ok": any(str(o) == "successful" for o in outcomes.values()),
-                        "duration_s": time.monotonic() - step_mono,
+                        "duration_s": monotonic() - step_mono,
                     }
                     row["steps"].append(step_row)
                     # Not stoppable HERE: a deliberate stop mid-bundle would leave
@@ -676,7 +734,7 @@ class Session:
                     on_progress({"kind": "step_done", "repeat_idx": repeat_idx,
                                         "n_steps": len(plan.steps), **step_row})
                 row["ended_at"] = _now()
-                row["duration_s"] = time.monotonic() - started_mono - row["elapsed_s"]
+                row["duration_s"] = monotonic() - started_mono - row["elapsed_s"]
                 washout = not any(s["ok"] for s in row["steps"])
                 row["failed"] = washout
                 rows.append(row)
@@ -724,13 +782,17 @@ class Session:
             # stop_reason, exactly like the persist guard below.
             if mode == "none" and manifest["statistics"]:
                 try:
-                    generated, gen_problems = self._campaign_suggestions(
+                    generated, gen_problems, gen_notes = self._campaign_suggestions(
                         plan, manifest["statistics"])
                     if generated:
                         manifest["suggestions"] = [
                             s.model_dump(mode="json") for s in generated]
                     if gen_problems:
                         manifest["suggestion_problems"] = gen_problems
+                    # Set only when non-empty, so a healthy campaign's manifest
+                    # (and its --json) stays byte-identical to before.
+                    if gen_notes:
+                        manifest["suggestion_notes"] = gen_notes
                 except Exception as err:
                     manifest["suggestion_problems"] = [
                         f"generation failed: {type(err).__name__}: {err}"]
@@ -811,7 +873,7 @@ class Session:
 
     def _campaign_suggestions(
         self, plan, statistics: dict,
-    ) -> tuple[list[Suggestion], list[str]]:
+    ) -> tuple[list[Suggestion], list[str], list[str]]:
         """The aggregate-writeback generator: replay each step experiment's
         own ``update()`` on a synthetic Result built from the campaign
         statistics, under a SuggestionCapture — so the fit-key -> field
@@ -830,9 +892,21 @@ class Session:
         JSON-null form the retroactive path reads back. stderr twins pass
         through on purpose: an update() only reads the keys it knows.
 
-        Returns ``(suggestions, problems)``; a failing experiment (e.g. its
-        update() KeyErrors on a fit key that did not survive ``min_n``) lands
-        in problems and never blocks the others.
+        Returns ``(suggestions, problems, notes)``; a failing experiment (e.g.
+        its update() KeyErrors on a fit key that did not survive ``min_n``)
+        lands in problems and never blocks the others.
+
+        NOTES explain an ABSENCE — why a campaign proposed nothing — and are
+        not errors, which is why they are a separate channel from problems
+        (rendered as "writeback problem:" in the CLI and the viewer). They are
+        per (experiment, target), never per quantity: the statistics carry
+        uncatalogued fit params (``amplitude``, ``offset``) that could never
+        become a suggestion, so naming quantities would be noise. Two kinds,
+        both about ``min_n`` because that is the floor an operator can act on:
+        a target that kept NOTHING, and — beside a problem, where the bare
+        ``KeyError`` is unreadable on its own — the keys ``min_n`` took from a
+        target that did take part. A target whose statistic resolved but is
+        NaN stays silent: a different cause with a different remedy.
         """
         import math
 
@@ -843,25 +917,45 @@ class Session:
         wb = plan.writeback
         suggestions: list[Suggestion] = []
         problems: list[str] = []
+        notes: list[str] = []
         first_step: dict[str, Any] = {}
         for step in plan.steps:
             first_step.setdefault(step.experiment, step)
         for name in dict.fromkeys(plan.experiments):
             fit: dict[str, dict[str, float]] = {}
+            thin: dict[str, dict[str, int]] = {}
             for target, quantities in (statistics.get(name) or {}).items():
                 kept: dict[str, float] = {}
+                short: dict[str, int] = {}
+                best_n = 0
                 for quantity, st in (quantities or {}).items():
                     value = (st or {}).get(wb.stat)
-                    if ((st or {}).get("n") or 0) < wb.min_n:
-                        continue
+                    n = (st or {}).get("n") or 0
+                    best_n = max(best_n, n)
                     if (not isinstance(value, (int, float))
                             or isinstance(value, bool)):
                         continue  # nonscalar series / unresolved (JSON null)
                     if not math.isfinite(value):
                         continue  # NaN/Inf must never become a Suggestion
+                    if n < wb.min_n:
+                        # LAST, so `short` holds only real numbers the floor
+                        # alone held back — a per-point array is not something
+                        # more repeats would have made proposable.
+                        short[quantity] = n
+                        continue
                     kept[quantity] = float(value)
                 if kept:
                     fit[target] = kept
+                    if short:
+                        thin[target] = short  # only useful beside a problem
+                elif 0 < best_n < wb.min_n:
+                    # The reported case: a short campaign proposes nothing and
+                    # says nothing. best_n == 0 stays silent - the statistics
+                    # table already shows n=0 and the step line said FAILED.
+                    notes.append(
+                        f"{name}/{target}: only {best_n} successful "
+                        f"{'repeat' if best_n == 1 else 'repeats'}, below the "
+                        f"writeback floor min_n={wb.min_n} - nothing proposed")
             if not fit:
                 continue  # nothing resolved for this experiment — not an error
             try:
@@ -885,7 +979,13 @@ class Session:
                 suggestions.extend(capture.suggestions)
             except Exception as err:
                 problems.append(f"{name}: {type(err).__name__}: {err}")
-        return suggestions, problems
+                # The commonest cause is an update() reading a key min_n took.
+                # "KeyError: 't1_s'" cannot be acted on; naming the floor can.
+                for target, short in thin.items():
+                    notes.append(
+                        f"{name}/{target}: dropped below min_n={wb.min_n}: "
+                        + ", ".join(f"{q} (n={n})" for q, n in sorted(short.items())))
+        return suggestions, problems, notes
 
     def find_campaigns(self, **filters: Any) -> list[dict]:
         """Query saved campaigns (newest first); ``[]`` without a data_root."""
@@ -934,15 +1034,16 @@ class Session:
                 f"{len(manifest['suggestions'])} suggestions (decisions "
                 f"included) — pass force=True (--force) to regenerate")
         plan = CampaignPlan(**manifest["plan"])
-        generated, problems = self._campaign_suggestions(
+        generated, problems, notes = self._campaign_suggestions(
             plan, manifest.get("statistics") or {})
         new_dicts = [s.model_dump(mode="json") for s in generated]
         stored = store.edit_campaign_suggestions(
-            campaign_id, lambda _rows: new_dicts, problems=problems)
+            campaign_id, lambda _rows: new_dicts, problems=problems, notes=notes)
         return {
             "campaign_id": campaign_id,
             "suggestions": len(new_dicts),
             "problems": problems,
+            "notes": notes,
             "pending_total": pending_count(stored.get("suggestions", [])),
         }
 
@@ -1467,6 +1568,31 @@ class Session:
                     f"{type(err).__name__}: {err}")
         return summary
 
+    def release_instruments(self) -> list[str]:
+        """Drop the backend's live instrument connection; the names released.
+
+        The duck-typed ``release_instruments`` hook, resolved like
+        ``vendor_config_snapshot``. The CLI calls it before blocking on the
+        accept prompt so an unattended terminal does not pin the instrument;
+        deciding a suggestion only writes the in-memory config tree and the
+        JSON stores, so nothing here is needed to apply one, and the next
+        ``run()`` reconnects.
+
+        ``[]`` for a backend that holds nothing (simulated, QM) and on ANY
+        failure: losing the connection-release must never cost the accept step,
+        the same doctrine as the statistics figure.
+        """
+        hook = getattr(self.backend, "release_instruments", None)
+        if not callable(hook):
+            return []
+        try:
+            out = hook() or []
+        except Exception as err:
+            warnings.warn(f"releasing the instrument failed ({type(err).__name__}: "
+                          f"{err}); the connection is still held", stacklevel=2)
+            return []
+        return [str(name) for name in out]
+
     # ------------------------------------------------------------ plumbing
 
     def _parse_assignments(self, assignments: dict[str, Any], *,
@@ -1546,6 +1672,105 @@ class Session:
                         f"{entity}.{field}/{spec.paired_with}: the batch "
                         f"would leave unequal paired lengths ({len(a)} != "
                         f"{len(b)}) — change both sides in one call")
+
+    # ------------------------------------------------------- setup snapshot
+
+    def _vendor_snapshot(self) -> dict[str, str]:
+        """The backend's in-memory vendor config as {canonical filename: text} —
+        the duck-typed ``vendor_config_snapshot`` hook, resolved like
+        ``power_context``. {} for a backend without one (simulated) and on ANY
+        failure or malformed answer: provenance must never fail a run."""
+        hook = getattr(self.backend, "vendor_config_snapshot", None)
+        if not callable(hook):
+            return {}
+        try:
+            out = hook() or {}
+        except Exception:
+            return {}
+        if not isinstance(out, dict) or not all(
+                isinstance(k, str) and isinstance(v, str) for k, v in out.items()):
+            return {}
+        return dict(out)
+
+    def _vendor_drift(self, before: dict[str, str], run_id, experiment: str) -> list[str]:
+        """Re-snapshot after ``exp.run()`` and name every vendor file whose text
+        moved: a run-scoped mutation that missed its restore (or the Qblox
+        backend's attenuation-limit re-solve). Warns, never raises; [] when the
+        run had no vendor snapshot to begin with."""
+        if not before:
+            return []
+        after = self._vendor_snapshot()
+        drift = sorted(n for n in set(before) | set(after)
+                       if before.get(n) != after.get(n))
+        if drift:
+            warnings.warn(
+                f"run {run_id}: the vendor config changed during {experiment} and was "
+                f"not restored ({', '.join(drift)}) - a run-scoped mutation leaked, or "
+                f"the Qblox backend re-solved an attenuation limit; the run's "
+                f"setup_snapshot is the state at run START", RuntimeWarning, stacklevel=3)
+        return drift
+
+    def _setup_snapshot_files(self, vendor: dict[str, str]) -> dict[str, bytes]:
+        """The files of this run's setup snapshot: the vendor texts under
+        ``backend_config/``, every OTHER regular file of the setup's backend_config
+        folder verbatim (Qblox's att_limits.json / mixer_cal.json ride along), and
+        this context's two scqo value files under ``scqo/`` in their on-disk shape
+        (``{"schema": 3, "values": ...}``, so a restore can drop them in as-is).
+        {} when there is no vendor config or anything fails."""
+        if not vendor:
+            return {}
+        try:
+            files = {f"{BACKEND_CONFIG_SUBDIR}/{name}": text.encode("utf-8")
+                     for name, text in vendor.items()}
+            if self.scqo_dir is not None:
+                folder = self.scqo_dir.parent / BACKEND_CONFIG_SUBDIR
+                if folder.is_dir():
+                    for p in sorted(folder.iterdir()):
+                        if (p.is_file() and not p.name.startswith(".")
+                                and p.name not in vendor
+                                and p.stat().st_size <= _SNAPSHOT_EXTRA_FILE_MAX):
+                            files[f"{BACKEND_CONFIG_SUBDIR}/{p.name}"] = p.read_bytes()
+            for name, values in ((STATE_FILE, self.state.values()),
+                                 (PHYSICAL_FILE, self.physical.values())):
+                text = json.dumps({"schema": STATE_SCHEMA, "values": values},
+                                  indent=2, allow_nan=False) + "\n"
+                files[f"{SCQO_SUBDIR}/{name}"] = text.encode("utf-8")
+            return files
+        except Exception:
+            return {}
+
+    def _versions(self) -> dict:
+        """The packages this session ANALYSES with: scqo, scqat, plus whatever
+        the backend's ``versions()`` hook reports (driver + vendor stack).
+
+        Stamped on every run record and on the setup snapshot manifest. scqat
+        is in there because a fit correction ships in scqat: without its
+        version a saved run cannot say which side of that fix it was analysed
+        on. Best effort — a missing package is simply absent."""
+        versions: dict = {}
+        for package in ("scqo", "scqat"):
+            try:
+                from importlib.metadata import version
+
+                versions[package] = version(package)
+            except Exception:
+                pass
+        hook = getattr(self.backend, "versions", None)
+        if callable(hook):
+            try:
+                versions.update({str(k): str(v) for k, v in (hook() or {}).items()})
+            except Exception:
+                pass
+        return versions
+
+    def _snapshot_manifest(self, run_id) -> dict:
+        """The run-specific half of a snapshot manifest: era stamps, the first run
+        that produced it, and the scqo + driver/vendor versions (:meth:`_versions`)
+        a later ``scqo restore`` compares against its own environment."""
+        versions = self._versions()
+        return {"backend": self.backend_label, "created_at": _now(),
+                "first_run_id": run_id, "cooldown": self.cooldown_id,
+                "setup": self.setup_name, "versions": versions}
 
     def _current_value(self, entity: str, field: str, role: str):
         if role == "fact":

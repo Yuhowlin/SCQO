@@ -11,7 +11,9 @@ anything. It checks the four things that actually go wrong:
   3. BRANCH PAIRING - CI pairs your repos by branch NAME, so a mismatch means CI tested
      your change against upstream and its green tick proved nothing;
   4. whether you are about to commit a release-ledger fragment, which contributors
-     should draft in the PR body instead.
+     should draft in the PR body instead;
+  5. WHICH ENVIRONMENT - the stack has two families for real reasons, and substituting
+     one for another is silent three ways out of four (SCQO/ENVIRONMENTS.md).
 
     python scripts/check_contribution.py
 
@@ -36,11 +38,24 @@ PARENT = REPO_ROOT.parent
 # folder name -> distribution name. The folder names are the dependency graph.
 REPOS = {"SCQO": "scqo", "scqat": "scqat", "scqo-qblox": "scqo-qblox", "scqo-qm": "scqo-qm"}
 
+def _shared_venv_python(name: str) -> str:
+    """The lab's shared <parent>/.venv-<name> interpreter, if it is really there.
+
+    Printed as a real path when it exists so the reader can paste it; as the generic
+    placeholder otherwise, because a contributor machine has no lab venvs and a path
+    that does not exist reads as a broken instruction."""
+    leaf = "Scripts/python.exe" if sys.platform == "win32" else "bin/python"
+    path = PARENT / f".venv-{name}" / leaf
+    return str(path) if path.exists() else f"<parent>/.venv-{name}/{leaf}"
+
+
+# The canonical per-repo test command. These MUST stay equal to the table in
+# SCQO/ENVIRONMENTS.md, which is the authority and explains WHY they differ.
 TEST_COMMANDS = {
-    "SCQO": "python -m pytest tests/test_model_experiments.py -k <stem> -q   # targeted; full suite only for shared-core",
+    "SCQO": "uv run pytest tests/test_model_experiments.py -k <stem> -q      # targeted; full: uv run --extra viewer pytest -q",
     "scqat": "uv run --extra dev pytest tests/test_<name>_estimator.py -q    # --extra dev is required",
-    "scqo-qblox": "uv run pytest tests/ -q                                   # full suite IS the targeted run",
-    "scqo-qm": "<venv>/bin/python -m pytest tests/ -q                        # avoid bare `uv run`; no CI here",
+    "scqo-qblox": f"uv run pytest tests/ -q                                   # THEN ALSO {_shared_venv_python('qblox')} -m pytest tests/ -q",
+    "scqo-qm": f"{_shared_venv_python('qm')} -m pytest tests/ -q             # NEVER `uv run`; no CI here",
 }
 
 problems: list[str] = []
@@ -173,7 +188,13 @@ def main() -> int:
         say(f"      {TEST_COMMANDS[name]}")
     say()
     say("   Report the EXACT command you ran. Never describe a targeted run as though")
-    say("   it proved the whole suite.")
+    say("   it proved the whole suite. These differ per repo ON PURPOSE - why, and which")
+    say("   environment each one is: SCQO/ENVIRONMENTS.md.")
+    if (PARENT / "scqo-qm" / ".venv").exists():
+        notes.append(
+            "scqo-qm/.venv exists. There is no repo-local venv for that repo - it resolves "
+            "from pyproject rather than requirements-qm.lock.txt and cannot run the suite. "
+            "Test in the shared .venv-qm (ENVIRONMENTS.md).")
     say()
 
     say("=" * 60)

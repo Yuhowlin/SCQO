@@ -26,12 +26,23 @@ so ``phi = atan2(sin, cos)``. Only the tone's AMPLITUDE is swept
 of the registered stark op. The AC-Stark phase is quadratic in drive amplitude,
 ``phi ~ k * amp**2``, and the scqat estimator fits that -> the Stark coefficient ``k``.
 
+That quadratic is the SMALL-DRIVE limit and it saturates: once the Rabi rate
+approaches ``stark_detuning_hz`` the shift becomes the dressed-state
+``(sqrt(D**2 + W**2) - D)/2`` and the fitted ``k`` is wrong for amplitude
+conversions. So the reported answer is ``amp_2pi_factor`` — the amplitude that buys
+a FULL TURN of phase, interpolated off the measured curve. ``stark_amp`` is a factor
+of the stark op's baked amplitude, so what an operator can act on is the ABSOLUTE
+amplitude: a probe that reports the baked value (``probe_stark_amp``) gets it
+attached as the ``digital_amp`` coordinate, drawn as a secondary axis on every
+figure and reported as ``amp_2pi_digital``.
+
 The prep is Y90 (not X90): it starts the equatorial state on +x, aligned with the
 closing bases' phi=0 reference, so at amp=0 the prepared phase is exactly 0 and the
 measured absolute phase is the Stark-induced phase.
 
 RECORD-ONLY: there is no ``update()`` and nothing lands on the device surface;
-the fitted coefficient and the per-amplitude phase live in ``result.fit``.
+the full-turn amplitude, the fitted coefficient and the per-amplitude phase live in
+``result.fit`` and the run's scqat artifacts.
 ``use_state_discrimination`` returns the FPGA-discriminated averaged population
 instead of I/Q (needs a calibrated discriminator).
 """
@@ -45,6 +56,12 @@ from pydantic import Field
 
 from .._scqat import per_qubit_results
 from ..contract import DatasetContract
+# The absolute-amplitude axis, borrowed from the amplitude capability by NAME only:
+# the same physical quantity deserves the same coordinate name and label. Importing
+# the two constants adds no capability — `_derived_capabilities` reads the Parameters
+# MRO, and this window is a factor of a named OPERATION's baked amplitude, not of a
+# target knob, which is exactly why this experiment is not an amplitude carrier.
+from ._capabilities.amplitude import ABS_AMP_COORD, ABS_AMP_LABEL
 from ._capabilities.qubit_reset import QubitResetParameters
 from ._capabilities.state_readout import (
     POPULATION_ALT,
@@ -88,9 +105,21 @@ class QubitStarkPhaseEchoParameters(TargetSelection, AveragingParameters,
 
 
 class QubitStarkPhaseEchoResult(Result):
-    """``fit[target]``: ``stark_coeff_rad_per_amp2`` (phase per amp², the Stark
-    coefficient) and ``intercept_rad``. Record-only: no ``update()``, nothing
-    written to the device."""
+    """``fit[target]``: ``amp_2pi_factor`` — the amplitude FACTOR that buys a full
+    turn of AC-Stark phase, read off the MEASURED phase curve — plus
+    ``amp_2pi_digital`` (the same point as an absolute amplitude, NaN when the probe
+    did not report the stark operation's baked amplitude), and the ``k*a²`` fit's
+    ``stark_coeff_rad_per_amp2`` + ``intercept_rad``.
+
+    **Use ``amp_2pi_factor``, not the coefficient, for any amplitude↔phase
+    conversion.** The quadratic is the small-drive limit; once the Rabi rate
+    approaches ``stark_detuning_hz`` the shift saturates into the dressed-state form
+    and the global fit lands between the two regimes — on 5Q4C it put the full turn
+    at 0.966 where the measured curve (confirmed independently by a Trotter
+    compensation scan) put it at 0.820. The estimator's ``phase`` array, in the
+    metadata JSON and the plot data, is the source for any other target phase.
+
+    Record-only: no ``update()``, nothing written to the device."""
 
 
 @register
@@ -121,6 +150,44 @@ class QubitStarkPhaseEcho(Experiment):
     attach_readout_positions: ClassVar[bool] = True
 
     params: QubitStarkPhaseEchoParameters
+
+    #: ``{target: baked amplitude of the stark operation}``, set by a ``probe()`` that
+    #: resolved it on the vendor pair. The reference is a named OPERATION's own
+    #: amplitude, so no roster field can be read for it and no device snapshot
+    #: recovers it later — the driver that played the tone is the only source.
+    probe_stark_amp: dict[str, float]
+
+    def attach_acquisition_coords(self) -> None:
+        """Attach the ABSOLUTE stark amplitude behind each swept factor as the
+        ``digital_amp`` coordinate, so ``dataset.nc`` answers "what amplitude
+        actually played?" on its own and the estimator can draw it as a second axis.
+
+        A coordinate, not a data variable — ``DatasetContract`` explicitly permits
+        extra coordinates, so the contract does not change. Provenance only: a probe
+        that reported nothing (the simulated backend, or a driver that has not
+        adopted this) simply leaves the axis off, and a target missing from the
+        report leaves a NaN row. A decoration must never fail a measurement that
+        already reached the instrument.
+        """
+        assert self.dataset is not None
+        baked = getattr(self, "probe_stark_amp", None) or {}
+        if not baked:
+            return
+        factors = np.asarray(self.dataset.coords["stark_amp"].values, dtype=float)
+        targets = [str(t) for t in self.dataset["target"].values]
+        values = np.full((len(targets), factors.size), np.nan)
+        for row, target in enumerate(targets):
+            if target in baked:
+                values[row] = factors * float(baked[target])
+        if not np.isfinite(values).any():
+            return
+        self.dataset = self.dataset.assign_coords(
+            {ABS_AMP_COORD: (("target", "stark_amp"), values)})
+        self.dataset[ABS_AMP_COORD].attrs.update(
+            long_name="absolute stark pulse amplitude",
+            units="",  # dimensionless fraction of full scale, like every digital_amp
+            reference_operation=self.params.stark_operation,
+        )
 
     def define_sweep(self) -> dict[str, np.ndarray]:
         return {
@@ -170,13 +237,21 @@ class QubitStarkPhaseEcho(Experiment):
         # scqat's contract: coords stark_amp + meas_basis, and either a real
         # `signal` (discriminated) or complex I/Q (reduced by the estimator).
         prepared = self.dataset.rename(signal_rename(self.dataset))
+        # `digital_amp` is a coord over the swept dim, so per_qubit_results' per-target
+        # split reduces it to the 1-D companion scale the estimator draws as a second
+        # x-axis and reports the full-turn amplitude in.
         results = per_qubit_results(prepared, QubitStarkPhaseEchoEstimator(),
-                                    artifact_dir=self.artifact_dir)
+                                    artifact_dir=self.artifact_dir,
+                                    twin_coord=ABS_AMP_COORD, twin_label=ABS_AMP_LABEL)
 
         result = QubitStarkPhaseEchoResult()
         for target in self.params.targets:
             r = results[target]
             result.fit[target] = {
+                # the actionable answer FIRST: it is the one taken from the measured
+                # curve, and the coefficient below is the one that saturates
+                "amp_2pi_factor": float(r["amp_2pi"]),
+                "amp_2pi_digital": float(r.get("amp_2pi_twin", float("nan"))),
                 "stark_coeff_rad_per_amp2": float(r["stark_coeff"]),
                 "intercept_rad": float(r["intercept"]),
             }

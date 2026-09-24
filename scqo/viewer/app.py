@@ -55,6 +55,7 @@ from ..report import (
     PHYSICAL_FIELD_ORDER,
     campaign_statistics_rows,
 )
+from ..datastore import SNAPSHOT_MANIFEST_FILE, setup_snapshot_dir
 from ..stores import PHYSICAL_FILE
 
 
@@ -255,6 +256,14 @@ def create_app(data_root: str | Path) -> FastAPI:
         figures = [str(Path(p).relative_to(run_dir).as_posix()) for p in loaded["figures"]]
         before = _read_json(run_dir / "device_before.json") or {}
         after = _read_json(run_dir / "device_after.json") or {}
+        # the setup snapshot the run executed against (content-addressed under the
+        # device folder); its manifest names the files the template links
+        snapshot = record.get("setup_snapshot") or {}
+        snapshot_files: list[str] = []
+        if snapshot.get("hash") and snapshot.get("path"):
+            manifest = _read_json(
+                store.data_root / snapshot["path"] / SNAPSHOT_MANIFEST_FILE) or {}
+            snapshot_files = sorted(manifest.get("files") or {})
         diff = []
         for q in sorted(set(before) | set(after)):
             for field in sorted(set(before.get(q, {})) | set(after.get(q, {}))):
@@ -295,6 +304,8 @@ def create_app(data_root: str | Path) -> FastAPI:
                 "suggestions": record.get("suggestions", []),
                 "on_device": on_device,
                 "diff": diff,
+                "snapshot": snapshot,
+                "snapshot_files": snapshot_files,
                 "path": str(run_dir),
             },
         )
@@ -310,6 +321,22 @@ def create_app(data_root: str | Path) -> FastAPI:
         # strict containment: never serve anything outside this run's folder
         if base != target and base not in target.parents:
             raise HTTPException(404, "not in this run's folder")
+        if not target.is_file():
+            raise HTTPException(404, "no such file")
+        return FileResponse(target)
+
+    @app.get("/device/{device}/setup_snapshot/{hash16}/{relpath:path}")
+    def setup_snapshot_file(device: str, hash16: str, relpath: str):
+        try:
+            base = setup_snapshot_dir(store.data_root, device, hash16).resolve()
+        except ValueError:
+            raise HTTPException(404, "no such setup snapshot")
+        root = store.data_root.resolve()
+        target = (base / relpath).resolve()
+        # strict containment (the run_file doctrine): the snapshot folder must sit
+        # under the data_root and the file under the snapshot folder
+        if root not in base.parents or (base != target and base not in target.parents):
+            raise HTTPException(404, "not in this snapshot's folder")
         if not target.is_file():
             raise HTTPException(404, "no such file")
         return FileResponse(target)
@@ -801,6 +828,7 @@ def create_app(data_root: str | Path) -> FastAPI:
              "pending": sum(1 for s in suggestions
                             if s.get("status") == "pending"),
              "problems": manifest.get("suggestion_problems") or [],
+             "notes": manifest.get("suggestion_notes") or [],
              "running": manifest.get("status") == "running",
              "has_png": (Path(loaded["path"]) / STATISTICS_PNG).is_file(),
              "path": loaded["path"]},

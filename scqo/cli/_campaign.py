@@ -13,6 +13,8 @@ from datetime import datetime, timedelta
 from scqo.campaign import stderr_twin
 from scqo.report import MEASURED_QUANTITIES
 
+from ._review import announce_suggestions, review_campaign_interactively
+
 #: Widths of the per-step progress line. Wide enough for the longest registered
 #: experiment name (resonator_spectroscopy_power_chain) so the value column stays
 #: aligned in a log an operator scans for drift.
@@ -243,6 +245,24 @@ def parameter_default_lines(sess, plan) -> list[str]:
     ]
 
 
+def writeback_note_lines(manifest: dict) -> list[str]:
+    """Why the aggregate writeback proposed nothing — ``[]`` when it did.
+
+    Pure and list-returning like :func:`parameter_default_lines`, so the
+    campaign's own tail and ``scqo campaign --show`` render the same text from
+    the same place. The notes are stored on the manifest (``suggestion_notes``)
+    rather than printed once, because the operator who needs them is reading
+    ``--show`` the morning after, when the scrollback is gone. The remedy is a
+    constant here, not repeated into every stored note.
+    """
+    notes = manifest.get("suggestion_notes") or []
+    if not notes:
+        return []
+    return ["writeback notes:"] + [f"  {note}" for note in notes] + [
+        "  the aggregate needs min_n successful repeats: run more, or lower "
+        "[writeback] min_n in the plan"]
+
+
 def format_summary(manifest: dict) -> str:
     """The one-block status header printed above the table."""
     planned = manifest.get("repeat_planned")
@@ -258,6 +278,13 @@ def format_summary(manifest: dict) -> str:
     ]
     if manifest.get("data_path"):
         lines.append(f"saved     {manifest['data_path']}")
+    # The final manifest write failed. The child runs are on disk and already
+    # campaign-stamped, so the campaign is recoverable — say how, rather than
+    # leave the operator reading a summary that quietly was not saved.
+    if manifest.get("persist_error"):
+        lines.append(
+            f"SAVE FAILED {manifest['persist_error']} - the child runs are on disk; "
+            f"rebuild the index with: python -m scqo <data_root>")
     return "\n".join(lines)
 
 
@@ -293,7 +320,39 @@ def execute(sess, plan, *, update: str, tags: list[str], note: str, as_json: boo
         return 2
     render(manifest, as_json=as_json)
     plot_statistics(sess.datastore, manifest)
+    offer_suggestions(sess, manifest)  # last on screen: it is the one action left
     return 0 if manifest.get("status") == "complete" else 1
+
+
+def offer_suggestions(sess, manifest: dict) -> None:
+    """The campaign's accept step: what it proposes, and how to decide it.
+
+    Without this a campaign ended at the statistics table and never mentioned
+    the pending updates it had just written to ``campaign.json`` — so adding
+    ``--repeat N`` to a ``scqo run`` silently removed the accept prompt that
+    command gives. Everything here is stderr; stdout stays ``| jq``-parseable.
+
+    An explanation of an ABSENCE (nothing proposed) prints whether or not there
+    are rows. A campaign run with ``--accept`` has no aggregate suggestions by
+    construction, and says nothing further.
+    """
+    for line in writeback_note_lines(manifest):
+        print(line, file=sys.stderr)
+    rows = manifest.get("suggestions") or []
+    if not rows:
+        return
+    campaign_id = manifest.get("campaign_id")
+    if manifest.get("persist_error"):
+        # Generated in memory but the final write failed: there is no id to
+        # come back to, so say so rather than print a command that cannot work.
+        announce_suggestions(rows, f"saving the campaign FAILED "
+                                   f"({manifest['persist_error']}) - these are NOT stored, "
+                                   f"nothing to accept later")
+    elif not campaign_id:
+        announce_suggestions(rows, "nothing was saved (no data_root configured), so there "
+                                   "is nothing to accept later")
+    else:
+        review_campaign_interactively(sess, campaign_id, rows)
 
 
 def plot_statistics(store, manifest: dict, **kwargs) -> None:

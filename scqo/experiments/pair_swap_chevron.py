@@ -9,6 +9,28 @@ both the resonance amplitude and the full-swap time — the bring-up predecessor
 to :mod:`scqo.experiments.pair_zz_coupler` (find the swap point, then the
 decouple point).
 
+THE COUPLER IS OPTIONAL, and setting it changes what the map means. With
+``coupler_flux_v`` left at None the swept pulse rides one member's own flux line
+and the coupler is never addressed — the directly-coupled bring-up survey this
+experiment started as. Setting it plays the coupler waveform of a named pair
+operation (``swap_operation``) at that FIXED amplitude for the same window, so
+on a QCQ pair — where the swap only exists while the coupler pulse plays — the
+arch reports the resonance amplitude and the full-swap time that hold AT THAT
+COUPLER SETTING, which is the pair of numbers a chain experiment then needs.
+
+WHY THE CHEVRON AND NOT A REPEATED-SWAP MAP. ``qc_n_swap_amp`` and
+``pair_swap_angle`` amplify the same quantities by repeating the swap, and both
+are contaminated by the phase the members accumulate BETWEEN swaps: in the
+single-excitation subspace a round is an exchange followed by a Z rotation, so
+the composite rotation axis tilts off the equator by ``cos(theta)*sin(phi/2)``.
+The transfer peak therefore does not sit at zero detuning but where the pulse's
+own Z accumulation cancels ``phi``, an offset of roughly ``phi / t_pulse`` —
+which for a 40 ns swap and one radian of phase is comparable to the resonance
+linewidth itself. ONE pulse has no between-swap phase to accumulate, so this map
+is phase-free by construction; the price is that the coupler pulse can only be
+stretched on the instrument's 4 ns clock, so engaging it coarsens the duration
+axis (the sub-clock baking the coupler-free path uses plays on one line only).
+
 RECORD-ONLY for the DEVICE: there is no ``update()`` and nothing lands on the
 device surface; the per-map summary lives in ``result.fit``. A scqat estimator
 (``pair_swap_chevron``) now draws the raw joint state populations — a per-pair
@@ -65,12 +87,39 @@ class PairSwapChevronParameters(TargetSelection, AveragingParameters, QubitReset
         1.0, ge=1.0,
         description="Shortest flux-pulse duration (ns; 1 ns is the floor — the driver "
                     "realizes sub-clock granularity by baking, and a zero-length pulse "
-                    "has no waveform).")
+                    "has no waveform). Setting coupler_flux_v raises that floor to 16 ns "
+                    "and the axis to the 4 ns grid: the bake cannot carry a second line.")
     max_swap_time_ns: float = Field(
         100.0, gt=1.0,
         description="Longest flux-pulse duration (ns; quantized to the instrument grid "
                     "by the driver).")
     num_time_points: int = Field(100, gt=4, description="Number of duration points.")
+    coupler_flux_v: float | None = Field(
+        None,
+        description="COUPLER flux-pulse amplitude, held FIXED while the map is swept (V "
+                    "at the DAC, absolute). None — the default — leaves the coupler "
+                    "alone entirely, which is the directly-coupled chevron. Setting it "
+                    "makes this a QCQ tool: the swap exists only while the coupler pulse "
+                    "plays, so the resonance amplitude and full-swap time the arch "
+                    "reports are the ones that hold AT THAT COUPLER SETTING — the "
+                    "phase-free way to get them, since one pulse accumulates no "
+                    "between-swap phase (see the module docstring). The volts convert "
+                    "against the swap_operation macro's own coupler pulse, the SAME "
+                    "reference qc_unidirectional_trotter's swap_coupler_flux uses, so a "
+                    "value found here transfers to the chain unchanged. It COSTS TIME "
+                    "RESOLUTION: the duration axis snaps to the instrument's 4 ns grid "
+                    "from 16 ns up, because a coupler pulse can only be stretched, never "
+                    "baked sub-clock alongside the member's.")
+    swap_operation: str = Field(
+        "partial_swap",
+        description="Which named pair operation supplies the coupler waveform when "
+                    "coupler_flux_v is set (the driver resolves it on the vendor pair). "
+                    "Ignored when coupler_flux_v is None. The driver refuses BY NAME a "
+                    "missing macro, a pair with no coupler, a macro with no coupler-side "
+                    "pulse, a coupler pulse baked at zero amplitude (unsettable — it is "
+                    "the divisor of the volts->amplitude-scale conversion) and a SHAPED "
+                    "coupler waveform, which zero-pads rather than stretching when the "
+                    "swept duration overrides its length.")
     drive_side: Literal["high", "low"] = Field("low", description=DRIVE_SIDE_DESC)
     flux_side: Literal["high", "low"] = Field("low", description=FLUX_SIDE_DESC)
     min_transfer: float = Field(0.3, ge=0.0, le=1.0, description=MIN_TRANSFER_DESC)
@@ -81,8 +130,10 @@ class PairSwapChevronResult(Result):
     which member that is follows from the ``drive_side`` parameter) and its
     ``best_flux_amp_v`` / ``best_swap_time_ns`` coordinates, the per-map ranges
     ``p_high_min/max`` and ``p_low_min/max``, ``p_ee_max`` (the
-    double-excitation witness) and the axis sizes. Record-only: no ``update()``,
-    nothing written to the device."""
+    double-excitation witness), the axis sizes and ``coupler_flux_v`` (the coupler
+    amplitude the map was taken at, None when the coupler was left alone — so a
+    campaign's theta(coupler) curve reads off the run records alone).
+    Record-only: no ``update()``, nothing written to the device."""
 
 
 @register
@@ -95,8 +146,12 @@ class PairSwapChevron(Experiment):
         "pulse (absolute volts) on one member's flux line against its duration, reading "
         "both members' joint populations. The arch of the excitation transfer locates the "
         "resonance amplitude and the full-swap time — the bring-up step before a coupler "
-        "decouple point exists. Record-only diagnostic: the per-map summary lands in "
-        "result.fit and nothing is written back to the device."
+        "decouple point exists. Set coupler_flux_v to hold the pair's COUPLER at a fixed "
+        "amplitude for the same window (the swap_operation macro's own coupler pulse): on "
+        "a QCQ pair that makes the arch report the resonance and full-swap time AT that "
+        "coupler setting, phase-free because a single pulse accumulates no between-swap "
+        "phase — at the cost of a 4 ns duration grid. Record-only diagnostic: the per-map "
+        "summary lands in result.fit and nothing is written back to the device."
     )
     Parameters: ClassVar[type] = PairSwapChevronParameters
     Result: ClassVar[type] = PairSwapChevronResult
@@ -117,14 +172,29 @@ class PairSwapChevron(Experiment):
     params: PairSwapChevronParameters
 
     def define_sweep(self) -> dict[str, np.ndarray]:
+        # The coupler gate lives HERE and not in validate_targets, which sees
+        # only targets: whether this run needs a coupler at all is a PARAMS
+        # question. This still runs before the backend is asked for anything.
+        coupled = self.params.coupler_flux_v is not None
+        if coupled:
+            problems = _coupler_problems(self.device.roster, self.params.targets,
+                                         "nothing to play the coupler pulse on")
+            if problems:
+                raise ValueError("pair_swap_chevron: " + "; ".join(problems))
+        # grid_ns=1: one contiguous pulse, no echo arms to keep whole — and the
+        # driver reaches sub-clock lengths by baking. A coupler pulse cannot ride
+        # that: the bake plays on ONE element, so the coupled path is stretched
+        # `play(duration=)` only, which counts whole 4 ns clock cycles from 16 ns
+        # up. The axis says so, because the axis is what the dataset records.
         return {
             "flux_amp_v": np.linspace(self.params.min_flux_amp_v,
                                       self.params.max_flux_amp_v,
                                       self.params.num_amp_points),
-            # grid_ns=1: one contiguous pulse, no echo arms to keep whole.
-            "swap_time_ns": time_axis_ns(self.params.min_swap_time_ns,
-                                         self.params.max_swap_time_ns,
-                                         self.params.num_time_points, grid_ns=1),
+            "swap_time_ns": time_axis_ns(
+                max(16.0, self.params.min_swap_time_ns) if coupled
+                else self.params.min_swap_time_ns,
+                self.params.max_swap_time_ns,
+                self.params.num_time_points, grid_ns=4 if coupled else 1),
         }
 
     def simulate(self, coords: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
@@ -193,6 +263,10 @@ class PairSwapChevron(Experiment):
             fit, ok = summarize_transfer_map(
                 ds.sel(target=pair), self.params.drive_side,
                 ("flux_amp_v", "swap_time_ns"), self.params.min_transfer)
+            # the setting the map was taken AT, so one run record answers "which
+            # coupler amplitude was this?" without reopening parameters.json
+            fit["coupler_flux_v"] = (float(self.params.coupler_flux_v)
+                                     if self.params.coupler_flux_v is not None else None)
             result.fit[pair] = fit
             result.outcomes[pair] = Outcome.SUCCESSFUL if ok else Outcome.FAILED
         return result
@@ -204,8 +278,10 @@ class PairSwapChevron(Experiment):
         gate is "at least one member can"; the driver refuses the SELECTED
         member pre-probe when it is the one without a flux channel.
 
-        No coupler gate: the swap pulse rides a qubit's own flux line and the
-        coupler is never addressed — unlike ``pair_swap_flux_map``."""
+        No coupler gate HERE: whether the coupler is addressed at all depends on
+        ``coupler_flux_v``, which this hook cannot see — ``define_sweep`` runs the
+        coupler gate when that parameter is set, and a run that leaves it None
+        touches no coupler and must keep working on a pair that has none."""
         return _flux_member_problems(roster, targets,
                                      "nothing to play the swap pulse on")
 
@@ -266,6 +342,24 @@ def summarize_transfer_map(one_pair, drive_side: str, axes: tuple[str, str],
     fit[f"best_{axes[0]}"] = float(one_pair[axes[0]].values[i])
     fit[f"best_{axes[1]}"] = float(one_pair[axes[1]].values[j])
     return fit, fit["best_transfer"] >= min_transfer
+
+
+def _coupler_problems(roster, targets, why: str) -> list[str]:
+    """Shared roster gate: each pair declares a coupler whose flux channel exists.
+
+    Owned here beside ``_flux_member_problems`` and used by both this experiment
+    (from ``define_sweep``, only when ``coupler_flux_v`` is set) and
+    ``pair_swap_flux_map`` (from ``validate_targets``, always) — the message an
+    operator reads must not depend on which of the two asked."""
+    problems = []
+    for pair in targets:
+        entity = roster.entities.get(pair)
+        couplers = (getattr(entity, "roles", {}) or {}).get("coupler", ())
+        if not couplers:
+            problems.append(f"{pair}: declares no coupler role — {why}")
+        elif (couplers[0], "flux") not in roster.defaults:
+            problems.append(f"{pair}: coupler {couplers[0]!r} has no flux channel")
+    return problems
 
 
 def _flux_member_problems(roster, targets, why: str) -> list[str]:

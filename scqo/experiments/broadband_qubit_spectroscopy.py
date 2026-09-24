@@ -53,10 +53,16 @@ class BroadbandQubitSpectroscopyParameters(
         le=10.0,
         description="Absolute saturation-drive power in dBm at the instrument drive port.",
     )
-    drive_len_ns: float | None = Field(
-        None,
-        gt=0,
-        description="Saturation pulse length in ns; None = backend's configured length.",
+    # Not optional, and not a device fallback: an unset length used to mean "the
+    # backend's configured one", which QM had and Qblox did not — so the same
+    # Parameters played a finite pulse on one instrument and a continuous tone on
+    # the other. One number, both backends. Default matches qubit_spectroscopy.
+    drive_len_ns: float = Field(
+        20000.0,
+        ge=4,
+        multiple_of=4,
+        description="Saturation pulse length in ns (multiple of 4). The drive ends "
+        "before the readout tone starts, on both backends.",
     )
     max_peaks: int = Field(
         1,
@@ -163,8 +169,7 @@ class BroadbandQubitSpectroscopy(Experiment):
         with drive_power_boundary(self, self.params.drive_power_dbm):
             self.dataset = self.backend.acquire(self)
         self.Contract.validate(self.dataset)
-        self.result = self.estimate()
-        return self.result
+        return self.run_estimate()
 
     def simulate(self, coords: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         freqs = coords["frequency_hz"]

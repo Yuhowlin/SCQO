@@ -22,7 +22,7 @@ Example ``~/.scqo/config.toml``::
     [lab]
     data_root   = "D:/qpu_data"
     device      = "chipA"            # OPTIONAL lab-default sample (omit on multi-user servers)
-    state_sync  = "pull"             # real backends; "simulated" always forces push
+    state_sync  = "pull"             # "pull" is the only value hardware backends accept today; "simulated" always forces push
     default_tags = ["projX"]         # stamped on every run
 
 **Standing per-experiment parameter defaults** live in a second, optional TOML file —
@@ -64,6 +64,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from .backend import Backend
 from .datastore import setup_state_path
@@ -84,6 +85,9 @@ USER_ENV_VAR = "SCQO_USER_CONFIG"
 #: selected setup of its ACTIVE cooldown cycle — a user names the sample they work
 #: on and (when the cycle has several) which of its setups they measure with.
 USER_ALLOWED_KEYS = ("device", "setup", "default_tags", "parameters_file")
+#: Legal [lab] state_sync values. Hardware backends accept only "pull" today
+#: (make_session refuses the rest, TEMPORARILY); "simulated" is always forced to push.
+STATE_SYNC_VALUES = ("pull", "push")
 
 
 def _load_parameter_defaults(path_setting: str | None) -> tuple[dict[str, dict], Path | None]:
@@ -167,7 +171,7 @@ class LabConfig:
     # a shared [lab] default setup would silently steer every account's instrument;
     # single-setup cycles auto-select, so the common case needs no selection at all).
     setup: str | None = None
-    state_sync: str = "pull"
+    state_sync: Literal["pull", "push"] = "pull"
     default_tags: list[str] = field(default_factory=list)
     parameter_defaults: dict[str, dict] = field(default_factory=dict)  # [experiment] tables from parameters.toml
     source: Path | None = None  # which file was loaded (None = built-in defaults)
@@ -206,12 +210,18 @@ def load(path: str | Path | None = None) -> LabConfig:
             default_tags = list(lab.get("default_tags", []))
             if user.get("default_tags"):
                 default_tags = list(dict.fromkeys([*default_tags, *user["default_tags"]]))
+            state_sync = lab.get("state_sync", "pull")
+            if state_sync not in STATE_SYNC_VALUES:
+                raise ValueError(
+                    f'{candidate}: [lab] state_sync must be "pull" or "push", got {state_sync!r} '
+                    '("pull" is the default; hardware backends accept only "pull" today)'
+                )
             # expanduser: lets a config say data_root = "~/qpu_data" (macOS/Linux idiom)
             return LabConfig(
                 data_root=Path(lab["data_root"]).expanduser() if lab.get("data_root") else None,
                 device=device,
                 setup=setup,
-                state_sync=lab.get("state_sync", "pull"),
+                state_sync=state_sync,
                 default_tags=default_tags,
                 parameter_defaults=parameter_defaults,
                 source=candidate,
@@ -241,8 +251,21 @@ def make_session(backend: Backend, cfg: LabConfig, roster, *, backend_label: str
     design-vs-measured column); the CLI loads it beside components.toml.
     ``simulated`` forces ``state_sync="push"``: an in-memory demo device has
     no vendor truth to pull, so without push its calibrations would silently
-    reset every session.
+    reset every session. Every other ``backend_label`` (a hardware driver) is
+    refused unless ``cfg.state_sync == "pull"`` - TEMPORARY: a push seeds the
+    vendor from ``scqo_state.json`` with no history rows and would clobber
+    hand edits of the vendor config.
     """
+    if backend_label != "simulated" and cfg.state_sync != "pull":
+        raise ValueError(
+            f"lab config {cfg.source or '(built-in defaults)'} sets state_sync = "
+            f"{cfg.state_sync!r} for the {backend_label!r} backend: \"push\" is TEMPORARILY "
+            "disabled on every hardware backend (only the built-in simulated backend runs "
+            "push).\nA push seeds the vendor config from scqo_state.json at session start "
+            "and writes no history rows, so it would silently clobber hand edits of the "
+            "vendor config.\nfix: set state_sync = \"pull\" in that config.toml (or drop the "
+            "key - \"pull\" is the default)."
+        )
     saved = cfg.data_root is not None and cfg.device is not None
     if saved and (not setup_name or not cooldown_id):
         raise ValueError(
@@ -259,7 +282,7 @@ def make_session(backend: Backend, cfg: LabConfig, roster, *, backend_label: str
         scqo_dir=scqo_dir,
         data_root=cfg.data_root if saved else None,
         device_name=cfg.device or "device",
-        state_sync="push" if backend_label == "simulated" else cfg.state_sync,  # type: ignore[arg-type]
+        state_sync="push" if backend_label == "simulated" else cfg.state_sync,
         default_tags=cfg.default_tags,
         parameter_defaults=cfg.parameter_defaults,
         parameter_defaults_source=str(cfg.parameters_source) if cfg.parameters_source else None,

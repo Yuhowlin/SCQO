@@ -28,10 +28,12 @@ several rounds. So ``n_at_max`` reads the phase condition independently of, and
 more sharply than, the peak height — and it only exists if N is swept. The
 estimator reports both.
 
-The chain itself — the two pairs, the relay, the reset and Stark operations, the
-gap, the swap coupler flux — is inherited from
+The chain itself — the two round steps, the relay, the reset and Stark
+operations, the gap, the swap coupler flux — is inherited from
 ``QcUnidirectionalTrotterParameters`` unchanged, so the scan and the run it
-calibrates can never disagree about what the round is.
+calibrates can never disagree about what the round is. That includes the
+``"idle"`` operation: scanning the tone with one step idled is the background
+arm, measuring what the Stark tone does on its own with no transport to move.
 
 READOUT (the unified readout schema): digital, both modes. ``readout_mode=
 "average"`` (default) stores each chain qubit's averaged marginal ``population``;
@@ -62,8 +64,10 @@ from ..experiment import Experiment
 from . import register
 from .qc_unidirectional_trotter import (
     CHAIN_LABEL,
+    IDLE,
     QcUnidirectionalTrotterParameters,
     chain_roles,
+    pair_specs,
 )
 
 
@@ -107,9 +111,11 @@ class QcTrotterCompensationResult(Result):
     own, plus that qubit's own transport summary AT the optimum
     (``p_initial`` / ``p_final`` / ``p_max`` / ``p_min`` / ``n_at_max``).
 
-    The OUTCOME is the chain's: SUCCESSFUL requires an optimum to have been found
-    AND the sink peak there to reach ``min_transfer``. Record-only: no
-    ``update()``, nothing written to the device."""
+    The OUTCOME is the SCAN's: SUCCESSFUL means an optimum was located and its
+    sink peak is finite. There is no floor on how much transport that optimum
+    has to show — the chain experiment dropped its own for the same reason, and
+    a scan run with one step idled is a legitimate background arm. Record-only:
+    no ``update()``, nothing written to the device."""
 
 
 def _trace_summary(rounds: np.ndarray, trace: np.ndarray) -> dict[str, float]:
@@ -221,8 +227,18 @@ class QcTrotterCompensation(Experiment):
         chain = [source, relay, sink]
         rng = np.random.default_rng(stable_seed("qc_trotter_compensation", *targets))
 
+        # An IDLE step exchanges nothing, so its angle is zero. Both angles are
+        # still DRAWN either way, so idling one step leaves the other's angle
+        # exactly where it was and the two runs differ by the one thing under
+        # test. With theta1 = 0 nothing ever leaves the source and the sink map
+        # stays flat at every amplitude — the background arm, as intended.
+        (_first_name, first_op), (_second_name, second_op) = pair_specs(self.params)
         theta1 = float(rng.uniform(0.45, 0.75))
         theta2 = float(rng.uniform(0.45, 0.75))
+        if first_op == IDLE:
+            theta1 = 0.0
+        if second_op == IDLE:
+            theta2 = 0.0
         prep_fidelity = float(rng.uniform(0.94, 0.99))
         relaxation = float(rng.uniform(0.005, 0.02))     # per round, per qubit
         reset_leak = float(rng.uniform(0.005, 0.02))     # what the reset leaves
@@ -306,10 +322,11 @@ class QcTrotterCompensation(Experiment):
             for key in ("best_compensation_amp", "best_sink_p_max", "best_n_at_max",
                         "worst_compensation_amp", "worst_sink_p_max", "contrast")
         }
+        # The verdict is the SCAN's — was an optimum located at all — never a
+        # threshold on how much transport it shows: a run with one step idled is
+        # a legitimate background arm (see the Result docstring).
         sink_peak = run_wide["best_sink_p_max"]
-        chain_ok = bool(analysis.get("success", False)
-                        and np.isfinite(sink_peak)
-                        and sink_peak >= self.params.min_transfer)
+        scan_ok = bool(analysis.get("success", False) and np.isfinite(sink_peak))
 
         result = QcTrotterCompensationResult()
         for name in targets:
@@ -322,7 +339,7 @@ class QcTrotterCompensation(Experiment):
                        else {key: float("nan") for key in
                              ("p_initial", "p_final", "p_max", "p_min", "n_at_max")})
             result.fit[name] = fit
-            result.outcomes[name] = (Outcome.SUCCESSFUL if chain_ok else Outcome.FAILED)
+            result.outcomes[name] = (Outcome.SUCCESSFUL if scan_ok else Outcome.FAILED)
         return result
 
     @classmethod

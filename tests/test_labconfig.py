@@ -429,3 +429,68 @@ def test_make_session_refuses_persistence_without_setup_or_cooldown(tmp_path):
     with pytest.raises(ValueError, match="setup name"):
         labconfig.make_session(backend, cfg, roster, design=design, backend_label="simulated",
                                cooldown_id="cd1")
+
+
+def test_state_sync_value_is_validated_at_parse(tmp_path):
+    """A typo used to pull silently (RecordingDevice treats anything != "push" as
+    pull); the parse now refuses anything outside pull|push, naming the file."""
+    import pytest
+
+    config = tmp_path / "config.toml"
+    for value in ('"pul"', '"Push"', "true"):
+        config.write_text(f"[lab]\nstate_sync = {value}\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="state_sync") as err:
+            labconfig.load(config)
+        msg = str(err.value)
+        assert '"pull"' in msg and '"push"' in msg, value
+        assert str(config) in msg, value  # substring, not match=: Windows backslashes
+
+
+def test_make_session_refuses_push_on_hardware_backends(tmp_path):
+    """push is TEMPORARILY refused for every hardware backend, in ONE place: a
+    push seeds the vendor from scqo_state.json with no history rows and would
+    clobber hand edits of the vendor config. The message names the fix."""
+    import pytest
+
+    from scqo.testing import SimulatedBackend, demo_device
+
+    config = tmp_path / "config.toml"
+    config.write_text('[lab]\nstate_sync = "push"\n', encoding="utf-8")
+    cfg = labconfig.load(config)  # "push" itself still parses (simulated needs it)
+    for label in ("qblox", "qm"):
+        roster, design, vendor = demo_device()
+        with pytest.raises(ValueError, match="state_sync") as err:
+            labconfig.make_session(SimulatedBackend(vendor), cfg, roster, design=design,
+                                   backend_label=label)
+        msg = str(err.value)
+        assert 'state_sync = "pull"' in msg, label
+        assert "TEMPORARILY" in msg, label
+        assert repr(label) in msg, label
+
+
+def test_make_session_push_config_still_forces_push_on_simulated(tmp_path):
+    """The simulated exemption: an in-memory demo has no vendor truth to pull."""
+    from scqo.testing import SimulatedBackend, demo_device
+
+    config = tmp_path / "config.toml"
+    config.write_text('[lab]\nstate_sync = "push"\n', encoding="utf-8")
+    cfg = labconfig.load(config)
+    roster, design, vendor = demo_device()
+    sess = labconfig.make_session(SimulatedBackend(vendor), cfg, roster, design=design,
+                                  backend_label="simulated")
+    assert sess.backend_label == "simulated"
+
+
+def test_make_session_pull_seeds_hardware_backend_from_vendor(tmp_path):
+    """The positive control: a pull config passes the guard and the session
+    seeds its knobs from the vendor (the demo vendor's pi_amp default)."""
+    from scqo.testing import SimulatedBackend, demo_device
+
+    config = tmp_path / "config.toml"
+    config.write_text('[lab]\nstate_sync = "pull"\n', encoding="utf-8")
+    cfg = labconfig.load(config)
+    roster, design, vendor = demo_device()
+    sess = labconfig.make_session(SimulatedBackend(vendor), cfg, roster, design=design,
+                                  backend_label="qm")
+    assert sess.backend_label == "qm"
+    assert sess.device_state()["q0_xy"]["pi_amp"] == 0.1

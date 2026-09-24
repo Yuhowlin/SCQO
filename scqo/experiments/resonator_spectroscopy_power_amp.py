@@ -21,6 +21,7 @@ from pydantic import Field, model_validator
 
 from .._scqat import per_qubit_results
 from ..contract import DatasetContract
+from ..estimate_inputs import acquisition_note, note_acquisition
 from ._capabilities.detuning import (
     ReadoutDetuningSweepParameters,
     readout_detuning_sweep,
@@ -136,8 +137,8 @@ class ResonatorSpectroscopyPowerAmp(Experiment):
         The boundary writes go through ``self.device`` (the Session's
         RecordingDevice): 2 ChangeRecords + coupled echoes per qubit — the same
         audit discipline as the chain-stepped sibling. The swept prefactors are
-        unrecorded acquisition detail, captured once at the top into
-        ``self._top_context`` / ``self._top_amps`` for the dataset/figure.
+        unrecorded acquisition detail, captured once at the top and noted onto
+        the DATASET (``top_context`` / ``top_amps``) for the figure.
         """
         self.sweep_axes = self.define_sweep()
         top = float(self.params.max_power_dbm)
@@ -161,12 +162,14 @@ class ResonatorSpectroscopyPowerAmp(Experiment):
             view.readout_power_dbm = top  # recorded boundary write (+ coupled echo)
 
         # Figure provenance, captured once at the top (the chain stays put during
-        # the sweep). Never fail a measurement over it.
+        # the sweep). Never fail a measurement over it. It lands on the DATASET
+        # below, not on the instance: an offline re-fit builds a fresh instance
+        # and would silently draw a map with no chain provenance at all.
         try:
-            self._top_context = self.backend.power_context(targets) or {}
+            top_context = self.backend.power_context(targets) or {}
         except Exception:  # noqa: BLE001 - provenance only
-            self._top_context = {}
-        self._top_amps: dict[str, float] = {}
+            top_context = {}
+        top_amps: dict[str, float] = {}
         for q in targets:
             try:
                 # RAW vendor view: the DeviceModel ABC has no channel(), so
@@ -174,11 +177,11 @@ class ResonatorSpectroscopyPowerAmp(Experiment):
                 # address the vendor tree by entity name (the power_chain
                 # idiom).
                 name = self.device.roster.default_channel(q, "readout")
-                self._top_amps[q] = float(
+                top_amps[q] = float(
                     getattr(self.backend.device.component(name),
                             "readout_amp"))
             except Exception:  # noqa: BLE001 - provenance only
-                self._top_amps[q] = float("nan")
+                top_amps[q] = float("nan")
 
         try:
             self.dataset = self.backend.acquire(self)
@@ -194,8 +197,9 @@ class ResonatorSpectroscopyPowerAmp(Experiment):
                     "readout chain revert failed for " + "; ".join(revert_errors)
                 )
         self.Contract.validate(self.dataset)
-        self.result = self.estimate()
-        return self.result
+        note_acquisition(self.dataset, "top_context", top_context)
+        note_acquisition(self.dataset, "top_amps", top_amps)
+        return self.run_estimate()
 
     def simulate(self, coords: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         detuning = coords["detuning_hz"]
@@ -296,12 +300,12 @@ class ResonatorSpectroscopyPowerAmp(Experiment):
             power_axis_kind=("target", ["absolute dBm"] * n_q),
             mode_label=("target", ["amplitude sweep (fast)"] * n_q),
         )
-        ctx = getattr(self, "_top_context", {}) or {}
+        ctx = acquisition_note(self.dataset, "top_context", {}) or {}
         if not any(ctx.get(q) for q in targets):
             return prepared
         top = float(self.params.max_power_dbm)
         power = prepared.coords["power"].values.astype(float)
-        top_amps = getattr(self, "_top_amps", {}) or {}
+        top_amps = acquisition_note(self.dataset, "top_amps", {}) or {}
         n_power = power.size
         amp = np.full((n_q, n_power), np.nan)
         setting = np.full((n_q, n_power), np.nan)

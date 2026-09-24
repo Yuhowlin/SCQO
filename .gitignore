@@ -11,7 +11,9 @@ dist/
 .mypy_cache/
 .ruff_cache/
 
-# Environments (the real ones live at D:\github\.venv-* — never inside a repo)
+# Environments. The repo-local .venv IS real here: it is uv's project env and where the
+# tests run (ENVIRONMENTS.md). The shared MEASUREMENT envs live one level up as .venv-*
+# (INSTALL section 1). Both are ignored.
 .venv*/
 venv/
 env/

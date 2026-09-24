@@ -18,11 +18,12 @@ from __future__ import annotations
 
 import json
 import math
-import time
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
+
+from conftest import FakeClock
 
 from scqo import CampaignPlan, CampaignStep, Session, load_campaign_plan
 from scqo.campaign import STAT_KEYS, aggregate, robust_summary, stderr_twin, summarize
@@ -460,18 +461,16 @@ def test_a_partial_failure_is_not_a_failed_repeat(session, monkeypatch):
     assert out["statistics"]["qubit_relaxation"]["q0"]["t1_s"]["n"] == 3
 
 
-def test_interrupt_during_the_cadence_wait_still_finalizes(session, monkeypatch):
-    """The regression for the escape hatch: `time.sleep` sat outside every guard,
-    so Ctrl-C there propagated out of run_campaign and the manifest was left
+def test_interrupt_during_the_cadence_wait_still_finalizes(session):
+    """The regression for the escape hatch: `sleep` sat outside every guard, so
+    Ctrl-C there propagated out of run_campaign and the manifest was left
     status="running" with no ended_at — FOREVER. And with period_s set, the sleep
     is where a campaign spends most of its wall clock, so it is the likely Ctrl-C."""
-    def interrupt(_seconds):
-        raise KeyboardInterrupt
-
-    monkeypatch.setattr(time, "sleep", interrupt)
+    clock = FakeClock(sleep_raises=KeyboardInterrupt())
     out = session.run_campaign(CampaignPlan(
         label="sleepirq", repeat=4, period_s=5, defaults={"targets": ["q0"]},
-        skip_artifacts=True, steps=[{"experiment": "qubit_relaxation"}]))
+        skip_artifacts=True, steps=[{"experiment": "qubit_relaxation"}]),
+        monotonic=clock.monotonic, sleep=clock.sleep)
 
     assert out["status"] == "stopped" and out["stop_reason"] == "interrupted (Ctrl-C)"
     assert out["repeat_done"] == 1  # repeat 0 ran; the wait before repeat 1 was cut
@@ -553,37 +552,41 @@ def test_keyboard_interrupt_finalizes_instead_of_raising(session, monkeypatch):
 
 
 def test_max_duration_stops_an_open_ended_campaign(session):
-    """The budget gates CONTINUING: repeat 0 always runs, however small it is."""
+    """The budget gates CONTINUING: repeat 0 always runs, however small it is.
+
+    On virtual time the budget is exact. With a real clock this used
+    `max_duration_s=0.001` and passed only because a repeat happens to take longer
+    than a millisecond — an assertion about the machine, not the rule.
+
+    Note the ticker is REQUIRED, not decoration: an open-ended campaign whose clock
+    never advances would never reach its budget.
+    """
+    clock = FakeClock()
+    ticker = clock.ticker(per_step=1.0)      # each step costs 1 virtual second
     out = session.run_campaign(CampaignPlan(
-        label="overnight", max_duration_s=0.001, defaults={"targets": ["q0"]},
-        steps=[{"experiment": "qubit_relaxation"}]))
+        label="overnight", max_duration_s=0.5, defaults={"targets": ["q0"]},
+        steps=[{"experiment": "qubit_relaxation"}]),
+        on_progress=ticker, monotonic=clock.monotonic, sleep=clock.sleep)
     assert out["status"] == "stopped" and "max_duration_s" in out["stop_reason"]
     assert out["repeat_planned"] is None and out["repeat_done"] == 1
     assert out["statistics"]["qubit_relaxation"]["q0"]["t1_s"]["n"] == 1
 
 
 def test_period_gates_the_repeat_start(session):
+    """Each repeat starts no earlier than its slot. On virtual time the answer is
+    EXACT — with a real clock this asserted `>= 0.5 - 1e-9`, because the read
+    landed 3e-14 short on Windows CI (v3.8.0)."""
+    clock = FakeClock()
     out = session.run_campaign(CampaignPlan(
         label="cadence", repeat=3, period_s=0.25, defaults={"targets": ["q0"]},
-        skip_artifacts=True, steps=[{"experiment": "qubit_relaxation"}]))
+        skip_artifacts=True, steps=[{"experiment": "qubit_relaxation"}]),
+        monotonic=clock.monotonic, sleep=clock.sleep)
     assert out["repeat_done"] == 3
     starts = [r["elapsed_s"] for r in out["repeats"]]
-    # elapsed_s is `monotonic() - started_mono` read just after the gate waited
-    # until `started_mono + n * period_s`, so it lands a hair either side of the
-    # exact multiple. Windows CI has produced 0.4999999999999716 — short of 0.5
-    # by 3e-14 s, i.e. 28 femtoseconds. Nothing about a sleep, a scheduler or a
-    # clock source operates at that scale, so it is a floating-point artifact of
-    # the read, not a cadence miss. (The obvious candidate, cancellation in
-    # (base + 0.5) - base, is NOT it: 0.5 needs one fractional bit, so that is
-    # exact for every realistic monotonic base. The precise mechanism is
-    # unidentified.)
-    #
-    # Hence a tolerance chosen to be unmistakably sub-physical: at 1 ns it is
-    # ~30000x the observed error and ~1e6x below the 0.25 s period, so it cannot
-    # mask a real gate failure while removing the whole class of artifact.
-    epsilon = 1e-9
-    assert starts[1] >= 0.25 - epsilon
-    assert starts[2] >= 0.5 - epsilon
+    # A simulated repeat costs no virtual time, so each slot is hit dead on and
+    # the gate slept exactly the remainder.
+    assert starts == [0.0, 0.25, 0.5]
+    assert clock.slept == [0.25, 0.25]
 
 
 def test_a_single_repeat_reproduces_a_standalone_run(session):
@@ -652,28 +655,74 @@ def test_a_broken_progress_callback_never_kills_the_campaign(session, capsys):
     assert capsys.readouterr().err.count("progress callback failed") == 1
 
 
-def test_cadence_wait_is_announced_before_sleeping(session, monkeypatch):
-    # The event fires ONLY when the period actually has time left to sleep
-    # (an overrun is recorded instead — session.py's `overran_by_s`), so the
-    # period must be longer than a repeat can plausibly take or the assertion
-    # below is really a statement about how fast the machine is. period_s=0.4
-    # held warm and failed cold — in isolation locally, and on a loaded CI
-    # runner. Stubbing sleep lets the period be large without the test waiting.
-    import time as _time
+def test_cadence_wait_is_announced_before_sleeping(session):
+    """An unannounced pause is indistinguishable from a hang, so the event fires
+    BEFORE the sleep.
 
-    slept: list[float] = []
-    monkeypatch.setattr(_time, "sleep", slept.append)
-
+    The event fires only when the period actually has time left to sleep (an
+    overrun is recorded instead — see the next test). With a real clock that made
+    the assertion a statement about how fast the machine is: `period_s=0.4` held
+    warm and failed cold, both locally in isolation and on a loaded CI runner.
+    Virtual time removes the question.
+    """
+    clock = FakeClock()
     events: list[dict] = []
     session.run_campaign(
         _plan_obj(label="cad", repeat=2, period_s=30, skip_artifacts=True),
-        on_progress=events.append)
+        on_progress=events.append,
+        monotonic=clock.monotonic, sleep=clock.sleep)
     waits = [e for e in events if e["kind"] == "cadence_wait"]
     assert waits and waits[0]["wait_s"] > 0
     # ...and it precedes the repeat_start whose timestamp it delays
     assert events.index(waits[0]) < [e["kind"] for e in events][4:].index("repeat_start") + 4
     # ...and what was announced is what was actually slept
-    assert slept and slept[0] == waits[0]["wait_s"]
+    assert clock.slept == [waits[0]["wait_s"]]
+
+
+def test_the_real_clock_is_still_the_default(session):
+    """Every other cadence test drives a FAKE clock, so this one holds the
+    default honest: called with no clock arguments, run_campaign must still gate
+    on real time.
+
+    Deliberately coarse — it asserts only that a 3-repeat campaign with a 50 ms
+    period takes at least the two periods it owes, which is a floor no machine
+    can undercut. It is NOT a timing assertion about the machine's speed (there is
+    no upper bound), which is the mistake that broke this file twice.
+    """
+    import time as _real_time
+
+    t0 = _real_time.monotonic()
+    out = session.run_campaign(_plan_obj(
+        label="realclock", repeat=3, period_s=0.05, skip_artifacts=True))
+    wall = _real_time.monotonic() - t0
+
+    assert out["repeat_done"] == 3
+    assert wall >= 0.1, "the default clock did not actually sleep"
+
+
+def test_an_overrun_repeat_is_recorded_and_never_padded(session):
+    """A repeat slower than its period reports HOW LATE it was and the next one
+    starts immediately — the period is a floor, not a schedule to catch up to.
+
+    This is the first test of that branch at all. Reaching it needs a repeat that
+    outlasts `period_s`, which against a real clock means genuinely running slow;
+    until the clock became injectable, `overran_by_s` was only ever exercised as a
+    hand-built dict handed to the progress renderer.
+    """
+    clock = FakeClock()
+    ticker = clock.ticker(per_step=3.0)      # each repeat outlasts the 1 s period
+    session.run_campaign(
+        _plan_obj(label="late", repeat=3, period_s=1.0, skip_artifacts=True),
+        on_progress=ticker, monotonic=clock.monotonic, sleep=clock.sleep)
+    events = ticker.events
+
+    starts = [e for e in events if e["kind"] == "repeat_start"]
+    assert len(starts) == 3
+    # repeat 0 owns no slot; 1 and 2 are each 2 s late (3 s spent, 1 s allowed)
+    assert [e["overran_by_s"] for e in starts] == pytest.approx([0.0, 2.0, 4.0])
+    # never padded: an overrun sleeps not at all, and announces nothing
+    assert clock.slept == []
+    assert not [e for e in events if e["kind"] == "cadence_wait"]
 
 
 def test_progress_line_for_a_successful_step():
@@ -879,10 +928,22 @@ def test_finalized_campaign_carries_grouped_suggestions(session):
 
 def test_generation_honours_writeback_stat_and_min_n(session):
     # below the floor: a 2-repeat campaign proposes nothing (min_n default 3)
+    # - and SAYS SO. Until 2026-09-04 it was silent, so a 2- and a 3-repeat
+    # campaign printed byte-identical output and the accept step simply
+    # appeared not to exist.
     out = session.run_campaign(CampaignPlan(
         label="short", repeat=2, defaults={"targets": ["q0"]}, skip_artifacts=True,
         steps=[{"experiment": "qubit_relaxation"}]))
     assert "suggestions" not in out
+    assert out["suggestion_notes"] == [
+        "qubit_relaxation/q0: only 2 successful repeats, below the writeback "
+        "floor min_n=3 - nothing proposed"]
+    assert "suggestion_problems" not in out  # a shortfall is not an error
+    # the reason is PERSISTED: the operator reads it from --show the morning
+    # after, when the overnight scrollback is gone
+    manifest = json.loads(
+        (Path(out["data_path"]) / "campaign.json").read_text(encoding="utf-8"))
+    assert manifest["suggestion_notes"] == out["suggestion_notes"]
 
     # the stat choice picks which number is proposed
     plan = CampaignPlan(label="planted", repeat=5,
@@ -891,14 +952,59 @@ def test_generation_honours_writeback_stat_and_min_n(session):
                         steps=[{"experiment": "qubit_relaxation"}])
     stats = {"qubit_relaxation": {"q0": {
         "t1_s": {"n": 5, "mean": 10.0e-6, "median": 7.0e-6}}}}
-    rows, problems = session._campaign_suggestions(plan, stats)
-    assert not problems
+    rows, problems, notes = session._campaign_suggestions(plan, stats)
+    assert not problems and not notes
     assert {r.field: r.after for r in rows}["t1_s"] == pytest.approx(7.0e-6)
     plan_mean = plan.model_copy(update={"writeback": plan.writeback.model_copy(
         update={"stat": "mean"})})
-    rows, _ = session._campaign_suggestions(plan_mean, stats)
+    rows, _, _ = session._campaign_suggestions(plan_mean, stats)
     assert {r.field: r.after for r in rows}["t1_s"] == pytest.approx(10.0e-6)
     assert all(r.experiment == "qubit_relaxation" for r in rows)
+
+
+def test_notes_are_per_target_never_per_quantity(session):
+    """The granularity guard. The statistics carry uncatalogued fit params
+    (amplitude, offset) that could never become a suggestion, so a per-QUANTITY
+    note would bury the one line that matters in noise."""
+    plan = CampaignPlan(label="planted", repeat=5, defaults={"targets": ["q0"]},
+                        writeback={"min_n": 3},
+                        steps=[{"experiment": "qubit_relaxation"}])
+
+    # something was proposed for this target: silent, however many quantities
+    # fell short beside it
+    _, _, notes = session._campaign_suggestions(plan, {
+        "qubit_relaxation": {"q0": {"t1_s": {"n": 5, "mean": 2.5e-5},
+                                    "amplitude": {"n": 1, "mean": -2.0}}}})
+    assert notes == []
+
+    # the target fit NOTHING: silent too - the statistics table already shows
+    # n=0 and the step line already said FAILED. A note here would read as a
+    # second, different failure.
+    _, _, notes = session._campaign_suggestions(plan, {
+        "qubit_relaxation": {"q0": {"t1_s": {"n": 0, "mean": None}}}})
+    assert notes == []
+
+    # one line per (experiment, target), naming neither quantity
+    _, _, notes = session._campaign_suggestions(plan, {
+        "qubit_relaxation": {"q0": {"t1_s": {"n": 2, "mean": 2.5e-5},
+                                    "amplitude": {"n": 2, "mean": -2.0}}}})
+    assert notes == ["qubit_relaxation/q0: only 2 successful repeats, below "
+                     "the writeback floor min_n=3 - nothing proposed"]
+
+
+def test_a_partial_shortfall_explains_its_own_keyerror(session):
+    """min_n took the ONE key update() needs while leaving others, so the
+    experiment lands in problems as a bare ``KeyError: 't1_s'`` - unactionable
+    on its own. The note beside it names the floor."""
+    plan = CampaignPlan(label="planted", repeat=5, defaults={"targets": ["q0"]},
+                        writeback={"min_n": 3},
+                        steps=[{"experiment": "qubit_relaxation"}])
+    rows, problems, notes = session._campaign_suggestions(plan, {
+        "qubit_relaxation": {"q0": {"t1_s": {"n": 2, "mean": 2.5e-5},
+                                    "amplitude": {"n": 5, "mean": -2.0}}}})
+    assert rows == []
+    assert problems == ["qubit_relaxation: KeyError: 't1_s'"]
+    assert notes == ["qubit_relaxation/q0: dropped below min_n=3: t1_s (n=2)"]
 
 
 def test_generation_filters_nonfinite_and_nonscalar(session):
@@ -908,11 +1014,15 @@ def test_generation_filters_nonfinite_and_nonscalar(session):
     plan = CampaignPlan(label="planted", repeat=5, defaults={"targets": ["q0"]},
                         writeback={"min_n": 3},
                         steps=[{"experiment": "qubit_relaxation"}])
-    rows, problems = session._campaign_suggestions(plan, {
+    rows, problems, notes = session._campaign_suggestions(plan, {
         "qubit_relaxation": {"q0": {"t1_s": {"n": 5, "mean": float("nan")}}}})
     assert rows == [] and problems == []
+    # deliberate non-goal: the statistic RESOLVED (n=5), it is just not a
+    # number. A different cause with a different remedy from the min_n floor,
+    # so the min_n note must not claim it.
+    assert notes == []
 
-    rows, problems = session._campaign_suggestions(plan, {
+    rows, problems, _ = session._campaign_suggestions(plan, {
         "qubit_relaxation": {"q0": {
             "t1_s": {"n": 5, "mean": 2.5e-5},
             "t1_stderr_s": {"n": 5, "mean": None},          # JSON null
@@ -922,6 +1032,23 @@ def test_generation_filters_nonfinite_and_nonscalar(session):
     assert problems == []
     assert {r.field for r in rows} == {"t1_s", "thermalization_time_s"}
     assert all(math.isfinite(r.after) for r in rows)
+
+
+def test_the_shortfall_list_holds_only_numbers_the_floor_alone_held_back(session):
+    """A per-point ARRAY is not something more repeats would have made
+    proposable, so it must not appear in a "dropped below min_n" note beside a
+    real quantity that would have."""
+    plan = CampaignPlan(label="planted", repeat=5, defaults={"targets": ["q0"]},
+                        writeback={"min_n": 3},
+                        steps=[{"experiment": "qubit_relaxation"}])
+    _, problems, notes = session._campaign_suggestions(plan, {
+        "qubit_relaxation": {"q0": {
+            "t1_s": {"n": 2, "mean": 2.5e-5},                 # the real one
+            "per_point": {"n": 0, "n_nonscalar": 5, "mean": None},
+            "amplitude": {"n": 5, "mean": -2.0},              # keeps fit alive
+        }}})
+    assert problems == ["qubit_relaxation: KeyError: 't1_s'"]
+    assert notes == ["qubit_relaxation/q0: dropped below min_n=3: t1_s (n=2)"]
 
 
 def test_a_failing_update_is_noted_and_never_fails_the_campaign(session, monkeypatch):
@@ -982,6 +1109,33 @@ def test_suggest_campaign_regenerates_retroactively(session):
     path.write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(RuntimeError, match="still running"):
         session.suggest_campaign(cid, force=True)
+
+
+def test_regeneration_replaces_the_notes_too(session):
+    """A stale explanation is worse than none: the notes describe the
+    generation that produced the stored rows, so regenerating must overwrite
+    them, not leave the previous run's reason standing."""
+    store = session.datastore
+    out = session.run_campaign(CampaignPlan(
+        label="short", repeat=2, defaults={"targets": ["q0"]}, skip_artifacts=True,
+        steps=[{"experiment": "qubit_relaxation"}]))
+    cid = out["campaign_id"]
+    assert store.load_campaign(cid)["manifest"]["suggestion_notes"]
+
+    # a shortfall campaign has no rows, so --suggest regenerates freely
+    summary = session.suggest_campaign(cid)
+    assert summary["suggestions"] == 0
+    assert summary["notes"] == out["suggestion_notes"]
+    assert store.load_campaign(cid)["manifest"]["suggestion_notes"] == summary["notes"]
+
+    # regenerating over statistics that now clear the floor drops the note
+    path = Path(store.load_campaign(cid)["path"]) / "campaign.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest["statistics"]["qubit_relaxation"]["q0"]["t1_s"]["n"] = 5
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    summary = session.suggest_campaign(cid, force=True)
+    assert summary["suggestions"] > 0 and summary["notes"] == []
+    assert store.load_campaign(cid)["manifest"]["suggestion_notes"] == []
 
 
 def test_suggestion_experiment_field_roundtrips():

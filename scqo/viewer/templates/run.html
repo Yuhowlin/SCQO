@@ -31,6 +31,15 @@ folder <code>{{ path }}</code></p>
   {% for k, v in parameters.items() %}<tr><th>{{ k }}</th><td>{{ v }}</td></tr>{% endfor %}
 </table>
 
+{% if snapshot.hash or snapshot.drift or snapshot.error %}
+<h3>Setup snapshot</h3>
+{% if snapshot.hash %}<p>hash <code>{{ snapshot.hash }}</code>
+  {% for f in snapshot_files %}&middot; <a href="/device/{{ record.device }}/setup_snapshot/{{ snapshot.hash }}/{{ f }}">{{ f }}</a> {% endfor %}</p>
+<p class="muted">re-run this configuration as a new setup: <code>scqo restore {{ record.run_id }} --setup &lt;name&gt;</code></p>{% endif %}
+{% if snapshot.drift %}<div class="error-box"><b>vendor config drifted during the run:</b> {{ snapshot.drift | join(", ") }} (a run-scoped mutation leaked; the snapshot is the state at run START)</div>{% endif %}
+{% if snapshot.error %}<p class="muted">setup snapshot not stored: {{ snapshot.error }}</p>{% endif %}
+{% endif %}
+
 {% if suggestions %}
 <h3>Suggested updates</h3>
 <table>

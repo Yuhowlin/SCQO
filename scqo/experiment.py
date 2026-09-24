@@ -27,6 +27,7 @@ import numpy as np
 import xarray as xr
 
 from .contract import DatasetContract
+from .estimate_inputs import embed, load_frozen
 from .parameters import Parameters
 from .result import Result
 from .catalog import QUBIT_LIKE
@@ -85,6 +86,9 @@ class Experiment(ABC):
         self.result: Result | None = None
         #: where estimate() writes analysis artifacts (scqat metadata/figures).
         self.artifact_dir: Path | None = None
+        #: ``(source, entity, field)`` the last estimate() actually read off
+        #: the frozen surface — provenance for the run record, never inputs.
+        self.inputs_used: list[tuple[str, str, str]] = []
 
     # ------------------------------------------------------------------ physics
     @abstractmethod
@@ -249,5 +253,43 @@ class Experiment(ABC):
         self.Contract.validate(self.dataset)
         self._attach_reference_positions()
         self.attach_acquisition_coords()
-        self.result = self.estimate()
+        return self.run_estimate()
+
+    def run_estimate(self, *, frozen: bool = False) -> Result:
+        """The ONE way ``estimate()`` is invoked — a live run or, later, an
+        offline re-fit of the same dataset. NEVER call ``estimate()`` directly
+        (a ``run()`` override calls this instead; an AST test pins it).
+
+        A live run first EMBEDS the acquisition-time snapshot — device knobs
+        and monitors, physical facts, the datasheet — into ``dataset.nc``, at
+        the moment those reads used to happen: acquire finished, boundary
+        writes reverted, nothing fitted yet. Then, live or offline alike,
+        ``estimate()`` runs against the surfaces rebuilt FROM THAT SNAPSHOT.
+        Stored inputs and analysed inputs therefore cannot disagree — and a
+        frozen surface that diverged from the live one would break the
+        offline suite of every experiment at once, not months later.
+
+        ``frozen=True`` skips the embedding: the dataset already carries one
+        (a re-fit must not overwrite it with today's device).
+        """
+        if self.dataset is None:
+            raise RuntimeError(
+                f"{type(self).__name__}.run_estimate() without a dataset — "
+                f"acquire (or load) one first")
+        if not frozen:
+            embed(self.dataset, experiment=getattr(self, "name", ""),
+                  params=self.params, device=self.device.snapshot(),
+                  physical=(None if self.physical is None
+                            else self.physical.values()),
+                  design=self.design)
+        surface = load_frozen(self.dataset, self.device.roster)
+        live = (self.device, self.physical, self.design)
+        self.device = surface.device
+        self.physical = surface.physical
+        self.design = surface.design
+        try:
+            self.result = self.estimate()
+        finally:
+            self.device, self.physical, self.design = live
+            self.inputs_used = surface.reads()
         return self.result

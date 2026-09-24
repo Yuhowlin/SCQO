@@ -16,7 +16,10 @@ of which change what a reader believes about the chip:
   ``flux_transmon``). They coincide only when the qubit is parked at its sweet
   spot, and every derived quantity below — g, kappa, the dispersive shift,
   EJ/EC, f02/2, the effective temperature — is computed FROM the qubit
-  frequency, so one silent substitution moves all of them.
+  frequency, so one silent substitution moves all of them. The rule equally
+  bars a KNOB from standing in for the FACT it merely seeds: ``f_dress0_hz``
+  is not backfilled from the readout channel's ``readout_freq_hz``, which
+  ``readout_frequency`` deliberately moves off the |0> dip.
 * **A qubit is a qubit.** Channel and resonator names normalise onto their
   target (``q1_xy`` -> ``q1``), but a COMPOSITE (``q1_q2``) is a different
   entity and never folds into its first member — see
@@ -155,8 +158,12 @@ def extract_chip_metrics(ctx: dict, store: Any = None, data_root: Path | None = 
         res, ro, xy, z = f"{q}_res", f"{q}_ro", f"{q}_xy", f"{q}_z"
         camp = campaign_stats.get(q, {})
 
-        f_dress_ghz = _ghz(_first(phys.get((res, "f_dress0_hz")),
-                                  state.get((ro, "readout_freq_hz"))))
+        # f_dress0_hz ONLY. readout_freq_hz is the catalog's own counter-example
+        # to the drive_freq_hz twin below: role "knob", documented as the
+        # operating CHOICE that merely SEEDS from this fact. They agree only
+        # until readout_frequency moves the tone to the fidelity optimum
+        # (between f_dress0 and f_dress1) or readout_power re-solves the chain.
+        f_dress_ghz = _ghz(phys.get((res, "f_dress0_hz")))
         f_bare_ghz = _ghz(phys.get((res, "f_bare_hz")))
         # f_01_hz ONLY — see the module docstring. drive_freq_hz is the
         # instrument twin of the same idle-point quantity, so it is a legal

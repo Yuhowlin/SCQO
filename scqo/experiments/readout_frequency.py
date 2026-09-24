@@ -61,12 +61,25 @@ class ReadoutFrequencyParameters(TargetSelection, QubitResetParameters,
         "fidelity, and the optimum is the largest blob SEPARATION — a faster "
         "scan that peaks at the same detuning but says nothing about how well "
         "the states can actually be told apart.")
+    dip_fit_method: Literal["none", "lorentzian", "circle"] = Field(
+        "none",
+        description="Optional fitting method for dressed resonator frequencies "
+        "(f_dress0, f_dress1) and chi: 'none' (default, optimizes readout "
+        "frequency/fidelity only without dip fitting or updating resonator facts), "
+        "'lorentzian' (fits transmission dips in |IQ|^2), or 'circle' (fits Probst "
+        "notch model in complex S21)."
+    )
+    baseline_order: int = Field(
+        1, ge=0, le=2,
+        description="lorentzian dip_fit_method only: polynomial background order."
+    )
 
 
 class ReadoutFrequencyResult(Result):
     """``fit[target]``: ``readout_freq_hz`` (new), ``frequency_shift_hz``,
     ``best_fidelity`` (NaN in average mode), ``best_separation``,
-    ``old_readout_freq_hz``."""
+    ``old_readout_freq_hz``, plus optional ``f_dress0_hz``, ``f_dress1_hz``,
+    ``chi_hz`` when ``dip_fit_method != 'none'``."""
 
 
 @register
@@ -120,16 +133,22 @@ class ReadoutFrequency(Experiment):
         for k in range(len(targets)):
             # hidden max-contrast detuning, relative to the window MIDPOINT —
             # an asymmetric window must not re-center the truth
-            best_det = center + rng.uniform(-span / 6, span / 6)
-            sep_max = rng.uniform(3.0, 4.0)
-            width = span / 6
+            best_det = center + rng.uniform(-span / 8, span / 8)
+            chi = rng.uniform(span / 15, span / 10)
+            det_0 = best_det + chi
+            det_1 = best_det - chi
+            kappa = span / 4
+            amp = 0.7
+            scale = 5.0
             for j, det in enumerate(detuning):
-                sep = sep_max * np.exp(-((det - best_det) ** 2) / (2 * width**2))
+                s0 = 1.0 - amp / (1.0 + 2j * (det - det_0) / kappa)
+                s1 = 1.0 - amp / (1.0 + 2j * (det - det_1) / kappa)
                 for state in (0, 1):
                     flip = 0.02 if state == 0 else 0.05
                     actual = np.where(rng.random(n_shots) < flip, 1 - state, state)
-                    i_data[k, j, state] = actual * sep + rng.normal(0, 1.0, n_shots)
-                    q_data[k, j, state] = rng.normal(0, 1.0, n_shots)
+                    s_actual = np.where(actual == 0, s0, s1)
+                    i_data[k, j, state] = scale * np.real(s_actual) + rng.normal(0, 1.0, n_shots)
+                    q_data[k, j, state] = scale * np.imag(s_actual) + rng.normal(0, 1.0, n_shots)
         if self.params.readout_mode == "average":
             # the FPGA averages the same shots away; nothing but the mean survives
             return {"I": i_data.mean(axis=-1), "Q": q_data.mean(axis=-1)}
@@ -152,11 +171,26 @@ class ReadoutFrequency(Experiment):
             for q in self.params.targets
         }
 
+        # Attach full_freq absolute frequency coordinate across targets
+        full_freq = np.array([
+            prepared.frequency.values + old_freqs[q]
+            for q in self.params.targets
+        ])
+        prepared = prepared.assign_coords(
+            full_freq=(("target", "frequency"), full_freq)
+        )
+
+        estimator_kwargs = {
+            "method": discrimination_method(self.params.readout_mode),
+            "dip_fit_method": self.params.dip_fit_method,
+            "twin_coord": "full_freq",
+        }
+        if self.params.dip_fit_method == "lorentzian":
+            estimator_kwargs["baseline_order"] = self.params.baseline_order
+
         results = per_qubit_results(
             prepared, ReadoutFreqFidelityEstimator(), artifact_dir=self.artifact_dir,
-            # DERIVED from the acquisition, never a second knob: averaged data
-            # has one point per prepared state, which no mixture can be fitted to
-            method=discrimination_method(self.params.readout_mode),
+            **estimator_kwargs,
         )
 
         result = ReadoutFrequencyResult()
@@ -167,13 +201,40 @@ class ReadoutFrequency(Experiment):
             separation = r.get("best_separation")
             old_freq = old_freqs[qubit]
             ok = bool(r.get("success")) and best is not None and np.isfinite(best)
-            result.fit[qubit] = {
+            fit_entry = {
                 "readout_freq_hz": old_freq + float(best) if ok else float("nan"),
                 "frequency_shift_hz": float(best) if best is not None else float("nan"),
                 "best_fidelity": float(fidelity) if fidelity is not None else float("nan"),
                 "best_separation": float(separation) if separation is not None else float("nan"),
                 "old_readout_freq_hz": old_freq,
             }
+            if self.params.dip_fit_method != "none":
+                det_dress0 = r.get("detuning_dress0")
+                det_dress1 = r.get("detuning_dress1")
+                chi = r.get("chi")
+                f_dress0 = (
+                    old_freq + float(det_dress0)
+                    if det_dress0 is not None and np.isfinite(det_dress0)
+                    else float("nan")
+                )
+                f_dress1 = (
+                    old_freq + float(det_dress1)
+                    if det_dress1 is not None and np.isfinite(det_dress1)
+                    else float("nan")
+                )
+                chi_val = (
+                    float(chi)
+                    if chi is not None and np.isfinite(chi)
+                    else (
+                        (f_dress0 - f_dress1) / 2.0
+                        if np.isfinite(f_dress0) and np.isfinite(f_dress1)
+                        else float("nan")
+                    )
+                )
+                fit_entry["f_dress0_hz"] = f_dress0
+                fit_entry["f_dress1_hz"] = f_dress1
+                fit_entry["chi_hz"] = chi_val
+            result.fit[qubit] = fit_entry
             result.outcomes[qubit] = Outcome.SUCCESSFUL if ok else Outcome.FAILED
         return result
 
@@ -184,6 +245,11 @@ class ReadoutFrequency(Experiment):
             if self.result.outcomes[qubit] is Outcome.SUCCESSFUL:
                 self.device.channel(qubit, "readout").readout_freq_hz = (
                     fit["readout_freq_hz"])
+                if self.params.dip_fit_method != "none":
+                    res_view = self.device.component(self.device.resonator_of(qubit))
+                    for field in ("f_dress1_hz", "chi_hz", "f_dress0_hz"):
+                        if field in fit and np.isfinite(fit[field]):
+                            setattr(res_view, field, fit[field])
 
     def probe(self):  # pragma: no cover - driver half
         raise NotImplementedError("a driver backend supplies probe()")

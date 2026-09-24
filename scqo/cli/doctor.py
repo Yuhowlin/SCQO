@@ -21,13 +21,10 @@ from pathlib import Path
 
 OK, WARN, FAIL = "OK", "WARN", "FAIL"
 
-_EXPECTED_FILES = {"qblox": ("dut_config.json", "hw_config.json"),
-                   "qm": ("state.json", "wiring.json")}
-
-
 def _setup_checks(cfg, backends: dict) -> list[tuple[str, str, str]]:
     """Device -> cycle -> selected setup -> backend/folder checks (the run-time chain)."""
     from scqo.datastore import (
+        VENDOR_CONFIG_FILES,
         SetupResolutionError,
         active_cooldown,
         load_cooldowns,
@@ -77,7 +74,7 @@ def _setup_checks(cfg, backends: dict) -> list[tuple[str, str, str]]:
         if not folder.is_dir():
             out.append((FAIL, "instr config", f"{folder} does not exist on this machine"))
         else:
-            missing = [n for n in _EXPECTED_FILES[backend] if not (folder / n).is_file()]
+            missing = [n for n in VENDOR_CONFIG_FILES[backend] if not (folder / n).is_file()]
             if missing:
                 out.append((FAIL, "instr config", f"{folder}: missing {', '.join(missing)} - copy "
                                                   "the vendor files there under canonical names"))
@@ -170,6 +167,16 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
 
     backends = {ep.name: ep.value for ep in entry_points(group="scqo.backends")}
     checks.append((OK, "drivers", f"backends registered: {sorted(backends) or 'none (simulated only)'}"))
+    # A pointer, not a listing: a backend's vendor-only knobs and its operator
+    # CLIs are not scqo subcommands, so `scqo -h` cannot show them and an
+    # operator would otherwise memorize them. Placed BEFORE the config loads on
+    # purpose - there is no cfg, no session and no backend here, so this line
+    # cannot construct one even by accident (doctor's "touches no instrument"
+    # promise), and it still renders when the config is what is broken.
+    checks.append((OK, "vendor knobs",
+                   "vendor-only knobs + a driver's operator CLIs are not scqo "
+                   "subcommands - list your backend's: scqo state --fields "
+                   "(--json for machines)"))
 
     from scqo import load_lab_config
 

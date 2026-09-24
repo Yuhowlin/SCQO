@@ -1,23 +1,30 @@
-"""The concurrent drive+readout window: THE one arithmetic point, both backends.
+"""The saturation/readout anchor arithmetic: THE one point, both backends.
 
-``qubit_spectroscopy_overlap`` runs the saturation drive and the readout tone
-TOGETHER and lets the ADC integrate only after both have been on a while. Three
-times describe that, and every one of them is derived here rather than in a
-probe, so QM and Qblox cannot drift apart on what the same Parameters mean:
+``qubit_spectroscopy`` plays a finite saturation drive and then measures. Where
+the drive sits relative to the readout is one boolean, ``readout_overlap``, and
+the rule is the same sentence in both states:
 
-    t = 0                                     acq_start_ns
-     |                                             |
-     v                                             v
-     ############## readout tone ###########################  tone_len_ns
-     [========= saturation drive =========]                   drive_len_ns
-                                           [==== ADC ====]    integration_ns
+    THE DRIVE **ENDS** AT AN ANCHOR; IT STARTS ``drive_len_ns`` EARLIER.
 
-THE TWO TONES ARE CO-STARTED BY CONSTRUCTION. There is deliberately no
-drive-offset field: both go up at ``t = 0`` (right after the reset), which is
-what each backend's natural idiom already gives — a zero-duration
-``VoltageOffset`` latched immediately before the ``Measure`` on Qblox, a shared
-``align()`` on QM. Nothing is ever emitted at a negative time and neither probe
-needs an offset wait.
+    readout_overlap = False              readout_overlap = True
+    [==== drive ====]                       [======== drive ========]
+                    [## readout ##]   [## readout tone ############]
+                    ^ anchor                                anchor ^
+                                            [acq_start_ns][== ADC ==]
+
+``False`` is the QM ``align()`` written out: the drive is over before the
+readout tone starts, so the line is measured with no readout photons present —
+which is what the experiment assumes when it relies on T1 outlasting the
+readout. ``True`` ends the drive with the tone instead, so the ADC window (which
+sits at the tone's tail, after ``acq_start_ns``) is guaranteed to be covered by
+the drive, and what comes back is the line under measurement conditions.
+
+NOTHING BOUNDS ``drive_len_ns`` AGAINST THE TONE. A 20 us drive against a 2 us
+tone simply starts 18 us before the tone and runs through it. That is why this
+module hands out LEADS rather than a refusal: exactly one of them is non-zero,
+and each backend spends it on whichever element starts second — a ``wait()`` on
+QM, a non-negative ``rel_time`` on Qblox (Qblox subschedules never get
+``_normalize_absolute_timing``, so a negative one is not an option).
 
 WHY THE TONE IS LONGER THAN THE READOUT KNOB: ``acq_start_ns`` delays the ADC,
 so the readout PULSE has to grow by the same amount or the standing
@@ -48,35 +55,42 @@ GRID_NS = 4
 #: ``_depletion.READOUT_DEPLETION_NS_DESC``.
 OVERLAP_FIELD_DESCS = {
     "acq_start_ns": (
-        "How long the readout tone and the saturation drive both run BEFORE the "
-        "ADC starts integrating, ns (multiple of 4). The readout pulse is "
-        "lengthened by this much for the run so the standing "
-        "readout_integration_s window still fits inside it; the readout_duration_s "
-        "knob is never written. 0 = the ADC opens with the readout pulse (cable "
-        "delay aside). Raise it past the resonator's filling time and the qubit's "
-        "driven settling time to integrate a steady state."
+        "How long the readout tone runs BEFORE the ADC starts integrating, ns "
+        "(multiple of 4). The readout pulse is lengthened by this much for the "
+        "run so the standing readout_integration_s window still fits inside it; "
+        "the readout_duration_s knob is never written. Only meaningful with "
+        "readout_overlap=true (a non-zero value is refused otherwise, because "
+        "with the drive already over it would just push the ADC into the tone). "
+        "Raise it past the resonator's filling time and the qubit's driven "
+        "settling time to integrate a steady state."
     ),
     "drive_len_ns": (
-        "Saturation-drive length in ns (multiple of 4), measured from the shared "
-        "tone onset. None = run for the whole readout tone (full overlap), which "
-        "is the normal case. It may not outlast the tone."
+        "Saturation-drive length in ns (multiple of 4). The drive ENDS at the "
+        "readout tone's START when readout_overlap=false, and at its END when "
+        "readout_overlap=true; either way it begins this long before that "
+        "anchor. It is not bounded by the tone — a drive longer than the tone "
+        "simply starts before it."
     ),
 }
 
 
 @dataclass(frozen=True)
 class OverlapWindows:
-    """One target's resolved concurrent-tone timing, all in ns from the shared
-    onset. Probes emit these numbers directly and derive nothing themselves."""
+    """One target's resolved timing, all in ns. Probes emit these numbers
+    directly and derive nothing themselves."""
 
     #: total readout tone length = acq_start_ns + the readout_duration_s knob
     tone_len_ns: float
-    #: ADC integration onset, from the shared tone onset (backend TOF is on top)
+    #: ADC integration onset, from the tone onset (backend TOF is on top)
     acq_start_ns: float
-    #: resolved saturation-drive length (params value, or the whole tone)
+    #: saturation-drive length, straight from the params
     drive_len_ns: float
     #: the standing readout_integration_s knob, for the probes that need it
     integration_ns: float
+    #: how much LATER the readout tone starts than the drive (drive is longer)
+    drive_lead_ns: float
+    #: how much LATER the drive starts than the readout tone (tone is longer)
+    readout_lead_ns: float
 
 
 def _on_grid(name: str, value: float, target: str) -> float:
@@ -100,15 +114,15 @@ def _knob_ns(experiment, target: str, field: str) -> float:
     value = getattr(experiment.device.channel(target, "readout"), field)
     if value is None or not math.isfinite(float(value)):
         raise ValueError(
-            f"{target}: {field} has never been set, so the concurrent readout "
-            f"window is undefined. Set it (`scqo set {target}.{field}=...`) or "
-            f"run the readout calibration that proposes it, then re-run."
+            f"{target}: {field} has never been set, so the readout window is "
+            f"undefined. Set it (`scqo set {target}.{field}=...`) or run the "
+            f"readout calibration that proposes it, then re-run."
         )
     return float(value) * 1e9
 
 
 def overlap_windows(experiment, target: str) -> OverlapWindows:
-    """Resolve one target's concurrent drive+readout windows.
+    """Resolve one target's drive/readout timing.
 
     THE one precedence point, called by every driver probe of this family.
     Reads the neutral knobs through the target's READOUT CHANNEL — never the
@@ -123,23 +137,16 @@ def overlap_windows(experiment, target: str) -> OverlapWindows:
     integration_ns = _knob_ns(experiment, target, "readout_integration_s")
     tone_len_ns = acq_start_ns + readout_ns
 
-    requested = getattr(experiment.params, "drive_len_ns", None)
-    if requested is None:
-        drive_len_ns = tone_len_ns  # full overlap: the drive spans the whole tone
-    else:
-        drive_len_ns = _on_grid("drive_len_ns", requested, target)
-        if drive_len_ns > tone_len_ns:
-            raise ValueError(
-                f"{target}: drive_len_ns={drive_len_ns:g} ns outlasts the "
-                f"{tone_len_ns:g} ns readout tone (acq_start_ns={acq_start_ns:g} + "
-                f"readout_duration_s={readout_ns:g} ns). The drive has to end "
-                f"inside the tone it overlaps — shorten it, or raise "
-                f"acq_start_ns / readout_duration_s."
-            )
+    drive_len_ns = _on_grid("drive_len_ns", experiment.params.drive_len_ns, target)
 
+    # exactly one of these is non-zero (both are 0 when the two are equal); the
+    # element that starts SECOND spends it, which keeps every backend offset
+    # non-negative.
     return OverlapWindows(
         tone_len_ns=tone_len_ns,
         acq_start_ns=acq_start_ns,
         drive_len_ns=drive_len_ns,
         integration_ns=integration_ns,
+        drive_lead_ns=max(0.0, drive_len_ns - tone_len_ns),
+        readout_lead_ns=max(0.0, tone_len_ns - drive_len_ns),
     )

@@ -28,11 +28,14 @@ Three environments, named by **role**, each with its own shell prompt so you alw
 see which one is active. **The one rule: activate `view` for everything except
 actually running a measurement.**
 
+> This section answers *which env do I **measure** in*. *Which env do I **test** in* is a
+> different question with a different answer per repo — [ENVIRONMENTS.md](ENVIRONMENTS.md).
+
 | venv | prompt | contents | activate when you… |
 |---|---|---|---|
 | `<parent>\.venv-view` | `(view)` | scqo `[viewer]` + scqat + datasette + pytest — **no instrument libraries** | look at data (the common case): run-viewer, SQL browser, `scqo find`, `scqo tag`. Works identically on an analysis-only laptop/Mac. |
 | `<parent>\.venv-qblox` | `(qblox)` | the view stack + scqo-qblox + `qblox-scheduler==1.0.0b6` (hardware-proven) | measure on the Qblox cluster: `scqo run`, `scqo state` |
-| `<parent>\.venv-qm` | `(.venv-qm)` | pinned QM stack, py3.11 (`scqo-qm\requirements-qm.lock.txt`) + scqo/scqat/scqo-qm editables | measure on the OPX1000 or use qualibrate — `qm.bat` activates it for you |
+| `<parent>\.venv-qm` | `(.venv-qm)` | pinned QM stack, py3.11 (`scqo-qm\requirements-qm.lock.txt`) + scqo/scqat/scqo-qm editables | measure on a Quantum Machines instrument (OPX1000 or OPX+) or use qualibrate — `qm.bat` activates it for you |
 
 All three import scqo/scqat from the same editable checkouts, so they never drift on
 the neutral layer. `uv` creates standard venvs and downloads Python itself if the
@@ -46,7 +49,7 @@ mkdir -p ~/github && cd ~/github
 git clone https://github.com/shiau109/SCQO.git
 git clone https://github.com/shiau109/scqat.git
 git clone https://github.com/shiau109/scqo-qblox.git    # only if this machine drives the Qblox cluster
-git clone https://github.com/shiau109/scqo-qm.git    # only if this machine drives the OPX1000
+git clone https://github.com/shiau109/scqo-qm.git    # only if this machine drives a QM instrument
 ```
 
 (A repo that is still **private** answers `Repository not found` when the active
@@ -109,9 +112,9 @@ uv pip install --python .venv-view\Scripts\python.exe -e ".\SCQO[viewer]" -e .\s
 # qblox — measurement env for the Qblox cluster
 uv venv .venv-qblox --python 3.12 --prompt qblox
 uv pip install --python .venv-qblox\Scripts\python.exe -e ".\SCQO[viewer]" -e .\scqat -e .\scqo-qblox datasette pytest httpx
-uv pip install --python .venv-qblox\Scripts\python.exe "qblox-scheduler==1.0.0b6"   # exact hardware-proven build (see note)
+uv pip install --python .venv-qblox\Scripts\python.exe "qblox-scheduler==1.0.0b6" "qblox-instruments==1.3.0"   # exact hardware-proven pair (see note)
 
-# qm — measurement env for the OPX1000 (pinned, py3.11)
+# qm — measurement env for Quantum Machines (OPX1000 / OPX+; pinned, py3.11)
 uv venv .venv-qm --python 3.11
 uv pip install --python .venv-qm\Scripts\python.exe -r .\scqo-qm\requirements-qm.lock.txt
 uv pip install --python .venv-qm\Scripts\python.exe -e .\scqat -e .\SCQO -e .\scqo-qm --no-deps
@@ -130,7 +133,14 @@ only non-prerelease is an empty 0.0.0 placeholder that fails to build; the expli
 deliberately after re-validation, never by accidental rebuild. The floor is not cosmetic:
 b4 and b6 *disagree about whether a schedule is legal*, and on 2026-07-26 a probe compiled
 clean offline on one and died on the cluster with the other. Keep this line, the driver's
-pyproject and its CI pin on the same version.)
+pyproject and its CI pin on the same version.
+**`qblox-instruments` is pinned on the same line, and that is why:** pinning only the
+scheduler does not hold it. Rebuilding this env on 2026-09-20 resolved `qblox-instruments`
+to **1.3.1** — released after the pair was proven — while `uv.lock`, the driver's
+`pyproject.toml` comment and `ENVIRONMENTS.md` all say **1.3.0**, the version that goes with
+Cluster firmware 2.1.0. The suite passed at 1.3.1 in both environments, so nothing but an
+explicit version comparison catches it: a recipe that pins one half of a vendor pair stops
+reproducing its own documented environment the moment the other half ships a release.)
 
 **macOS / Linux** — install uv once with `brew install uv` (or
 `curl -LsSf https://astral.sh/uv/install.sh | sh`). An analysis-only machine needs
@@ -168,7 +178,7 @@ when scripting the file use `[IO.File]::WriteAllText($path, $text)` instead.
 data_root   = 'D:\qpu_data'      # all measurement data + registries land here
 device      = "chipA"            # OPTIONAL lab-default sample (omit on multi-user servers)
 default_tags = ["projX"]         # optional; stamped on every run
-# state_sync = "pull"            # optional; real backends only ("simulated" always persists)
+# state_sync = "pull"            # optional; "pull" is the ONLY value hardware setups accept today ("simulated" always persists)
 ```
 
 (macOS/Linux: `data_root = "~/qpu_data"` — `~` is expanded.)
@@ -179,7 +189,7 @@ not by this file):
 | setup `backend =` | device tree | data | notes |
 |---|---|---|---|
 | `"simulated"` | built-in demo qubits (q0/q1) | synthetic | the practice mode; state always persists |
-| `"qblox"` / `"qm"` | real instrument | real | needs the driver repo's venv; QM keeps `state_sync="pull"` |
+| `"qblox"` / `"qm"` | real instrument | real | needs the driver repo's venv; `state_sync` must stay `"pull"` (push is temporarily refused for every hardware backend) |
 
 Optionally describe each sample in `<data_root>\devices.toml` (one table per chip:
 description and provenance notes — instrument-independent, human-facing only;
@@ -188,7 +198,7 @@ overview lists every sample, and a sample's page shows the matching card. All
 samples share ONE `data_root` and ONE index — filter with `--device` / the run
 list's device dropdown.
 
-**Moving a sample to the other instrument** (e.g. chipA from Qblox to the OPX1000)
+**Moving a sample to the other instrument** (e.g. chipA from Qblox to a QM instrument)
 needs **no data action at all** — the folder, index, history and trends follow the
 sample name; runs before/after the move stay distinguishable by their `backend` and
 setup era. The operator's checklist:
@@ -213,10 +223,13 @@ setup era. The operator's checklist:
    the sample; different names would split its trends and history.
 
 State persistence: `"simulated"` setups always persist (push is forced — an
-in-memory demo device has no vendor truth to pull). Real backends default to
+in-memory demo device has no vendor truth to pull). Hardware backends run
 `state_sync = "pull"`: the vendor config is the truth at startup and scqo pushes
-only values it freshly measures. On QM control PCs `"pull"` is mandatory — see
-scqo-qm's CLAUDE.md.
+only values it freshly measures. `"push"` is TEMPORARILY refused for every
+hardware backend (a push would seed the vendor from `scqo_state.json` with no
+history rows and clobber hand edits of the vendor config): a config that sets it
+fails at session start naming the fix, and any other value fails at parse. On QM
+control PCs the driver enforces `"pull"` a second time — see scqo-qm's CLAUDE.md.
 
 Other notes:
 - A temporary alternative config can be selected per shell
@@ -333,7 +346,7 @@ packaging = "PCB v3, Al box"
 [cd8.setup.qblox_main]
 backend = "qblox"                  # qblox | qm | simulated
 
-[cd8.setup.qm_highpower]           # the same sample, also wired to the OPX1000
+[cd8.setup.qm_highpower]           # the same sample, also wired to a QM instrument
 backend = "qm"
 note = "high-power readout line"
 ```
@@ -362,6 +375,10 @@ instrument, so a broken one fails before any instrument time is spent):
 - Starting a NEW cooldown = new folders: copy the vendor files into
   `<newcid>\<setup>\backend_config\` — each cycle keeps its own wiring snapshot,
   which is the registry's whole point.
+- Every run additionally snapshots this folder's content (as the session held it in
+  memory) plus the context's scqo values under `<device>\setup_snapshots\<hash16>\`
+  (content-addressed, stored once per distinct config); `scqo restore <run_id> --setup
+  <name>` rebuilds one as a new setup of the active cycle (TUTORIAL section 4).
 - Setup names are letters/digits/`_`/`-` only (they travel as CLI arguments and
   index values) and are **immutable for the life of their cycle**: renaming one is
   declaring a NEW setup — the accept era guard and run provenance compare names, so
@@ -692,8 +709,19 @@ Windows, macOS and Linux):
 
 ```bash
 cd SCQO
-python -m pytest -q        # expect: all passed (any env works; view is enough)
+uv run --extra viewer pytest -q     # expect: all passed, ZERO skipped
 ```
+
+`--extra viewer` is not optional: the viewer stack is a root EXTRA and `uv run` installs
+only the default dependency-group, so without it the run collects 917 instead of 984 and
+says nothing — `tests/test_viewer.py`'s module-level `importorskip` takes 54 tests with it
+and `tests/test_lab_report.py`'s gates take 13 more.
+
+The shared `(view)` env also works — `.venv-view` carries pytest, httpx and the viewer
+extras. **A driver env does not.** `.venv-qblox` / `.venv-qm` register the driver's
+experiment classes over the core ones, so the suite would pass while exercising the
+driver; `.venv-qm` additionally omits `python-multipart` (§6), silently skipping the
+viewer tests. Which environment for which repo: [ENVIRONMENTS.md](ENVIRONMENTS.md).
 
 ## 4. Self-test against your REAL device config (no hardware needed)
 
@@ -712,7 +740,7 @@ cd <your>\scqo-qblox
 python scripts\check_real_config.py <folder with dut_config*.json + hw_config*.json>
 ```
 
-**QM / OPX1000** — needs the qm env (`.venv-qm\Scripts\Activate.ps1`). Point it at
+**QM (OPX1000 or OPX+)** — needs the qm env (`.venv-qm\Scripts\Activate.ps1`). Point it at
 any folder holding `state.json` + `wiring.json`:
 
 ```powershell
@@ -749,6 +777,8 @@ The rules that make this safe:
   SQLite's WAL mode does not work on network shares. The NAS holds a *mirror*
   refreshed by a scheduled task; the folders are the truth (that's what the backup
   protects) and the index rebuilds anywhere, so it doesn't even need mirroring.
+  `setup_snapshots\` rides along inside each device folder, so the mirror carries the
+  restorable configs too.
 - **One authoritative config per server** (the canonical `data_root`). With one
   login account per student, per-user `~\.scqo\config.toml` silently leaves every
   OTHER account on built-in defaults (simulated, unsaved!) — put the file in a small

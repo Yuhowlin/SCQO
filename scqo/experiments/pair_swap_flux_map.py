@@ -7,10 +7,29 @@ Excite one member, play both flux pulses over the same window, read both members
 out jointly. At a fixed time the transfer draws closed contours, so the map
 shows the swap **spot** on the resonance line and how the coupler bias moves it.
 
+THE COUPLER FLUX IS THE ANGLE KNOB (TUTORIAL section 12), so a column of this map
+— one coupler bias, the transfer swept along the member's flux — is a swap peak
+whose HEIGHT is ``sin^2(theta)`` with ``theta = 2*pi*J*t``. The scqat estimator
+fits that peak per column and turns the map into the ``J(Phi_c)`` calibration
+curve, plus the polynomial through it that locates the decouple (off) point. Two
+consequences worth knowing before reading the numbers:
+
+* ``j_hz`` needs the duration the instrument ACTUALLY played, which is why
+  ``estimate()`` resolves it before calling the estimator. A shaped pulse plays
+  its own native length, which this layer does not know, so such a run reports
+  the dimensionless angle only.
+* An angle past ``pi/2`` folds back under ``arcsin`` and is UNDER-reported. The
+  estimator flags those columns (``n_branch_warn``) and keeps them out of the
+  polynomial rather than unfolding them; the fix is a shorter ``swap_time_ns``,
+  so the whole coupler axis stays under a full swap.
+
 RECORD-ONLY for the DEVICE, exactly like the chevron: no ``update()``, nothing on
-the device surface. A scqat estimator (``pair_swap_flux_map``) draws the raw joint
-state populations (a per-pair 2x2 population figure + plotdata/metadata under
-``analysis/<pair>/``); see that module's docstring for the rationale.
+the device surface. In particular the fitted coupling is NOT proposed as the
+pair's ``j_hz`` fact — it holds at the PULSED coupler/member flux working point,
+not at the standing idle point that field names. The scqat estimator
+(``pair_swap_flux_map``) writes a per-pair 2x2 population figure, a coupling
+figure and a fit-diagnostic figure plus plotdata/metadata under
+``analysis/<pair>/``; see that module's docstring for the rationale.
 """
 
 from __future__ import annotations
@@ -31,6 +50,7 @@ from . import register
 from .pair_swap_chevron import (
     DRIVE_SIDE_DESC,
     MIN_TRANSFER_DESC,
+    _coupler_problems,
     _flux_member_problems,
     _joint_from_roles,
     _role_names,
@@ -42,6 +62,25 @@ FLUX_SIDE_DESC = (
     "Which pair member's flux line carries the swept qubit-flux (y) pulse "
     "(roster roles; the driver maps high/low onto its vendor control/target)."
 )
+
+#: the estimator's SCALAR coupling results, lifted onto ``result.fit``. The
+#: per-coupler curves (``j_hz``, ``theta_rad``, ``branch_warn``, ...) stay in the
+#: estimator's metadata JSON: ``Result.fit`` is a flat scalar surface.
+_COUPLING_KEYS = (
+    "coupler_off_v", "j_at_off_hz", "off_is_interpolated", "j_max_hz",
+    "j_max_coupler_flux_v", "theta_max_rad", "n_j_ok", "n_branch_warn",
+    "n_poly_rows",
+)
+
+
+def _coupling_summary(results: dict) -> dict:
+    """The scalar half of one pair's coupling fit, NaN-filled when absent.
+
+    Degrades rather than raising: the scqat bridge already keeps a run alive
+    through an artifact failure, so a pair whose analysis returned nothing must
+    still produce a complete (if empty) row instead of a KeyError.
+    """
+    return {key: float(results.get(key, float("nan"))) for key in _COUPLING_KEYS}
 
 
 class PairSwapFluxMapParameters(TargetSelection, AveragingParameters, QubitResetParameters):
@@ -90,7 +129,18 @@ class PairSwapFluxMapResult(Result):
     per-map ranges ``p_high_min/max`` and ``p_low_min/max``, ``p_ee_max``, the
     axis sizes, and ``swap_time_ns`` — the duration the instrument ACTUALLY
     played (quantized by the driver), not the one that was asked for.
-    Record-only."""
+
+    Plus the SCALAR half of the coupling fit: ``coupler_off_v`` (the decouple
+    point) with ``j_at_off_hz`` and ``off_is_interpolated`` (0 = the polynomial
+    did not bracket it and the grid minimum was reported instead),
+    ``j_max_hz`` / ``j_max_coupler_flux_v`` / ``theta_max_rad`` (the strongest
+    QUOTABLE coupling — folded columns are excluded), and the counts ``n_j_ok``
+    (columns whose peak fit passed), ``n_branch_warn`` (of those, how many may
+    have folded past a full swap) and ``n_poly_rows`` (what the polynomial saw).
+    Every one of them is NaN when the duration was unknown or nothing fitted.
+    The per-coupler CURVES live in the estimator's metadata JSON.
+
+    Record-only: no ``update()``, nothing written to the device."""
 
 
 @register
@@ -183,26 +233,37 @@ class PairSwapFluxMap(Experiment):
     def estimate(self) -> PairSwapFluxMapResult:
         assert self.dataset is not None, "run() populates self.dataset before estimate()"
         ds = self.dataset.transpose("target", "joint_state", "qubit_flux_v", "coupler_flux_v")
-        # Raw joint-state-population maps -> scqat artifacts (figure + plotdata +
-        # metadata, one folder per pair). Record-only: the SUCCESS verdict below
-        # (min_transfer) stays here; the estimator only draws the populations.
-        from scqat.estimators.pair_swap_flux_map import PairSwapFluxMapEstimator
-        from .._scqat import per_qubit_results
-
-        per_qubit_results(ds, PairSwapFluxMapEstimator(), artifact_dir=self.artifact_dir,
-                          drive_side=self.params.drive_side, flux_side=self.params.flux_side,
-                          per_target_kwargs=_role_names(self.device, self.params.targets))
         # the driver stashes the QUANTIZED duration it actually played; fall back
-        # to what was asked for when no driver ran (simulated backend).
+        # to what was asked for when no driver ran (simulated backend). Resolved
+        # BEFORE the estimator runs because the estimator needs it: theta is a
+        # pure number, but J in Hz is theta/(2*pi*t). A shaped pulse plays its own
+        # native length and leaves this None, and then only the angle is reported.
         played = getattr(self, "_flux_time_ns", None)
         if played is None:
             played = self.params.swap_time_ns
+        # Raw joint-state-population maps + the per-coupler-column coupling fit
+        # -> scqat artifacts (figures + plotdata + metadata, one folder per pair).
+        # Record-only: the SUCCESS verdict below (min_transfer) stays here, and
+        # nothing — j_hz included — is proposed to the device.
+        from scqat.estimators.pair_swap_flux_map import PairSwapFluxMapEstimator
+        from .._scqat import per_qubit_results
+
+        per_pair = per_qubit_results(
+            ds, PairSwapFluxMapEstimator(), artifact_dir=self.artifact_dir,
+            drive_side=self.params.drive_side, flux_side=self.params.flux_side,
+            swap_time_ns=float(played) if played is not None else None,
+            per_target_kwargs=_role_names(self.device, self.params.targets))
         result = PairSwapFluxMapResult()
         for pair in self.params.targets:
             fit, ok = summarize_transfer_map(
                 ds.sel(target=pair), self.params.drive_side,
                 ("qubit_flux_v", "coupler_flux_v"), self.params.min_transfer)
             fit["swap_time_ns"] = float(played) if played is not None else None
+            # Lift the estimator's SCALAR coupling numbers onto the run record, so
+            # find_runs and a campaign aggregate answer "how strong, and where is
+            # the decouple point?" without reopening the artifact folder. The
+            # per-coupler CURVES stay in the metadata JSON — result.fit is scalars.
+            fit.update(_coupling_summary(per_pair.get(pair, {})))
             result.fit[pair] = fit
             result.outcomes[pair] = Outcome.SUCCESSFUL if ok else Outcome.FAILED
         return result
@@ -213,15 +274,8 @@ class PairSwapFluxMap(Experiment):
         same one ``pair_zz_coupler`` needs), and a member flux line for the y
         axis. Which member carries y is a parameter this hook cannot see, so the
         driver refuses the SELECTED member pre-probe."""
-        problems = []
-        for pair in targets:
-            entity = roster.entities.get(pair)
-            couplers = getattr(entity, "roles", {}).get("coupler", ())
-            if not couplers:
-                problems.append(f"{pair}: declares no coupler role — "
-                                f"nothing to sweep on the x axis")
-            elif (couplers[0], "flux") not in roster.defaults:
-                problems.append(f"{pair}: coupler {couplers[0]!r} has no flux channel")
+        problems = _coupler_problems(roster, targets,
+                                     "nothing to sweep on the x axis")
         problems += _flux_member_problems(roster, targets,
                                           "nothing to sweep on the y axis")
         return problems

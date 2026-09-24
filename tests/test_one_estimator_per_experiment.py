@@ -26,13 +26,6 @@ EXPERIMENTS = REPO_ROOT / "scqo" / "experiments"
 
 #: estimator -> (the experiments bound to it, the migration that removes the entry).
 KNOWN_SHARED_BINDINGS: dict[str, tuple[tuple[str, ...], str]] = {
-    "qubit_spectroscopy": (
-        ("qubit_spectroscopy", "qubit_spectroscopy_overlap"),
-        "The overlap variant's line is AC-Stark shifted by the live readout tone — a "
-        "different MODEL that shares a Lorentzian only by coincidence. Migration: its own "
-        "estimator package over the tools/peak_fit reduction, and decide there whether to "
-        "FIT the shift instead of folding it into f_01_hz.",
-    ),
     "readout_fidelity": (
         ("readout_frequency", "readout_power"),
         "Different dataset SHAPES bridged by a `sweep_coord` class attribute, which is why "

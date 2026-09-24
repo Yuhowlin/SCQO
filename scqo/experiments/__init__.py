@@ -172,6 +172,7 @@ from .pair_swap_angle import PairSwapAngle  # noqa: E402
 from .pair_zz_coupler import PairZZCoupler  # noqa: E402
 from .qc_n_stark_amp import QcNStarkAmp  # noqa: E402
 from .qc_n_swap_amp import QcNSwapAmp  # noqa: E402
+from .qc_swap_flux_stark import QcSwapFluxStark  # noqa: E402
 from .qc_unidirectional_trotter import QcUnidirectionalTrotter  # noqa: E402
 from .qc_trotter_compensation import QcTrotterCompensation  # noqa: E402
 from .qubit_ramsey_cryoscope import QubitRamseyCryoscope  # noqa: E402
@@ -198,7 +199,6 @@ from .qubit_spectroscopy_cryoscope import QubitSpectroscopyCryoscope  # noqa: E4
 from .qubit_spectroscopy_flux_pulse import (  # noqa: E402
     QubitSpectroscopyFluxPulse,
 )
-from .qubit_spectroscopy_overlap import QubitSpectroscopyOverlap  # noqa: E402
 from .qubit_sqrb import QubitSQRB  # noqa: E402
 from .qubit_stark_phase_echo import QubitStarkPhaseEcho  # noqa: E402
 from .qubit_t1_ade import QubitT1Ade  # noqa: E402
@@ -236,14 +236,14 @@ __all__ = [
     "CrosstalkCompensatedBenchmark",
     "CrosstalkCancellationTomography",
     "PairSwapAngle", "PairSwapChevron", "PairSwapFluxMap",
-    "PairZZCoupler", "QcNStarkAmp", "QcNSwapAmp", "QcTrotterCompensation",
-    "QcUnidirectionalTrotter",
+    "PairZZCoupler", "QcNStarkAmp", "QcNSwapAmp", "QcSwapFluxStark",
+    "QcTrotterCompensation", "QcUnidirectionalTrotter",
     "QubitRamseyCryoscope", "QubitRamseyPhasor", "QubitDeterministicBenchmarking", "QubitDragAlternating", "QubitDragEquator", "QubitEcho",
     "QubitEchoFluxPulse", "QubitParametricDriveAmp", "QubitParametricDriveTime",
     "QubitParitySwitchContinuous", "QubitParitySwitchDiscrete",
     "QubitPiPulseError", "QubitPowerRabi", "QubitRamsey",
     "QubitRelaxation", "QubitRelaxationFluxPulse", "QubitSQRB",
-    "QubitSpectroscopy", "QubitSpectroscopyCryoscope", "QubitSpectroscopyFluxPulse", "QubitSpectroscopyOverlap",
+    "QubitSpectroscopy", "QubitSpectroscopyCryoscope", "QubitSpectroscopyFluxPulse",
     "QubitStarkPhaseEcho",
     "QubitT1Ade", "QubitT1Bayesian",
     "QubitThermalPopulation", "QubitTomography", "QubitXyzDelay",

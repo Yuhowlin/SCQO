@@ -69,6 +69,10 @@ repeat); the aggregate suggestions appear when it finishes.</p>
 <p class="muted">Deciding stays on the CLI: <code>scqo accept --campaign {{ manifest.campaign_id }}</code>
 (applying calibration knobs needs the live instrument config — the viewer never touches instruments).</p>
 {% endif %}
+{% if notes %}
+<p class="muted">writeback notes: {% for n in notes %}{{ n }}{% if not loop.last %} · {% endif %}{% endfor %}<br>
+the aggregate needs min_n successful repeats: run more, or lower <code>[writeback] min_n</code> in the plan.</p>
+{% endif %}
 {% if problems %}
 <p class="muted">writeback problems: {% for p in problems %}{{ p }}{% if not loop.last %} · {% endif %}{% endfor %}</p>
 {% endif %}

@@ -213,7 +213,10 @@ def build_session(config_path: str | None = None) -> tuple[Session, LabConfig]:
     that instrument's vendor config lives. No device anywhere = the built-in simulated
     demo (nothing saved). Every missing link fails loudly naming the exact fix.
     """
-    cfg = load_lab_config(config_path)
+    try:
+        cfg = load_lab_config(config_path)
+    except (ValueError, FileNotFoundError) as err:  # a broken config must never traceback
+        raise SystemExit(str(err)) from None
     resolved = resolve_device_setup(cfg)
     if resolved is None:
         return _demo_session(cfg)
@@ -227,9 +230,13 @@ def build_session(config_path: str | None = None) -> tuple[Session, LabConfig]:
         if ep.name == family:
             # a factory ImportError propagates with its traceback
             backend = ep.load()(cfg, setup, roster)
-            return make_session(backend, cfg, roster, backend_label=family,
-                                setup_name=name, cooldown_id=cid,
-                                design=design), cfg
+            try:
+                sess = make_session(backend, cfg, roster, backend_label=family,
+                                    setup_name=name, cooldown_id=cid,
+                                    design=design)
+            except ValueError as err:  # a refused config (state_sync) must never traceback
+                raise SystemExit(str(err)) from None
+            return sess, cfg
     provider, venv = SERVED_BY[family]
     raise SystemExit(
         f"device {cfg.device!r} is on backend {family!r} (cycle {cid}, setup {name!r}), "

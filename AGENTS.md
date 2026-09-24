@@ -32,16 +32,23 @@ backend resolves scqo as `{ path = "../SCQO" }`. Clone every repo you touch as a
 ## Setup
 
 ```bash
-cd <parent>
-uv venv .venv --python 3.12
-uv pip install --python .venv/bin/python -e "./SCQO[viewer]" -e ./scqat pytest httpx
+cd SCQO
+uv run --extra viewer pytest -q     # builds SCQO/.venv from uv.lock on first use
 ```
 
-Windows: the interpreter is `.venv\Scripts\python.exe`. More in [INSTALL.md](INSTALL.md) §1.
+That is the whole setup. `[tool.uv.sources]` resolves `scqat` as `{ path = "../scqat",
+editable = true }`, so `uv run` reproduces the sibling editable **from the tracked
+lockfile** — but the clone layout above is still a real prerequisite: without `../scqat`
+present, uv fails with a resolution error naming the missing path.
 
-**Editable installs freeze their recorded version at install time.** After changing
-branches or pulling, re-run the install line — otherwise the metadata reports the old
-version while the code is new, and you will debug a tree that isn't there.
+Which environment for which repo — the answers legitimately differ, and scqo-qm forbids
+`uv run` outright: [ENVIRONMENTS.md](ENVIRONMENTS.md).
+
+**Editable installs freeze their recorded version at install time** — but only the
+hand-built kind (`uv pip install -e`, the lab's shared `.venv-*`). After changing branches
+or pulling, re-run those install lines, or the metadata reports the old version while the
+code is new and you will debug a tree that isn't there. `uv run` re-syncs every invocation
+and does not have this problem.
 
 ## Branch and PR rules — these OVERRIDE CLAUDE.md
 
@@ -66,15 +73,20 @@ Default to the targeted run; the selection map is in [CLAUDE.md](CLAUDE.md) unde
 *Testing discipline*:
 
 ```bash
-python -m pytest tests/test_model_experiments.py -k <stem> -q
+uv run pytest tests/test_model_experiments.py -k <stem> -q
 ```
+
+Run it from the repo root: `uv run` builds and keeps `SCQO/.venv` from `uv.lock`, and that
+env is DRIVER-FREE — which this suite requires. Which environment for which repo, and why
+the answers differ: [ENVIRONMENTS.md](ENVIRONMENTS.md).
 
 `-k` takes the distinctive **stem**, not the registered name. **0 collected means the
 filter was wrong** — widen it, never skip.
 
 Run the **full suite** only for a release or a shared-core edit: `catalog.py`,
 `entities.py`, `roster.py`, `stores.py`, `device.py`, `experiment.py`, `session.py`, or
-a `_capabilities/` mixin.
+a `_capabilities/` mixin — as `uv run --extra viewer pytest -q`, and expect ZERO skips
+(without the extra it silently collects 917 of 984).
 
 **Always report the exact command you ran.** Never describe a targeted run as though it
 proved the whole suite.

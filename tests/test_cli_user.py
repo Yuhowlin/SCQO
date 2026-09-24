@@ -45,7 +45,7 @@ def _overlay(tmp_path: Path, text: str = "") -> Path:
 
 def _scqo_user(tmp_path: Path, config: Path, *args: str, user_env: str | None,
                extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
-    env = {**os.environ, "SCQO_CONFIG": str(config)}
+    env = {**os.environ, "SCQO_CONFIG": str(config), "PYTHONIOENCODING": "utf-8"}
     env.pop("SCQO_USER_CONFIG", None)
     if user_env is not None:
         env["SCQO_USER_CONFIG"] = user_env
@@ -53,7 +53,11 @@ def _scqo_user(tmp_path: Path, config: Path, *args: str, user_env: str | None,
         env.update(extra_env)
     return subprocess.run(
         [sys.executable, "-m", "scqo.cli", "user", *args],
-        capture_output=True, text=True, env=env, cwd=tmp_path,
+        # Both ends of the pipe pinned to UTF-8: the child encodes stdout per
+        # PYTHONIOENCODING (set in some shells here, unset in others) while
+        # text=True decodes with the ANSI codepage (cp950), and any mismatch
+        # kills the reader thread on the first non-ASCII byte -> stdout is None.
+        capture_output=True, text=True, encoding="utf-8", env=env, cwd=tmp_path,
     )
 
 

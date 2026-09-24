@@ -36,13 +36,18 @@ def _env(tmp_path: Path, user_config: str = "none") -> dict:
         + "\n",
         encoding="utf-8",
     )
-    return {**os.environ, "SCQO_CONFIG": str(config), "SCQO_USER_CONFIG": user_config}
+    return {**os.environ, "SCQO_CONFIG": str(config), "SCQO_USER_CONFIG": user_config,
+            "PYTHONIOENCODING": "utf-8"}
 
 
 def _cli(env: dict, tmp_path: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, "-m", "scqo.cli", *args],
-        capture_output=True, text=True, env=env, cwd=tmp_path,
+        # Both ends of the pipe pinned to UTF-8: the child encodes stdout per
+        # PYTHONIOENCODING (set in some shells here, unset in others) while
+        # text=True decodes with the ANSI codepage (cp950), and any mismatch
+        # kills the reader thread on the first non-ASCII byte -> stdout is None.
+        capture_output=True, text=True, encoding="utf-8", env=env, cwd=tmp_path,
     )
 
 
@@ -206,7 +211,7 @@ def test_start_escapes_metadata_and_validates_cycle_id(tmp_path):
     assert not registry.exists()  # refused before any write
 
     proc = _cli(env, tmp_path, "device", "cooldown", "start", "cd1",
-                "--packaging", 'PCB "rev3"', "--note", "D:\qpu\chipA path")
+                "--packaging", 'PCB "rev3"', "--note", r"D:\qpu\chipA path")
     assert proc.returncode == 0, proc.stderr
     show = _cli(env, tmp_path, "device", "cooldown")
     assert show.returncode == 0, show.stderr  # the registry re-parses cleanly

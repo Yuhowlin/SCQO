@@ -21,6 +21,8 @@ from typing import Any, Sequence
 
 import xarray as xr
 
+from .estimate_inputs import strip_attrs
+
 
 def per_qubit_results(
     prepared: xr.Dataset,
@@ -52,6 +54,9 @@ def per_qubit_results(
 
     from scqat.parsers import repetition_data
 
+    # scqat reads DATASETS, not SCQO's embedded acquisition snapshot — and the
+    # two places that copy dataset.attrs into plotdata.nc would carry it along.
+    prepared = strip_attrs(prepared)
     out: dict[str, dict] = {}
     for sq in repetition_data(prepared, repetition_dim="target"):
         qubit_name = sq["target"].values.item()
@@ -104,6 +109,7 @@ def whole_dataset_results(
     """
     import sys
 
+    prepared = strip_attrs(prepared)  # see per_qubit_results
     out_dir = str(artifact_dir / label) if artifact_dir is not None else None
     try:
         results, figures = estimator.analyze(

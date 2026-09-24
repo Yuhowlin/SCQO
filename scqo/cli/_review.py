@@ -54,6 +54,23 @@ def format_table(suggestions: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def announce_suggestions(suggestions: list[dict], trailer: str = "") -> None:
+    """Print the pending-suggestion table on stderr, plus one trailer line.
+
+    The one authority for that block, shared by the review flow and by every
+    caller that shows the table WITHOUT prompting (a finished campaign, a run
+    that could not be saved). The trailer says why the reader is looking at it —
+    the table never varies, the reason always does. ASCII only: this reaches
+    consoles in whatever codepage the lab runs.
+    """
+    if not suggestions:
+        return
+    print(f"\nsuggested updates ({pending_count(suggestions)} pending):", file=sys.stderr)
+    print(format_table(suggestions), file=sys.stderr)
+    if trailer:
+        print(trailer, file=sys.stderr)
+
+
 def parse_selection(text: str, suggestions: list[dict], *, allow_decided: bool = False) -> list[int]:
     """Selection string -> 0-based indices of PENDING suggestions. Raises ValueError
     on anything unrecognized (the prompt loop re-asks). ``allow_decided`` is the
@@ -153,7 +170,7 @@ def review_interactively(
     """
     return _review_core(
         lambda **kw: sess.accept(run_id, **kw),
-        f"scqo accept {run_id}", "run", suggestions,
+        f"scqo accept {run_id}", "run", suggestions, sess=sess,
         force=force, comment=comment, reapply=reapply)
 
 
@@ -165,13 +182,13 @@ def review_campaign_interactively(
     guards over ``Session.accept_campaign``."""
     return _review_core(
         lambda **kw: sess.accept_campaign(campaign_id, **kw),
-        f"scqo accept --campaign {campaign_id}", "campaign", suggestions,
+        f"scqo accept --campaign {campaign_id}", "campaign", suggestions, sess=sess,
         force=force, comment=comment, reapply=reapply)
 
 
 def _review_core(
     accept_fn, decide_cmd: str, noun: str, suggestions: list[dict], *,
-    force: bool = False, comment: str = "", reapply: bool = False,
+    sess=None, force: bool = False, comment: str = "", reapply: bool = False,
 ) -> dict | None:
     """The shared review flow. ``accept_fn(**kwargs)`` proxies the Session
     accept method with its id already bound; ``decide_cmd`` is the paste-ready
@@ -180,13 +197,21 @@ def _review_core(
     container ("run" or "campaign") — read tolerantly here."""
     if not suggestions:
         return None
-    print(f"\nsuggested updates ({pending_count(suggestions)} pending):", file=sys.stderr)
-    print(format_table(suggestions), file=sys.stderr)
+    announce_suggestions(suggestions)
     if not (sys.stdin.isatty() and sys.stderr.isatty()):
         # ASCII only: this line reaches consoles in whatever codepage the lab runs
         print(f"not a terminal - the device is unchanged; decide later with: {decide_cmd}",
               file=sys.stderr)
         return None
+    # About to block on a human. Nothing below needs the instrument — a decision
+    # writes the in-memory config tree and the JSON stores, and the values reach
+    # hardware at the next run, which reconnects — so hand it back rather than
+    # pin it for however long the reader takes. Only backends that hold a
+    # connection BETWEEN acquisitions have anything to release (Qblox does; QM
+    # closes its QuantumMachine per acquisition, the simulated one has none).
+    for released in (sess.release_instruments() if sess is not None else []):
+        print(f"# released {released} before the prompt - the next run reconnects",
+              file=sys.stderr)
     while True:
         answer = _ask(
             "apply which updates? [a]ll / [n]one (default) / rows, entity, field or entity.field: "

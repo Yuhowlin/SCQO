@@ -15,14 +15,19 @@ from pathlib import Path
 
 
 def _scqo(tmp_path: Path, config: Path, *args: str, user: str | None = None) -> subprocess.CompletedProcess:
-    env = {**os.environ, "SCQO_CONFIG": str(config), "SCQO_USER_CONFIG": "none"}
+    env = {**os.environ, "SCQO_CONFIG": str(config), "SCQO_USER_CONFIG": "none",
+           "PYTHONIOENCODING": "utf-8"}
     if user is not None:
         user_file = config.parent / "user.toml"
         user_file.write_text(user, encoding="utf-8")
         env["SCQO_USER_CONFIG"] = str(user_file)
     return subprocess.run(
         [sys.executable, "-m", "scqo.cli", "device", *args],
-        capture_output=True, text=True, env=env, cwd=tmp_path,
+        # Both ends of the pipe pinned to UTF-8: the child encodes stdout per
+        # PYTHONIOENCODING (set in some shells here, unset in others) while
+        # text=True decodes with the ANSI codepage (cp950), and any mismatch
+        # kills the reader thread on the first non-ASCII byte -> stdout is None.
+        capture_output=True, text=True, encoding="utf-8", env=env, cwd=tmp_path,
     )
 
 

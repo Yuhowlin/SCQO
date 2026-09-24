@@ -51,6 +51,7 @@ from ._campaign import (
     format_summary,
     parameter_default_lines,
     plot_statistics,
+    writeback_note_lines,
 )
 from ._review import format_table
 
@@ -228,6 +229,8 @@ def _read_only(args) -> int:
             print(format_table(rows))
             if pending:
                 print(f"decide with: scqo accept --campaign {args.show}")
+        for line in writeback_note_lines(manifest):
+            print(line)
         for problem in manifest.get("suggestion_problems") or []:
             print(f"writeback problem: {problem}")
         if args.plot:

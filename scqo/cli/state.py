@@ -11,8 +11,9 @@ Entities are grouped by KIND (the roster decides what each name is).
     scqo state --physical --history   # ... and its change history (rows carry setup=)
     scqo state --sources              # which run set each CURRENT value (both stores)
     scqo state --fields               # the field catalog per kind + THIS backend's
-                                      #   vendor bindings + its vendor-only inventory
-                                      #   (--json for machines)
+                                      #   vendor bindings, its vendor-only inventory
+                                      #   and its operator commands (--json for
+                                      #   machines)
     scqo state --rule                 # the placement rule: which store owns which
                                       #   kind of value (no config or driver needed)
 """
@@ -77,7 +78,8 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
                         help="where each current value came from: source run / (manual) / (externally changed)")
     parser.add_argument("--fields", action="store_true",
                         help="the field catalog per kind + this backend's "
-                             "vendor bindings and vendor-only parameters")
+                             "vendor bindings, vendor-only parameters and "
+                             "operator commands")
     parser.add_argument("--rule", action="store_true",
                         help="print the placement rule (which store owns which kind of value)")
     parser.add_argument("--json", action="store_true", dest="as_json",
@@ -172,19 +174,52 @@ def _print_state(sess, entity_filter: str | None) -> int:
     return 0
 
 
+def _hook(backend, name, default):
+    """An optional backend catalog hook, resolved the way ``Session`` resolves its.
+
+    ``SimulatedBackend`` is not a ``Backend`` subclass and carries none of these,
+    so a direct call raises ``AttributeError`` on every ``backend = "simulated"``
+    setup - which is what this view did until the operator-command inventory
+    landed beside these three.
+    """
+    fn = getattr(backend, name, None)
+    return fn() if callable(fn) else default
+
+
+def _operator_commands(backend):
+    """``(rows, error)`` - the one hook allowed to fail without failing the view.
+
+    An operator-command inventory is decoration on a catalog view, so a driver
+    that raises here must not cost the operator the bindings table they came for.
+    The failure becomes a payload KEY - never a ``#`` line, which would break
+    ``--json`` - and the view still exits 0. The three catalog hooks above are
+    deliberately NOT wrapped: they feed ``missing_bindings``, and swallowing
+    there would print a false "declares no field bindings" and silence a real
+    drift alarm.
+    """
+    from dataclasses import asdict
+
+    try:
+        return [asdict(c) for c in _hook(backend, "operator_commands", ())], None
+    except Exception as err:
+        return [], f"{type(err).__name__}: {err}"
+
+
 def _fields_payload(sess, cfg) -> dict:
-    """The field catalog per entity KIND + the session backend's declared
-    vendor bindings + its vendor-only inventory. ``missing_bindings`` lists
-    ``kind.field`` pairs the backend neither binds nor declares Unrealized —
-    PER KIND, and only for kinds the backend declares at all: a wholly
-    absent kind (pump channels on a backend with no parametric support) is
-    capability, not drift; its experiments are roster-refused pre-probe."""
+    """The field catalog per entity KIND + the session backend's declared vendor
+    bindings, its vendor-only inventory and its operator commands.
+    ``missing_bindings`` lists ``kind.field`` pairs the backend neither binds nor
+    declares Unrealized — PER KIND, and only for kinds the backend declares at
+    all: a wholly absent kind (pump channels on a backend with no parametric
+    support) is capability, not drift; its experiments are roster-refused
+    pre-probe."""
     from dataclasses import asdict
 
     from ..catalog import CHANNELS, COMPOSITES, MODES
 
-    bindings = sess.backend.field_bindings()
-    unrealized = sess.backend.unrealized()
+    bindings = _hook(sess.backend, "field_bindings", {})
+    unrealized = _hook(sess.backend, "unrealized", {})
+    commands, command_error = _operator_commands(sess.backend)
     kinds = []
     missing: list[str] = []
     for family, catalog in (("mode", MODES), ("composite", COMPOSITES),
@@ -216,18 +251,89 @@ def _fields_payload(sess, cfg) -> dict:
         "cooldown": sess.cooldown_id or None,
         "backend": sess.backend_label,
         "kinds": kinds,
+        # asdict() on purpose: a new VendorOnly attribute reaches --json with no
+        # edit here. Do not replace this with an explicit field list.
         "vendor_only": [
             {"name": name, **asdict(v)}
-            for name, v in sess.backend.vendor_only().items()
+            for name, v in _hook(sess.backend, "vendor_only", {}).items()
         ],
+        "operator_commands": commands,
+        "operator_commands_error": command_error,
         "missing_bindings": missing,
     }
+
+
+def _vendor_only_detail(v) -> list[str]:
+    """The OPERATIONAL sub-lines of one inventory row, in dataclass declaration
+    order so a future attribute has one obvious slot. Same row -> sub-line shape
+    the bindings block uses, two columns in from the doc continuation."""
+    out = []
+    for label, text in (("coupled", ", ".join(v.get("coupled") or ())),
+                        ("edit", v.get("edit") or ""),
+                        ("counterpart", v.get("counterpart") or "")):
+        if text:
+            out.append(f"{'':38s}  {label}: {text}")
+    return out
+
+
+def _vendor_only_lines(payload) -> list[str]:
+    """The backend-unique field inventory, both tiers, as LINES - pure, so tests
+    read these and not a stream (the house pattern: ``_catalog_listing_lines``,
+    ``progress_lines``, ``apply_hint_lines``)."""
+    backend = payload["backend"]
+    rows = payload["vendor_only"]
+    shared = [v for v in rows if v["kind"] != "unique"]
+    unique = [v for v in rows if v["kind"] == "unique"]
+    lines: list[str] = []
+    if shared:
+        lines += ["", f"# {backend}-only parameters (vendor config, untracked by SCQO):"]
+        for v in shared:
+            lines.append(f"{v['name']:28s} {v['unit'] or '-':8s}[{v['kind']}] {v['path']}")
+            lines.append(f"{'':38s}{v['doc']}")
+            lines += _vendor_only_detail(v)
+    if unique:
+        # the lock-in corollary: an experiment touching one of these cannot run
+        # on the other backend (the concept does not exist there)
+        lines += ["", f"# instrument-UNIQUE parameters - experiments touching these "
+                      f"run ONLY on {backend}:"]
+        for v in unique:
+            lines.append(f"{v['name']:28s} {v['unit'] or '-':8s}{v['path']}")
+            lines.append(f"{'':38s}{v['doc']}")
+            lines += _vendor_only_detail(v)
+    return lines
+
+
+def _operator_command_lines(payload) -> list[str]:
+    """The backend's operator-CLI inventory, as LINES.
+
+    The header prints only when there is something to list: an empty section on
+    the simulated backend is noise, and ``scqo doctor``'s pointer is what tells
+    that operator the section exists at all. The name column matches the
+    vendor-only rows, so the two sections share a left edge on a lab console."""
+    backend = payload["backend"]
+    if payload.get("operator_commands_error"):
+        return ["", f"# WARN: {backend} operator_commands failed - "
+                    f"{payload['operator_commands_error']}"]
+    rows = payload.get("operator_commands") or []
+    if not rows:
+        return []
+    lines = ["", f"# {backend} operator commands - vendor tools, run in this "
+                 f"driver's venv, NOT scqo subcommands:"]
+    for c in rows:
+        lines.append(f"{c['name']:28s} {c['command']}")
+        lines.append(f"{'':38s}{c['doc']}")
+        if c.get("options"):
+            lines.append(f"{'':38s}  options: {c['options']}")
+        if c.get("caution"):
+            lines.append(f"{'':38s}  CAUTION: {c['caution']}")
+    return lines
 
 
 def _print_fields(sess, cfg, *, as_json: bool) -> int:
     """The field catalog view, one section per entity KIND. Values are elsewhere
     (`scqo state`); this is schema + where the SELECTED backend realizes each
-    instrument field + the backend-unique untracked inventory."""
+    instrument field + the backend-unique untracked inventory + the vendor
+    operator commands `scqo -h` cannot show."""
     import json
 
     payload = _fields_payload(sess, cfg)
@@ -261,21 +367,10 @@ def _print_fields(sess, cfg, *, as_json: bool) -> int:
                                     ("note", b["note"])):
                     if text:
                         print(f"{'':{indent}s}  {label}: {text}")
-    shared = [v for v in payload["vendor_only"] if v["kind"] != "unique"]
-    unique = [v for v in payload["vendor_only"] if v["kind"] == "unique"]
-    if shared:
-        print(f"\n# {payload['backend']}-only parameters (vendor config, untracked by SCQO):")
-        for v in shared:
-            print(f"{v['name']:28s} {v['unit'] or '-':8s}[{v['kind']}] {v['path']}")
-            print(f"{'':38s}{v['doc']}")
-    if unique:
-        # the lock-in corollary: an experiment touching one of these cannot run
-        # on the other backend (the concept does not exist there)
-        print(f"\n# instrument-UNIQUE parameters - experiments touching these run "
-              f"ONLY on {payload['backend']}:")
-        for v in unique:
-            print(f"{v['name']:28s} {v['unit'] or '-':8s}{v['path']}")
-            print(f"{'':38s}{v['doc']}")
+    for line in _vendor_only_lines(payload):
+        print(line)
+    for line in _operator_command_lines(payload):
+        print(line)
     if payload["missing_bindings"]:
         print("\n# WARN: pushed field(s) neither bound nor declared unrealized here: "
               + ", ".join(payload["missing_bindings"]))

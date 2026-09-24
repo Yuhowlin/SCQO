@@ -121,8 +121,8 @@ def estimator_map() -> tuple[dict[str, list[str]], list[str]]:
     """(estimator -> [experiment names], [experiments binding none]).
 
     Resolved through the MRO, so an experiment that inherits `estimate()` from a
-    sibling (`qubit_spectroscopy_overlap`) is attributed to the estimator it
-    actually runs rather than counted as binding none.
+    parent experiment rather than defining its own is attributed to the estimator
+    it actually runs, not counted as binding none.
     """
     by_module = module_estimators()
     bound: dict[str, list[str]] = {}

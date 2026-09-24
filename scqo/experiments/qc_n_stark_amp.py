@@ -31,11 +31,30 @@ full-information / more-memory trade. ``estimate()`` reduces the shot form to th
 same joint distribution before analysis, so both modes yield identical maps.
 
 RECORD-ONLY for the DEVICE: there is no ``update()`` and nothing lands on the
-device surface; the per-map summary lives in ``result.fit``. A scqat estimator
+device surface; the summary lives in ``result.fit``. The scqat estimator
 (``qc_n_stark_amp``) draws the raw joint state populations — a per-pair 2x2
-population figure plus plotdata/metadata under ``analysis/<pair>/`` — but it only
-VISUALIZES the maps and proposes nothing; the SUCCESS verdict (``min_transfer``)
-is made here in ``estimate()``, not by the estimator.
+population figure plus plotdata/metadata under ``analysis/<pair>/`` — and READS
+THE COMPENSATING STARK AMPLITUDE off the map: at each stark amplitude it measures
+the transfer's oscillation along the swap count, and the compensating amplitude
+is the one whose oscillation is the STRONGEST (contrast is maximal when the
+residual detuning is nulled) and the SLOWEST (the per-swap composite angle, and
+hence the oscillation frequency, bottoms out there). Both criteria, the combined
+pick (also interpolated between swept amplitudes) and its ``theta_eff`` are
+lifted into ``result.fit``; nothing is proposed and nothing is written back, and
+the SUCCESS verdict (``min_transfer``) is still made here in ``estimate()``, not
+by the estimator.
+
+THE READING ASSUMES NO ROW SWAPS BY MORE THAN pi/2 — every period at least TWO
+counts, the Nyquist period of an integer-N axis. Past that an oscillation aliases
+and reads SLOWER the faster it truly is, which inverts the slowest-period
+criterion; a FULL iswap ping-pongs at exactly that limit, so this map wants a
+PARTIAL ``swap_operation`` and a stark window narrow enough to keep the fastest
+row clear of it. Nothing in the data can reveal a violation — an aliased row is
+indistinguishable from a slow one — so the assumption is the OPERATOR's to keep
+and ``min_osc_period`` (in ``fit``) is the dashboard: the map's fastest row in
+counts per cycle, ``pi`` over it being the largest per-swap angle. The 5Q4C q1_q2
+map of 2026-09-08 ran at 2.02 — inside by one percent — and resolved 4.5 counts
+per cycle at its compensation point, where both criteria agreed.
 """
 
 from __future__ import annotations
@@ -67,6 +86,24 @@ from .pair_swap_chevron import (
 )
 
 
+#: the compensation scalars lifted from the scqat estimator's results into
+#: ``fit`` — the pick, each criterion on its own, and how far to trust them.
+COMPENSATION_KEYS = (
+    "compensating_stark_amp", "compensating_stark_amp_refined",
+    "compensating_is_refined", "compensation_score",
+    "compensating_osc_contrast", "compensating_osc_period",
+    "compensating_theta_rad",
+    "max_osc_contrast_stark_amp", "max_osc_contrast",
+    "max_osc_period_stark_amp", "max_osc_period", "min_osc_period",
+    "n_osc_ok", "osc_criteria_agree",
+)
+
+#: counts per cycle the SIMULATED map's fastest row lands on. Two would be pi/2 a
+#: swap — the limit the estimator's period reading assumes no row crosses — so
+#: the offline model stays clear of it, as a real sweep must.
+COUNTS_AT_EDGE = 2.5
+
+
 class QcNStarkAmpParameters(TargetSelection, AveragingParameters,
                             QubitResetParameters, ReadoutModeParameters):
     """Inputs for the N-swap AC-Stark amplitude map. ``targets`` are PAIR components."""
@@ -87,7 +124,12 @@ class QcNStarkAmpParameters(TargetSelection, AveragingParameters,
     swap_operation: str = Field(
         "iswap",
         description="Which named pair operation is repeated each swap, played at its FIXED "
-                    "baked amplitude (the driver resolves it on the vendor pair).")
+                    "baked amplitude (the driver resolves it on the vendor pair). The "
+                    "compensation read-off wants a PARTIAL swap: it measures the transfer's "
+                    "period along the count axis, and a full iswap ping-pongs every other "
+                    "count — the limit past which an oscillation aliases and reads slower "
+                    "the faster it is. Check `min_osc_period` in the result: 2.0 means the "
+                    "sweep ran into that limit.")
     stark_operation: str = Field(
         "stark",
         description="The named XY (RF) operation played on the excited/control member after "
@@ -115,8 +157,24 @@ class QcNStarkAmpResult(Result):
     which member that is follows from the ``drive_side`` parameter) and its
     ``best_stark_amp`` / ``best_swap_count`` coordinates, the per-map marginal
     ranges ``p_high_min/max`` and ``p_low_min/max``, ``p_ee_max`` (the
-    double-excitation witness) and the axis sizes. Record-only: no ``update()``,
-    nothing written to the device."""
+    double-excitation witness) and the axis sizes.
+
+    Plus the compensation read-off lifted from the estimator:
+    ``compensating_stark_amp`` (the swept amplitude that won) and
+    ``compensating_stark_amp_refined`` (the same peak interpolated between swept
+    points, flagged by ``compensating_is_refined``), with their
+    ``compensation_score``, ``compensating_osc_contrast`` /
+    ``compensating_osc_period`` / ``compensating_theta_rad``; each criterion on
+    its own (``max_osc_contrast`` at ``max_osc_contrast_stark_amp``,
+    ``max_osc_period`` at ``max_osc_period_stark_amp``); and how far to trust
+    them — ``n_osc_ok`` (rows fitted), ``osc_criteria_agree``, and
+    ``min_osc_period``, the map's fastest row: at 2.0 counts per cycle the sweep
+    is AT the pi/2-per-swap limit the reading assumes it stays under. The
+    per-amplitude curves behind them stay in the scqat metadata.
+
+    Record-only: no ``update()``, nothing written to the device — and the verdict
+    is still ``min_transfer`` alone, so a map that transfers without oscillating
+    is SUCCESSFUL with NaN compensation fields."""
 
 
 @register
@@ -178,10 +236,15 @@ class QcNStarkAmp(Experiment):
         ``a0`` the compensating amplitude, so the transfer after ``N`` swaps is
         ``(2J)^2/omega^2 * sin^2(pi*omega*N*t_sw)`` with
         ``omega = sqrt(delta(a)^2 + (2J)^2)``. On the compensating amplitude
-        (``delta = 0``) the swap time is a half exchange period, so the excitation
+        (``delta = 0``) the exchange is slowest and fullest, so the excitation
         ping-pongs cleanly with N; off it the contrast drops and the pattern
-        drifts — the error the map amplifies. In shot mode each shot's joint
-        outcome is DRAWN from that distribution instead of averaging it.
+        speeds up and drifts — the error the map amplifies. In shot mode each
+        shot's joint outcome is DRAWN from that distribution instead of averaging
+        it.
+
+        The simulated swap is deliberately PARTIAL and its detuning slope is
+        bounded (``COUNTS_AT_EDGE``), because that is the regime the estimator's
+        reading is defined for — see the class docstring.
         """
         a = coords["stark_amp"]
         n = coords["swap_count"].astype(float)
@@ -195,12 +258,18 @@ class QcNStarkAmp(Experiment):
         for k in range(len(pairs)):
             a0 = float(rng.uniform(a.min() + 0.25 * span, a.min() + 0.75 * span))
             j_hz = float(rng.uniform(3e6, 9e6))
-            # One swap = a half exchange period on compensation, so N swaps ping-pong.
-            t_sw_ns = 1e9 / (4.0 * j_hz)
-            # The detuning slope is drawn RELATIVE to the amplitude grid so the
-            # compensation stripe is a few points wide — i.e. the sweep resolves
-            # it, which is what an operator narrows the window until it does.
-            slope = (2 * j_hz) * float(rng.uniform(0.3, 0.8)) / a_step  # Hz per unit factor
+            # A PARTIAL swap: the analysis reads a period off the count axis and
+            # can only do so while every row stays under pi/2 per swap — two
+            # counts per cycle — so the simulated swap turns by less than that on
+            # compensation and the detuning slope is DERIVED to keep the farthest
+            # row at COUNTS_AT_EDGE. A full swap would put compensation itself at
+            # the limit and alias every detuned row, i.e. simulate the one case
+            # the reading is not defined for.
+            counts_on_compensation = float(rng.uniform(5.0, 8.0))
+            t_sw_ns = 1e9 / (2.0 * j_hz * counts_on_compensation)
+            reach = float(np.max(np.abs(a - a0))) or 1.0
+            slope = (2 * j_hz) * float(np.sqrt(
+                (counts_on_compensation / COUNTS_AT_EDGE) ** 2 - 1.0)) / reach
             n_tau = float(rng.uniform(20.0, 45.0))              # swaps to decohere
             prep = float(rng.uniform(0.94, 0.99))               # pi-pulse fidelity
             therm = float(rng.uniform(0.005, 0.02))             # residual |ee>
@@ -257,15 +326,25 @@ class QcNStarkAmp(Experiment):
         from scqat.estimators.qc_n_stark_amp import QcNStarkAmpEstimator
         from .._scqat import per_qubit_results
 
-        per_qubit_results(ds, QcNStarkAmpEstimator(), artifact_dir=self.artifact_dir,
-                          drive_side=self.params.drive_side, flux_side=self.params.flux_side,
-                          per_target_kwargs=_role_names(self.device, self.params.targets))
+        analysis = per_qubit_results(
+            ds, QcNStarkAmpEstimator(), artifact_dir=self.artifact_dir,
+            drive_side=self.params.drive_side, flux_side=self.params.flux_side,
+            per_target_kwargs=_role_names(self.device, self.params.targets))
+
         result = QcNStarkAmpResult()
         for pair in self.params.targets:
             fit, ok = summarize_transfer_map(
                 ds.sel(target=pair), self.params.drive_side,
                 ("stark_amp", "swap_count"), self.params.min_transfer)
+            # The compensation scalars lifted out of the estimator's results; the
+            # per-amplitude curves themselves stay in the scqat metadata.
+            compensation = analysis.get(pair, {})
+            fit.update({key: float(compensation.get(key, float("nan")))
+                        for key in COMPENSATION_KEYS})
             result.fit[pair] = fit
+            # The verdict is the transfer one, unchanged: this map's job is the
+            # error-amplification picture, and a run that transfers but never
+            # oscillates is a real (NaN-compensation) result, not a failure.
             result.outcomes[pair] = Outcome.SUCCESSFUL if ok else Outcome.FAILED
         return result
 

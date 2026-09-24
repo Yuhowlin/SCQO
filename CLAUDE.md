@@ -47,11 +47,13 @@ under `scqat/estimators/`; never through a second binding.
    `start_readout_detuning_hz`). Likewise `qubit_echo_flux_pulse` and
    `qubit_relaxation_flux_pulse` share `("flux_bias_v","wait_time_ns")` byte-for-byte and
    correctly have their own estimators.
-2. **A shared fit routine is never a shared model.** `qubit_spectroscopy_overlap`'s line is
-   AC-Stark shifted by the live readout tone — different physics — and one Lorentzian fits
-   both only because a shifted Lorentzian is still a Lorentzian. Reusing an estimator on
-   that basis binds a physics claim to a numerical coincidence, which goes silent exactly
-   when it stops holding.
+2. **A shared fit routine is never a shared model.** `qubit_spectroscopy`'s line under
+   `readout_overlap=true` is AC-Stark shifted by the live readout tone — different physics —
+   and one Lorentzian fits both modes only because a shifted Lorentzian is still a
+   Lorentzian. That used to be a SECOND experiment (`qubit_spectroscopy_overlap`) reusing
+   this one's estimator, which bound a physics claim to a numerical coincidence. It was
+   resolved by rule 4 below, not by keeping the second binding: the two are one experiment
+   with a Parameters field selecting the sequence, so one estimator serves them honestly.
 
 **Deciding, first match wins:**
 
@@ -86,7 +88,7 @@ documents Qblox's own `Experiment` ABC, a different class from this one.
 
 | | QM side (was LCHQMDriver) | Qblox side (QBLOX_training reference) |
 |---|---|---|
-| Instrument | Quantum Machines OPX1000 (MW-FEM + LF-FEM) | Qblox Cluster (QCM / QCM-RF / QRM-RF) |
+| Instrument | Quantum Machines: OPX1000 (MW-FEM + LF-FEM) or OPX+ (Octave) | Qblox Cluster (QCM / QCM-RF / QRM-RF) |
 | Low-level API | `qm-qua` (QUA DSL) | `qblox_scheduler` (`Schedule` + `Operations`) |
 | Device model | QUAM — `Quam(FluxTunableQuam)`; qubit = `.xy/.z/.resonator`; param e.g. `q.f_01` | `QuantumDevice` + `BasicTransmonElement`/`FluxTunableTransmonElement`; param e.g. `q.clock_freqs.f01` |
 | Experiment framework | `qualibrate` `QualibrationNode` + `@node.run_action` + web GUI | hand-rolled `Experiment` ABC, notebook-driven, no GUI |
@@ -169,14 +171,31 @@ scqo/
   device.py       # vendor views per CHANNEL KIND (make_view_base) + CompositeView
                   #   (per-operation knobs via read_knob/write_knob) + RecordingDevice
                   #   (every write -> ChangeRecord) + DeviceModel ABC
-  fieldmap.py     # VendorBinding/VendorOnly shapes: the DRIVER-declared field catalog
-                  #   (neutral field -> vendor path/unit/convert DESCRIPTION + the
-                  #   backend-unique inventory) rendered by `scqo state --fields`
+  fieldmap.py     # VendorBinding/VendorOnly/OperatorCommand shapes: the DRIVER-declared
+                  #   field catalog (neutral field -> vendor path/unit/convert
+                  #   DESCRIPTION + the backend-unique inventory, whose coupled/edit/
+                  #   counterpart carry the OPERATIONAL half: what moves with what,
+                  #   what to satisfy before a hand edit, the other vendor's name for
+                  #   it) + the backend's vendor OPERATOR CLIs, which are not scqo
+                  #   subcommands and so cannot appear in `scqo -h`. Both halves
+                  #   rendered by `scqo state --fields`; `scqo doctor` points at it
   suggestions.py  # Suggestion + SuggestionCapture: update() writes become PENDING
                   #   proposals on the run record, routed by ROLE at accept/reject;
                   #   origin="operator" = human-attached via Session.suggest.
                   #   CAMPAIGN-level rows (on campaign.json) additionally carry
                   #   `experiment` — the proposing step; the accept groups by it
+  estimate_inputs.py  # the mirror of suggestions.py, around estimate() instead of
+                  #   update(): embed() writes the acquisition-time snapshot (device
+                  #   knobs+monitors, physical facts, design, parameters) into
+                  #   dataset.nc's global attrs, load_frozen() rebuilds the three
+                  #   read-only surfaces from it, and Experiment.run_estimate() runs
+                  #   estimate() against THOSE — live runs included, so what is stored
+                  #   and what is fitted cannot disagree. FrozenDevice reuses the
+                  #   recording entity views (device.entity_view), so its read
+                  #   semantics are identical by construction; every write is refused
+                  #   by name. note_acquisition() is the home for values run() computes
+                  #   and estimate() needs (never instance state — a re-fit is a fresh
+                  #   instance). scqat never sees the scqo_* attrs (strip_attrs)
   provenance.py   # live-source provenance: which run — or campaign-level accept —
                   #   each CURRENT value traces to (statuses run|campaign|manual|
                   #   external|unrecorded; strict-match, run outranks campaign)
@@ -205,7 +224,9 @@ scqo/
   backend.py      # Backend ABC: .device + .acquire(experiment) -> xarray.Dataset
   experiment.py   # Experiment ABC: physics half (define_sweep/simulate/estimate/update)
                   #   + backend half (probe); kind-based gating (target_kinds) +
-                  #   validate_targets pre-probe hook; knobs via device.channel(t, kind)
+                  #   validate_targets pre-probe hook; knobs via device.channel(t, kind).
+                  #   run_estimate() is the ONE caller of estimate() (see
+                  #   estimate_inputs.py) - a run() override calls it, never estimate()
   _scqat.py       # the one scqat import point (lazy): per-target split + analyze() loop
   session.py      # Session: catalog() / run() / run_campaign() / accept() / reject() /
                   #   suggest() / set_values() / find_runs() / load_run() / tag_run() /
@@ -217,7 +238,8 @@ scqo/
                   #   experiment's update() (SuggestionCapture) -> campaign-level pending
                   #   suggestions; _preflight refuses a plan label shadowing an experiment
                   #   name (exempting the self-named 1-step `scqo run --repeat` shape)
-  datastore.py    # DataStore + RunRecord: every run saved to a folder, indexed in SQLite (rebuildable)
+  datastore.py    # DataStore + RunRecord: every run saved to a folder, indexed in SQLite (rebuildable);
+                  #   setup snapshots content-addressed under <device>/setup_snapshots/<hash16>/
   labconfig.py    # ~/.scqo/config.toml -> LabConfig + make_session (students never edit repos)
   testing.py      # InMemoryDevice + SimulatedBackend + the demo device (REAL
                   #   components.toml/design.toml text parsed by the real loaders)
@@ -234,8 +256,8 @@ scqo/
                   #   self-contained offline HTML with embedded run snapshots /
                   #   two-sheet xlsx / 16:9 PDF document mirroring the offline HTML)
   __main__.py     # `python -m scqo <data_root>` - rebuild the index from the run folders
-  cli/            # the `scqo` command (run/campaign/find/accept/suggest/set/tag/state/
-                  #   user/device/doctor): ONE engine, any-directory;
+  cli/            # the `scqo` command (run/campaign/find/accept/suggest/set/tag/restore/
+                  #   state/user/device/doctor): ONE engine, any-directory;
                   #   the device's SELECTED named setup picks the backend, resolved via
                   #   the scqo.backends entry-point group; a factory is
                   #   build_backend(cfg, setup, roster) - a driver serves a view PER
@@ -350,22 +372,22 @@ catalog-quality and live in the registry, never here: read one with
 `scqo run <name> --help`, or browse by capability with `scqo run --capability <name>`.
 
 ```
-broadband_qubit_spectroscopy        qubit_echo                          qubit_spectroscopy_overlap
-broadband_resonator_spectroscopy    qubit_echo_flux_pulse               qubit_sqrb
-crosstalk_cancellation_tomography   qubit_parametric_drive_amp          qubit_stark_phase_echo
-crosstalk_compensated_benchmark     qubit_parametric_drive_time         qubit_t1_ade
-crosstalk_compensated_sqrb          qubit_parity_switch_continuous      qubit_t1_bayesian
-pair_swap_angle                     qubit_parity_switch_discrete        qubit_thermal_population
-pair_swap_chevron                   qubit_pi_pulse_error                qubit_tomography
-pair_swap_flux_map                  qubit_power_rabi                    qubit_xyz_delay
-pair_zz_coupler                     qubit_ramsey                        readout_frequency
-qc_n_stark_amp                      qubit_ramsey_cryoscope              readout_power
-qc_n_swap_amp                       qubit_ramsey_phasor                 resonator_spectroscopy
-qc_trotter_compensation             qubit_relaxation                    resonator_spectroscopy_flux
-qc_unidirectional_trotter           qubit_relaxation_flux_pulse         resonator_spectroscopy_power_amp
-qubit_deterministic_benchmarking    qubit_spectroscopy                  resonator_spectroscopy_power_chain
-qubit_drag_alternating              qubit_spectroscopy_cryoscope        single_shot_readout
-qubit_drag_equator                  qubit_spectroscopy_flux_pulse       single_shot_readout_gef
+broadband_qubit_spectroscopy        qubit_drag_equator                  qubit_spectroscopy_flux_pulse
+broadband_resonator_spectroscopy    qubit_echo                          qubit_sqrb
+crosstalk_cancellation_tomography   qubit_echo_flux_pulse               qubit_stark_phase_echo
+crosstalk_compensated_benchmark     qubit_parametric_drive_amp          qubit_t1_ade
+crosstalk_compensated_sqrb          qubit_parametric_drive_time         qubit_t1_bayesian
+pair_swap_angle                     qubit_parity_switch_continuous      qubit_thermal_population
+pair_swap_chevron                   qubit_parity_switch_discrete        qubit_tomography
+pair_swap_flux_map                  qubit_pi_pulse_error                qubit_xyz_delay
+pair_zz_coupler                     qubit_power_rabi                    readout_frequency
+qc_n_stark_amp                      qubit_ramsey                        readout_power
+qc_n_swap_amp                       qubit_ramsey_cryoscope              resonator_spectroscopy
+qc_swap_flux_stark                  qubit_ramsey_phasor                 resonator_spectroscopy_flux
+qc_trotter_compensation             qubit_relaxation                    resonator_spectroscopy_power_amp
+qc_unidirectional_trotter           qubit_relaxation_flux_pulse         resonator_spectroscopy_power_chain
+qubit_deterministic_benchmarking    qubit_spectroscopy                  single_shot_readout
+qubit_drag_alternating              qubit_spectroscopy_cryoscope        single_shot_readout_gef
 ```
 <!-- END generated: experiments -->
 
@@ -396,6 +418,7 @@ experiments, or a name in the trailing line, is a KNOWN VIOLATION carried in
 | `power_rabi` | qubit_power_rabi |
 | `qc_n_stark_amp` | qc_n_stark_amp |
 | `qc_n_swap_amp` | qc_n_swap_amp |
+| `qc_swap_flux_stark` | qc_swap_flux_stark |
 | `qc_trotter_compensation` | qc_trotter_compensation |
 | `qc_unidirectional_trotter` | qc_unidirectional_trotter |
 | `qubit_deterministic_benchmarking` | qubit_deterministic_benchmarking |
@@ -406,7 +429,7 @@ experiments, or a name in the trailing line, is a KNOWN VIOLATION carried in
 | `qubit_flux_arch` | qubit_spectroscopy_flux_pulse |
 | `qubit_relaxation` | qubit_relaxation |
 | `qubit_relaxation_flux` | qubit_relaxation_flux_pulse |
-| `qubit_spectroscopy` | qubit_spectroscopy, qubit_spectroscopy_overlap **(shared)** |
+| `qubit_spectroscopy` | qubit_spectroscopy |
 | `qubit_sqrb` | qubit_sqrb |
 | `qubit_stark_phase_echo` | qubit_stark_phase_echo |
 | `qubit_t1_ade` | qubit_t1_ade |
@@ -425,28 +448,44 @@ experiments, or a name in the trailing line, is a KNOWN VIOLATION carried in
 | `zz_interaction` | pair_zz_coupler |
 
 Binds no estimator (fits inline - also a violation): `qubit_pi_pulse_error`.
-Shared bindings: 4 - `qubit_spectroscopy`, `readout_fidelity`, `resonator_spectroscopy_power`, `state_discrimination`.
+Shared bindings: 3 - `readout_fidelity`, `resonator_spectroscopy_power`, `state_discrimination`.
 <!-- END generated: estimator-map -->
 
 ### Datastore (the "find my measurement data" layer)
 `Session(backend, data_root=...)` persists **every** run — raw dataset (`dataset.nc`),
 parameters/result/record JSONs, device before/after snapshots, and the scqat artifacts
 (metadata / plotdata / figure PNGs, per qubit) — under
-`<data_root>/<device>/<YYYY-MM-DD>/<run_id>/`. The **run folder is the truth**;
+`<data_root>/<device>/<YYYY-MM-DD>/<run_id>/`. Every run also references its **setup
+snapshot** — the vendor config as the backend held it in memory at run START (the
+duck-typed `vendor_config_snapshot()` hook, serialised as the driver's `save()` would),
+this context's scqo_state/physical values and a manifest with driver versions —
+content-addressed under `<device>/setup_snapshots/<hash16>/` (a sibling of the day
+folders like `campaigns/`; identical content is stored once, so campaign children cost
+nothing). `record.json` carries `setup_snapshot` (hash, path, and `drift` = vendor files
+that changed DURING the run without being restored, also warned at run time; `{}` on the
+simulated backend). `scqo restore <run_id> --setup <name>` rebuilds a snapshot as a NEW
+named setup of the active cycle for re-running an old configuration. The **run folder is the truth**;
 `<data_root>/index.sqlite` is a disposable cache (`python -m scqo <data_root>`
 rebuilds it). Query with `Session.find_runs(experiment=, target=, tag=, since=, outcome=,...)`,
 reload with `load_run(run_id)` / `datastore.open_dataset(run_id)`. A **campaign**
 persists one extra folder, `<data_root>/<device>/campaigns/<campaign_id>/`
 (`campaign.json` = plan + status + statistics + the aggregate SUGGESTIONS and their
-decisions, rewritten per repeat; `repeats.jsonl` = append-only skeleton, run_ids and
-timing, never fit VALUES) — a sibling of the day folders because an overnight campaign
+decisions + `suggestion_problems` (a generation that FAILED) and `suggestion_notes`
+(why it proposed NOTHING — a target below `[writeback] min_n`; separate channels
+because a shortfall is not an error), rewritten per repeat; `repeats.jsonl` =
+append-only skeleton, run_ids and timing, never fit VALUES) — a sibling of the day folders because an overnight campaign
 crosses midnight, and invisible to every glob over the data root. Post-finalize
 decisions go ONLY through the locked `edit_campaign_suggestions` (persist_campaign is
 the running process's lockless whole-file write); the campaigns table carries a
 derived `suggestions_pending` column (schema v10) behind `find_campaigns(pending=)`,
 and applied values stamp `ChangeRecord.campaign_id` (provenance status "campaign";
-decide via `scqo accept --campaign <id>`, regenerate pre-feature campaigns via
-`scqo campaign --suggest <id>`). Its children are ordinary runs stamped `campaign`/`repeat_idx`/`step_idx`
+decide via `scqo accept --campaign <id>`, which the campaign's own tail offers as
+soon as it finishes — the interactive review, or the paste-ready command when
+stdout is a pipe; regenerate pre-feature campaigns via `scqo campaign --suggest
+<id>`). The review RELEASES the instrument before it blocks on the human
+(`Backend.release_instruments`, implemented only where a connection outlives the
+run — Qblox): deciding writes the in-memory config and the JSON stores, never a
+socket, and the values reach hardware at the next run. Its children are ordinary runs stamped `campaign`/`repeat_idx`/`step_idx`
 in an INDEXED column (never a `campaign:<id>` tag — that would be an unindexed
 `json_each` scan and a second grouping authority); walk them with
 `campaign_runs(campaign_id)`, which is unlimited and in execution order, NOT
@@ -470,7 +509,10 @@ half-walked bundle whose quantities no longer share a drift epoch. Runs carry se
 history records the `run_id` that caused each device update. State authority:
 `state_sync="pull"` (default) seeds from the vendor at startup (safe when another tool also
 calibrates, e.g. qualibrate on QM); `"push"` restores the saved SCQO config into the vendor
-(only for devices SCQO fully owns).
+and is TEMPORARILY refused for every hardware backend (`make_session`, keyed on
+`backend_label != "simulated"`): a push seeds the vendor from `scqo_state.json` with no
+history rows and would clobber hand edits of the vendor config. Only the built-in simulated
+backend runs push (forced); `load_lab_config` refuses any value outside pull|push.
 
 **Multi-device rule:** the device = the physical SAMPLE (chip),
 never the instrument; the instrument is provenance (every run/fit stamps `backend`).
@@ -505,8 +547,36 @@ so reindex heals any skipped write); multi-PC writers need per-PC data_roots.
 3. `@register` the subclass so it appears in `catalog()`.
 Parameters, Result, `estimate`, `simulate` and `update` are inherited unchanged.
 
+### Backend parity — the two probes must realize the SAME sequence
+Given one Parameters object, both drivers' `probe()` must produce the same
+experiment: the same pulse ORDER, the same pulses PRESENT, and the same tones ON
+during acquisition. Only vendor idiom may differ — QM's `align()` / `wait()`
+against Qblox's ASAP chaining and `rel_time`, a rendered waveform against a
+stitched AWG-offset pair. Timing that both sides need is derived ONCE in a shared
+neutral helper (`_overlap.overlap_windows`, `_capabilities.qubit_reset.reset_wait_ns`,
+`_depletion.depletion_wait_ns`) and the probes only spend the numbers.
+
+**A field description saying some backend "ignores" a parameter is this rule's
+counter-example, not an exemption.** `drive_len_ns` carried exactly that sentence
+while QM played a finite saturation pulse and Qblox latched a continuous one
+across the whole sweep — so `scqo run qubit_spectroscopy` measured the bare
+line on one instrument and an AC-Stark-shifted one on the other, and both wrote
+the result into the same `drive_freq_hz`. Fixed 2026-09-03.
+
+The exception is an OPTIONAL CAPABILITY a backend cannot realize — which
+`reset_method` opt-in sets a driver carries, or an experiment that only ships on
+one side. Those are legitimately asymmetric (`_capabilities/qubit_reset.py` says
+so, and each driver's census test is the authority), but the backend must REFUSE
+BY NAME and never silently downgrade. Each driver pins the sequence half with a
+structural test over its own compiled output (`test_sequential_timing.py` on
+Qblox, `test_sequential_probe.py` on QM).
+
 ### Testing discipline — run only what the edit can break
 Default for a localized change (from the repo root): `uv run pytest tests/test_model_experiments.py -k ramsey -q`.
+`uv run` here is uv's project env `SCQO/.venv`, DRIVER-FREE by construction — which this suite
+requires, because `experiments/__init__.py` keeps the last registration, so in a driver env the
+driver's subclass answers under the core name. Full rule for all four repos, and the failure it
+prevents: [ENVIRONMENTS.md](ENVIRONMENTS.md).
 Selection map for experiment work (`scqo/experiments/<name>.py`) — always the first row, plus any that apply:
 
 | Also changed | Add to the run |
@@ -527,8 +597,12 @@ while `-k qubit_ramsey` misses the second. **0 collected means the filter was wr
 Leave `test_cli_*.py` (many subprocess spawns), `test_index_scale.py` (100k rows) and `test_viewer.py` alone
 unless the edit is in `scqo/cli/`, `scqo/datastore.py` or `scqo/viewer/` respectively.
 
-The **full suite** (`uv run pytest -q`) takes minutes, dominated by the `test_cli_*.py` subprocess
-tests. It is for exactly two cases: (1) cutting a release, and (2) an edit to **shared core**, which
+The **full suite** (`uv run --extra viewer pytest -q`) takes minutes, dominated by the
+`test_cli_*.py` subprocess tests. **`--extra viewer` is not optional and expect ZERO skips**: the
+viewer stack is a root EXTRA while `uv run` installs only the default dependency-group, so plain
+`uv run pytest -q` collects 917 instead of 984 and reports nothing missing (measured 2026-09-04;
+a machine that once ran `uv pip install -e ".[viewer]"` will not reproduce it, which is what kept
+it hidden). It is for exactly two cases: (1) cutting a release, and (2) an edit to **shared core**, which
 means one of `catalog.py`, `entities.py`, `roster.py`, `stores.py`, `device.py`, `experiment.py`,
 `session.py` — **or a `_capabilities/` mixin**, whose blast radius is every experiment that
 subclasses it (the row above says so; this list is the same claim, not a narrower one).
@@ -619,4 +693,5 @@ install. [CONTRIBUTING.md](CONTRIBUTING.md) has the layout.
 - **QBLOX_training** - the vendor's read-only Qblox example repo (`docs/applications/superconducting/...`). It is a LOCAL reference checkout on the lab machine, not part of this project and not needed to build or test anything here.
 
 ## Status
-Current published release: **v3.3.0** — see `RELEASES.toml` for the combo manifest and required upgrade actions. Release history lives in git tags + `RELEASES.toml`, not here.
+Current published release: **v3.12.0** — see `RELEASES.toml` for the combo manifest and required upgrade actions. Release history lives in git tags + `RELEASES.toml`, not here.
+Deferred features and known issues live in [BACKLOG.md](BACKLOG.md): append there when you defer or discover something (date, context, pointer, done-when); remove entries when they land. Consult it before planning a feature.
