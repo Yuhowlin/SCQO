@@ -344,14 +344,15 @@ tests/test_campaign.py          # the pure aggregator + run_campaign orchestrati
 ### The registered experiments
 
 <!-- BEGIN generated: experiments -->
-**47 registered experiments.** This list is GENERATED from the registry
+**48 registered experiments.** This list is GENERATED from the registry
 (`scqo.catalog()`) - refresh it with `python scripts/update_docs.py`. Descriptions are
 catalog-quality and live in the registry, never here: read one with
 `scqo run <name> --help`, or browse by capability with `scqo run --capability <name>`.
 
 ```
-broadband_qubit_spectroscopy        qubit_echo_flux_pulse               qubit_sqrb
-broadband_resonator_spectroscopy    qubit_parametric_drive_amp          qubit_stark_phase_echo
+broadband_qubit_spectroscopy        qubit_echo                          qubit_spectroscopy_overlap
+broadband_resonator_spectroscopy    qubit_echo_flux_pulse               qubit_sqrb
+crosstalk_cancellation_tomography   qubit_parametric_drive_amp          qubit_stark_phase_echo
 crosstalk_compensated_benchmark     qubit_parametric_drive_time         qubit_t1_ade
 crosstalk_compensated_sqrb          qubit_parity_switch_continuous      qubit_t1_bayesian
 pair_swap_angle                     qubit_parity_switch_discrete        qubit_thermal_population
@@ -365,7 +366,6 @@ qc_unidirectional_trotter           qubit_relaxation_flux_pulse         resonato
 qubit_deterministic_benchmarking    qubit_spectroscopy                  resonator_spectroscopy_power_chain
 qubit_drag_alternating              qubit_spectroscopy_cryoscope        single_shot_readout
 qubit_drag_equator                  qubit_spectroscopy_flux_pulse       single_shot_readout_gef
-qubit_echo                          qubit_spectroscopy_overlap
 ```
 <!-- END generated: experiments -->
 
@@ -383,6 +383,7 @@ experiments, or a name in the trailing line, is a KNOWN VIOLATION carried in
 |---|---|
 | `broadband_qubit_spectroscopy` | broadband_qubit_spectroscopy |
 | `broadband_resonator_spectroscopy` | broadband_resonator_spectroscopy |
+| `crosstalk_cancellation_tomography` | crosstalk_cancellation_tomography |
 | `crosstalk_compensated_benchmark` | crosstalk_compensated_benchmark |
 | `crosstalk_compensated_sqrb` | crosstalk_compensated_sqrb |
 | `pair_swap_angle` | pair_swap_angle |
