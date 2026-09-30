@@ -192,6 +192,38 @@ class CrosstalkCompensatedSQRBParameters(
             "compensation. If None, computed from the theoretical detuning (f_p - f_d)."
         )
     )
+    reverse_track: bool | None = Field(
+        None,
+        description=(
+            "Bidirectional diagnostic: whether the drive-line cancellation element exists and plays. "
+            "None follows `bidirectional`."
+        )
+    )
+    read_both: bool | None = Field(
+        None,
+        description=(
+            "Bidirectional diagnostic: whether the drive qubit is read out too (and gets its own "
+            "isolated pass). None follows `bidirectional`; False fits the probe only."
+        )
+    )
+
+    readout_scheme: Literal["separate_passes", "sequential", "simultaneous"] = Field(
+        "separate_passes",
+        description=(
+            "Bidirectional readout of the two qubits. 'separate_passes' (default): every shot "
+            "plays the sequence once per qubit and reads ONE qubit per pass, so the readouts never "
+            "share a pass. 'sequential': one pass, probe read first, drive read after it. "
+            "'simultaneous': one pass, both read together (multiplexed). On chipQM q1/q3 "
+            "(2026-09-30) reading the drive qubit in the same pass broke the probe-side "
+            "compensation; 'separate_passes' avoids it at twice the sim/comp run time."
+        )
+    )
+
+    def uses_reverse_track(self) -> bool:
+        return bool(self.bidirectional) and (self.reverse_track is None or bool(self.reverse_track))
+
+    def reads_both(self) -> bool:
+        return bool(self.bidirectional) and (self.read_both is None or bool(self.read_both))
     strict_timing: bool = Field(
         True,
         description="Whether to enforce strict_timing_() in QUA to eliminate inter-gate calculation gaps."
@@ -564,7 +596,7 @@ class CrosstalkCompensatedSQRB(Experiment):
 
         # (victim, aggressor, victim's dataset): bidirectional benchmark fits each qubit's own RB
         fits = [(probe, self.params.drive_qubit, ds_probe)]
-        if self.params.bidirectional and self.params.mode == "benchmark":
+        if self.params.reads_both() and self.params.mode == "benchmark":
             drive = self.params.drive_qubit
             if "target" not in self.dataset.coords or drive not in self.dataset.coords["target"].values:
                 raise ValueError(

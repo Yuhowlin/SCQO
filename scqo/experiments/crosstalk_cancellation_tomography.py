@@ -102,6 +102,15 @@ class CrosstalkCancellationTomographyParameters(
         0.0,
         description="Bidirectional only: initial phase in radians of the drive-line cancellation element."
     )
+    drive_cancel_amp: float | None = Field(
+        None,
+        ge=0.0,
+        description=(
+            "Bidirectional only, diagnostic: if set, the drive-line element PLAYS target_gate at this "
+            "amplitude in every compensated pulse slot (0.0 = a silent play) instead of idling, to test "
+            "whether a concurrent play on it disturbs the probe-side cancellation."
+        )
+    )
 
     repetitions: list[int] | str | int | None = Field(
         None,
