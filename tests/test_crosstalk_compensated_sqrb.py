@@ -179,3 +179,58 @@ def test_parameters_batch_size_and_zoom():
     assert p.benchmark_batch_size == 3
     assert p.target_gate == "x180"
 
+
+
+def test_end_to_end_simulated_bidirectional(session):
+    out = session.run(
+        "crosstalk_compensated_sqrb",
+        {
+            "probe_qubit": "q0",
+            "drive_qubit": "q1",
+            "mode": "benchmark",
+            "bidirectional": True,
+            "depths": [1, 2, 4, 8, 16, 32],
+            "num_random_sequences": 5,
+            "cancel_amp": 0.035,
+            "init_phase": 0.85,
+            "drive_cancel_amp": 0.028,
+            "drive_init_phase": -0.6,
+        },
+        update="none",
+    )
+    assert out.get("error") is None, out.get("error")
+    assert set(out["fit"]) == {"q0", "q1"}
+    for victim, aggressor in (("q0", "q1"), ("q1", "q0")):
+        fit = out["fit"][victim]
+        assert fit["mode"] == "benchmark"
+        assert fit["victim_qubit"] == victim
+        assert fit["aggressor_qubit"] == aggressor
+        assert fit["r_isolated"] < fit["r_simultaneous"]
+        assert fit["r_compensated"] < fit["r_simultaneous"]
+
+
+def test_bidirectional_reverse_compensation_is_independent(session):
+    # Forward direction tuned, reverse far off its optimum: only q0 recovers. (Not amp=0: the
+    # simulator's compensation-quality window is wide enough that 0 still recovers ~half.)
+    out = session.run(
+        "crosstalk_compensated_sqrb",
+        {
+            "probe_qubit": "q0",
+            "drive_qubit": "q1",
+            "bidirectional": True,
+            "depths": [1, 2, 4, 8, 16, 32],
+            "num_random_sequences": 5,
+            "cancel_amp": 0.035,
+            "init_phase": 0.85,
+            "drive_cancel_amp": 0.2,
+        },
+        update="none",
+    )
+    assert out.get("error") is None, out.get("error")
+    assert out["fit"]["q0"]["mitigation_ratio"] > 0.6
+    assert out["fit"]["q1"]["mitigation_ratio"] < 0.3
+
+
+def test_bidirectional_refuses_calibrate_mode():
+    with pytest.raises(ValueError, match="bidirectional"):
+        CrosstalkCompensatedSQRBParameters(mode="calibrate", bidirectional=True)

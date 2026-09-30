@@ -158,6 +158,40 @@ class CrosstalkCompensatedSQRBParameters(
         gt=0,
         description="Duration of each atomic pulse subslot in ns for theoretical phase rate calculation."
     )
+
+    # Bidirectional compensation: both qubits are victim AND aggressor
+    bidirectional: bool = Field(
+        False,
+        description=(
+            "Benchmark mode only. If True, both qubits are compensated and read out: a second "
+            "cancellation track on the drive qubit's line mirrors the probe qubit's gates "
+            "(cancelling probe -> drive crosstalk), and each qubit gets its own isolated / "
+            "simultaneous / compensated RB. Calibrate each direction separately by swapping "
+            "probe_qubit and drive_qubit in calibrate mode."
+        )
+    )
+    drive_cancel_amp: float = Field(
+        0.0,
+        ge=0.0,
+        description=(
+            "Bidirectional only: amplitude scale of the compensation on the drive qubit's line "
+            "(the cancel_amp found by a calibrate run with probe_qubit and drive_qubit swapped)."
+        )
+    )
+    drive_init_phase: float = Field(
+        0.0,
+        description=(
+            "Bidirectional only: initial phase in radians of the compensation on the drive "
+            "qubit's line (the init_phase found by the swapped calibrate run)."
+        )
+    )
+    drive_phase_rate: float | None = Field(
+        None,
+        description=(
+            "Bidirectional only: phase evolution rate per subslot in radians for the drive-line "
+            "compensation. If None, computed from the theoretical detuning (f_p - f_d)."
+        )
+    )
     strict_timing: bool = Field(
         True,
         description="Whether to enforce strict_timing_() in QUA to eliminate inter-gate calculation gaps."
@@ -302,6 +336,12 @@ class CrosstalkCompensatedSQRBParameters(
     def _ensure_targets(self) -> CrosstalkCompensatedSQRBParameters:
         if not self.targets:
             self.targets = [self.probe_qubit, self.drive_qubit]
+        if self.bidirectional and self.mode == "calibrate":
+            raise ValueError(
+                "bidirectional=True is benchmark-only: calibrate needs the victim idle, so each "
+                "direction is calibrated on its own - run calibrate twice with probe_qubit and "
+                "drive_qubit swapped, then set drive_cancel_amp / drive_init_phase."
+            )
         return self
 
 
@@ -384,11 +424,17 @@ class CrosstalkCompensatedSQRB(Experiment):
         # Quality of compensation depends on distance from optimal (alpha=0.035, phi=0.85)
         opt_amp = 0.035
         opt_phi = 0.85
-        actual_amp = float(self.params.cancel_amp)
-        actual_phi = float(self.params.init_phase)
-        dist_sq = (actual_amp - opt_amp) ** 2 + 0.001 * (actual_phi - opt_phi) ** 2
-        comp_quality = np.exp(-dist_sq / 0.002)
-        p_comp = p_sim + (p_iso - 0.002 - p_sim) * comp_quality
+
+        def _p_comp(amp: float, phi: float, o_amp: float, o_phi: float) -> float:
+            dist_sq = (amp - o_amp) ** 2 + 0.001 * (phi - o_phi) ** 2
+            comp_quality = np.exp(-dist_sq / 0.002)
+            return p_sim + (p_iso - 0.002 - p_sim) * comp_quality
+
+        p_comp = _p_comp(float(self.params.cancel_amp), float(self.params.init_phase), opt_amp, opt_phi)
+        # Reverse direction (probe -> drive) has its own optimum, so a swapped setting shows up
+        p_comp_drive = _p_comp(
+            float(self.params.drive_cancel_amp), float(self.params.drive_init_phase), 0.028, -0.6
+        )
 
         n_targets = max(1, len(self.params.targets))
 
@@ -433,22 +479,23 @@ class CrosstalkCompensatedSQRB(Experiment):
         depths = coords["depth"]
         n_seq = len(coords["sequence_idx"])
 
-        p_map = {
-            "isolated": p_iso,
-            "simultaneous": p_sim,
-            "compensated": p_comp,
-        }
+        def _pop(p_map: dict[str, float]) -> np.ndarray:
+            pop_data = np.empty((len(conditions), n_seq, len(depths)), dtype=float)
+            for c_idx, c_name in enumerate(conditions):
+                p_val = p_map.get(str(c_name), p_iso)
+                for d_idx, d in enumerate(depths):
+                    mean_p0 = 0.5 + 0.48 * (p_val ** d)
+                    pop_data[c_idx, :, d_idx] = np.clip(
+                        mean_p0 + rng.normal(0, 0.005, n_seq), 0.0, 1.0
+                    )
+            return pop_data
 
-        pop_data = np.empty((len(conditions), n_seq, len(depths)), dtype=float)
-        for c_idx, c_name in enumerate(conditions):
-            p_val = p_map.get(str(c_name), p_iso)
-            for d_idx, d in enumerate(depths):
-                mean_p0 = 0.5 + 0.48 * (p_val ** d)
-                pop_data[c_idx, :, d_idx] = np.clip(
-                    mean_p0 + rng.normal(0, 0.005, n_seq), 0.0, 1.0
-                )
-
-        pop_t = np.repeat(pop_data[None, ...], n_targets, axis=0)  # (n_targets, cond, seq, depth)
+        pop_probe = _pop({"isolated": p_iso, "simultaneous": p_sim, "compensated": p_comp})
+        if self.params.bidirectional:
+            pop_drive = _pop({"isolated": p_iso, "simultaneous": p_sim, "compensated": p_comp_drive})
+            pop_t = np.stack([pop_probe, pop_drive] + [pop_probe] * (n_targets - 2), axis=0)
+        else:
+            pop_t = np.repeat(pop_probe[None, ...], n_targets, axis=0)  # (n_targets, cond, seq, depth)
         if self.params.use_state_discrimination:
             return {"state": (("target", "condition", "sequence_idx", "depth"), pop_t)}
         return {
@@ -513,14 +560,29 @@ class CrosstalkCompensatedSQRB(Experiment):
                 pass
 
         estimator = CrosstalkCompensatedSQRBEstimator()
-        out_dir = str(self.artifact_dir) if self.artifact_dir is not None else None
-        fit_res, _figures = estimator.analyze(ds_probe, output_dir=out_dir)
-
         result = CrosstalkCompensatedSQRBResult()
-        result.fit[probe] = fit_res
-        result.outcomes[probe] = (
-            Outcome.SUCCESSFUL if fit_res.get("success", False) else Outcome.FAILED
-        )
+
+        # (victim, aggressor, victim's dataset): bidirectional benchmark fits each qubit's own RB
+        fits = [(probe, self.params.drive_qubit, ds_probe)]
+        if self.params.bidirectional and self.params.mode == "benchmark":
+            drive = self.params.drive_qubit
+            if "target" not in self.dataset.coords or drive not in self.dataset.coords["target"].values:
+                raise ValueError(
+                    f"bidirectional run has no data for drive qubit {drive!r}; "
+                    "the probe must read out both qubits"
+                )
+            fits.append((drive, probe, self.dataset.sel(target=drive)))
+
+        for victim, aggressor, ds_victim in fits:
+            ds_victim = ds_victim.assign_attrs(victim_qubit=victim, aggressor_qubit=aggressor)
+            out_dir = None
+            if self.artifact_dir is not None:
+                out_dir = str(self.artifact_dir / victim) if len(fits) > 1 else str(self.artifact_dir)
+            fit_res, _figures = estimator.analyze(ds_victim, output_dir=out_dir)
+            result.fit[victim] = fit_res
+            result.outcomes[victim] = (
+                Outcome.SUCCESSFUL if fit_res.get("success", False) else Outcome.FAILED
+            )
         return result
 
     def probe(self):  # pragma: no cover - driver half
