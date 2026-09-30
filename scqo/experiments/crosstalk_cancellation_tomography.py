@@ -111,6 +111,13 @@ class CrosstalkCancellationTomographyParameters(
             "whether a concurrent play on it disturbs the probe-side cancellation."
         )
     )
+    read_drive: bool = Field(
+        False,
+        description=(
+            "Diagnostic: also read the drive qubit in the same shot, multiplexed with the probe "
+            "(as the simultaneous-readout bidirectional SQRB does). Its data is not returned."
+        )
+    )
 
     repetitions: list[int] | str | int | None = Field(
         None,
