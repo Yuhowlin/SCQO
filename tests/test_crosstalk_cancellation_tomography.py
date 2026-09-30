@@ -91,3 +91,24 @@ def test_simulation_and_estimation(session):
     fit = out["fit"]["q0"]
     assert fit["success"]
     assert "per_condition" in fit
+
+
+def test_estimate_suggests_the_simulated_optimum(session):
+    # The simulator's leakage sits at (cancel_amp 0.035, init_phase 0.85); start detuned from it
+    out = session.run(
+        "crosstalk_cancellation_tomography",
+        {
+            "probe_qubit": "q0",
+            "drive_qubit": "q1",
+            "repetitions": "0:40:2",
+            "cancel_amp": 0.028,
+            "init_phase": 0.6,
+            "use_state_discrimination": True,
+        },
+        update="none",
+    )
+    assert out.get("error") is None, out.get("error")
+    fit = out["fit"]["q0"]
+    assert fit["suggested_cancel_amp"] == pytest.approx(0.035, rel=0.05)
+    assert fit["suggested_init_phase"] == pytest.approx(0.85, abs=0.05)
+    assert fit["suggested_updates"]["cancel_amp"] == fit["suggested_cancel_amp"]

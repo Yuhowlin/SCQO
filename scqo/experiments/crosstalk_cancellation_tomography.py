@@ -341,7 +341,13 @@ class CrosstalkCancellationTomography(Experiment):
 
         estimator = CrosstalkCancellationTomographyEstimator()
         out_dir = str(self.artifact_dir) if self.artifact_dir is not None else None
-        fit_res, _figures = estimator.analyze(ds_probe, output_dir=out_dir)
+        # The run's settings turn the rotation-vector fit into absolute suggestions
+        fit_res, _figures = estimator.analyze(
+            ds_probe,
+            output_dir=out_dir,
+            cancel_amp=float(self.params.cancel_amp),
+            init_phase=float(self.params.init_phase),
+        )
 
         result = CrosstalkCancellationTomographyResult()
         result.fit[probe] = fit_res
