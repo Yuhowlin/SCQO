@@ -88,6 +88,21 @@ class CrosstalkCancellationTomographyParameters(
         description="Duration of each pulse in ns for theoretical phase rate calculation."
     )
 
+    bidirectional: bool = Field(
+        False,
+        description=(
+            "Reproduce the bidirectional crosstalk_compensated_sqrb program context: add the "
+            "drive-line cancellation element (aligned, frame-reset, set to drive_init_phase, and "
+            "advancing its frame every pulse as it does while the probe idles). It plays no pulse "
+            "here - the probe is idle - so this measures the probe-side cancellation inside the "
+            "same 4-element program the bidirectional benchmark runs."
+        )
+    )
+    drive_init_phase: float = Field(
+        0.0,
+        description="Bidirectional only: initial phase in radians of the drive-line cancellation element."
+    )
+
     repetitions: list[int] | str | int | None = Field(
         None,
         description=(
