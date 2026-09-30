@@ -219,6 +219,20 @@ class CrosstalkCompensatedSQRBParameters(
         )
     )
 
+    stark_frame_rad: float = Field(
+        0.0,
+        description=(
+            "Compensated condition: frame rotation (rad) applied to the probe qubit after every "
+            "drive 180-type pulse (1/4 of it after a 90-type pulse) - a virtual Z that undoes the "
+            "Z (AC-Stark-like) part of the crosstalk a resonant cancel pulse cannot remove. "
+            "Calibrate with crosstalk_cancellation_tomography's stark_frame_rad."
+        )
+    )
+    drive_stark_frame_rad: float = Field(
+        0.0,
+        description="Bidirectional only: the same correction on the drive qubit, per probe pulse."
+    )
+
     def uses_reverse_track(self) -> bool:
         return bool(self.bidirectional) and (self.reverse_track is None or bool(self.reverse_track))
 

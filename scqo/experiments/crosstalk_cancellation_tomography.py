@@ -118,6 +118,14 @@ class CrosstalkCancellationTomographyParameters(
             "(as the simultaneous-readout bidirectional SQRB does). Its data is not returned."
         )
     )
+    stark_frame_rad: float = Field(
+        0.0,
+        description=(
+            "Compensated condition: frame rotation (rad) applied to the probe after every drive "
+            "pulse (1/4 of it for a 90-type target_gate) - the virtual Z that crosstalk_compensated_sqrb's "
+            "stark_frame_rad applies. Scan it here: the compensated Z residual goes to 0 at the right value."
+        )
+    )
 
     repetitions: list[int] | str | int | None = Field(
         None,
