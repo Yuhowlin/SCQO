@@ -252,17 +252,18 @@ class CrosstalkCompensatedSQRBParameters(
             "cancel_tone='aggressor'; stark_frame_rad is not supported."
         )
     )
-    fpga_dispatch: Literal["merged", "per_element"] = Field(
-        "merged",
+    fpga_dispatch: Literal["per_element", "merged"] = Field(
+        "per_element",
         description=(
-            "sequence_mode='fpga': 'merged' plays both qubits' Clifford (and the cancel tracks) from "
-            "ONE switch_ over gate_p*24+gate_d (576 cases); 'per_element' uses one switch_ per element. "
-            "Every element thread walks every switch_ in the loop, so per_element pays 2-4 dispatches "
-            "per Clifford (~52 ns gap with 4 elements in the QM simulator); qubit_sqrb (one switch) has none."
+            "sequence_mode='fpga': 'per_element' = one 24-case switch_ per element (measured on hardware, "
+            "~100 ns per Clifford). 'merged' (experimental, never measured) plays both qubits and the "
+            "cancel tracks from ONE 576-case switch_ over gate_p*24+gate_d; heavy to compile on the shared "
+            "gateway, and the simulator shows the ~52 ns per-Clifford gap even with a single switch_, so "
+            "merging is not expected to remove it."
         ),
     )
     fpga_unroll: int = Field(
-        2,
+        4,
         ge=1,
         description="sequence_mode='fpga': Cliffords per FPGA-loop iteration (program size grows with it, x576 cases when merged).",
     )
