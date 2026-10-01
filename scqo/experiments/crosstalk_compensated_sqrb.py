@@ -267,9 +267,10 @@ class CrosstalkCompensatedSQRBParameters(
         "fpga_rng",
         description=(
             "sequence_mode='fpga': 'fpga_rng' (default) draws each sequence on the FPGA (QUA Random + "
-            "Cayley table, as qubit_sqrb) - one sequence in memory at a time, so every condition, "
-            "sequence and depth runs in ONE program. 'host' precomputes them in Python into QUA arrays "
-            "(array memory limits a program to ~16k gates: several programs per condition)."
+            "Cayley table, as qubit_sqrb) - one sequence in memory at a time, so all sequences and depths "
+            "of a condition run in ONE program (3 programs in all; the same sequences in every condition). "
+            "'host' precomputes them in Python into QUA arrays (array memory limits a program to ~16k "
+            "gates: several programs per condition)."
         ),
     )
     fpga_unroll: int = Field(
