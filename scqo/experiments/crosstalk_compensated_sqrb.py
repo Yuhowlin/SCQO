@@ -263,6 +263,15 @@ class CrosstalkCompensatedSQRBParameters(
             "to compile on the shared gateway."
         ),
     )
+    fpga_sequence_source: Literal["fpga_rng", "host"] = Field(
+        "fpga_rng",
+        description=(
+            "sequence_mode='fpga': 'fpga_rng' (default) draws each sequence on the FPGA (QUA Random + "
+            "Cayley table, as qubit_sqrb) - one sequence in memory at a time, so every condition, "
+            "sequence and depth runs in ONE program. 'host' precomputes them in Python into QUA arrays "
+            "(array memory limits a program to ~16k gates: several programs per condition)."
+        ),
+    )
     fpga_unroll: int = Field(
         1,
         ge=1,
