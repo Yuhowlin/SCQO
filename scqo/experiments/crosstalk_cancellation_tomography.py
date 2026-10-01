@@ -124,8 +124,9 @@ class CrosstalkCancellationTomographyParameters(
             "Phase reset at the start of every shot. 'global': reset_if_phase on each xy element "
             "plus reset_global_phase(). 'if_only': reset_if_phase only. On chipQM (QM simulator and "
             "hardware, 2026-10-01) reset_global_phase() makes an element's phase depend on which "
-            "resonators the program reads (q3.xy slips one 4 ns IF cycle when q3 is read), so "
-            "multiplexed readout of both qubits needs 'if_only'. Calibrate with the same setting."
+            "resonators the program reads (q3.xy slips one 4 ns IF cycle when q3 is read) in the "
+            "QM simulator, but on chipQM hardware (2026-10-01) 'if_only' dephases the phase between "
+            "lines shot to shot - keep 'global' and calibrate in the same readout context instead."
         )
     )
     cancel_tone: Literal["victim", "aggressor"] = Field(
