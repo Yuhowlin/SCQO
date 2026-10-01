@@ -263,14 +263,23 @@ class CrosstalkCompensatedSQRBParameters(
             "to compile on the shared gateway."
         ),
     )
-    fpga_sequence_source: Literal["fpga_rng", "host"] = Field(
-        "fpga_rng",
+    fpga_sequence_source: Literal["host", "fpga_rng"] = Field(
+        "host",
         description=(
-            "sequence_mode='fpga': 'fpga_rng' (default) draws each sequence on the FPGA (QUA Random + "
-            "Cayley table, as qubit_sqrb) - one sequence in memory at a time, so all sequences and depths "
-            "of a condition run in ONE program (3 programs in all; the same sequences in every condition). "
-            "'host' precomputes them in Python into QUA arrays (array memory limits a program to ~16k "
-            "gates: several programs per condition)."
+            "sequence_mode='fpga': 'host' (default) precomputes the sequences in Python into QUA arrays. "
+            "'fpga_rng' draws each sequence on the FPGA (QUA Random + Cayley table, as qubit_sqrb), one "
+            "in memory at a time. Either way a program holds at most fpga_sequences_per_program sequences: "
+            "long programs drift (see there)."
+        ),
+    )
+    fpga_sequences_per_program: int = Field(
+        7,
+        ge=1,
+        description=(
+            "sequence_mode='fpga': max sequences per program (with every depth, one condition). Keep "
+            "programs short: on chipQM the simultaneous/compensated error grew steadily during a single "
+            "30-sequence program (~1.3 min) and stayed flat in 7-sequence programs (2026-10-01); cause "
+            "not identified."
         ),
     )
     fpga_unroll: int = Field(
