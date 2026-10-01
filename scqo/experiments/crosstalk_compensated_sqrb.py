@@ -215,8 +215,46 @@ class CrosstalkCompensatedSQRBParameters(
             "share a pass. 'sequential': one pass, probe read first, drive read after it. "
             "'simultaneous': one pass, both read together (multiplexed). On chipQM q1/q3 "
             "(2026-09-30) reading the drive qubit in the same pass broke the probe-side "
-            "compensation; 'separate_passes' avoids it at twice the sim/comp run time."
+            "compensation under phase_reset='global'; use phase_reset='if_only' with "
+            "'simultaneous', or 'separate_passes' at twice the sim/comp run time."
         )
+    )
+
+    phase_reset: Literal["global", "if_only"] = Field(
+        "global",
+        description=(
+            "Phase reset at the start of every shot. 'global': reset_if_phase on each xy element "
+            "plus reset_global_phase(). 'if_only': reset_if_phase only. On chipQM (QM simulator and "
+            "hardware, 2026-10-01) reset_global_phase() makes an element's phase depend on which "
+            "resonators the program reads (q3.xy slips one 4 ns IF cycle when q3 is read), so "
+            "multiplexed readout of both qubits needs 'if_only'. Calibrate with the same setting."
+        )
+    )
+    cancel_tone: Literal["victim", "aggressor"] = Field(
+        "victim",
+        description=(
+            "Frequency of the cancel element(s). 'victim': the victim's IF, the crosstalk phase "
+            "followed by frame steps of phase_rate per subslot. 'aggressor': the element outputs at "
+            "the aggressor's frequency on the victim's line - a scaled copy of the leaked field, "
+            "phase-locked to it with no frame steps (also cancels the leak's AC-Stark shift). "
+            "cancel_amp / init_phase differ between the two; calibrate with the same tone."
+        )
+    )
+    sequence_mode: Literal["unrolled", "fpga"] = Field(
+        "unrolled",
+        description=(
+            "Benchmark only. 'unrolled': every Clifford is its own strict-timed QUA statements "
+            "(program size grows with depth; depth ~400 is the compile limit). 'fpga': sequences "
+            "live in QUA arrays and an FPGA loop plays one composite 3-subslot op per Clifford, so "
+            "depth > 1000 compiles. The loop adds a fixed dispatch gap per Clifford (~52 ns on "
+            "chipQM, same on every element), so the compensated condition needs "
+            "cancel_tone='aggressor'; stark_frame_rad is not supported."
+        )
+    )
+    fpga_max_array_gates: int = Field(
+        16000,
+        gt=0,
+        description="sequence_mode='fpga': max Clifford gates held in QUA arrays per program (sets the sequence chunk).",
     )
 
     stark_frame_rad: float = Field(
@@ -382,6 +420,15 @@ class CrosstalkCompensatedSQRBParameters(
     def _ensure_targets(self) -> CrosstalkCompensatedSQRBParameters:
         if not self.targets:
             self.targets = [self.probe_qubit, self.drive_qubit]
+        if self.sequence_mode == "fpga" and self.mode == "benchmark":
+            conds = self.conditions or ["isolated", "simultaneous", "compensated"]
+            if "compensated" in conds and self.cancel_tone != "aggressor":
+                raise ValueError(
+                    "sequence_mode='fpga' with the compensated condition needs cancel_tone='aggressor' "
+                    "(the FPGA loop's dispatch gaps break per-subslot frame steps)"
+                )
+            if self.stark_frame_rad or self.drive_stark_frame_rad:
+                raise ValueError("sequence_mode='fpga' does not support stark_frame_rad")
         if self.bidirectional and self.mode == "calibrate":
             raise ValueError(
                 "bidirectional=True is benchmark-only: calibrate needs the victim idle, so each "

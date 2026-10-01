@@ -13,7 +13,7 @@ per gate to determine necessary virtual Z corrections.
 
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 import numpy as np
 from pydantic import Field, field_validator, model_validator
@@ -116,6 +116,26 @@ class CrosstalkCancellationTomographyParameters(
         description=(
             "Diagnostic: also read the drive qubit in the same shot, multiplexed with the probe "
             "(as the simultaneous-readout bidirectional SQRB does). Its data is not returned."
+        )
+    )
+    phase_reset: Literal["global", "if_only"] = Field(
+        "global",
+        description=(
+            "Phase reset at the start of every shot. 'global': reset_if_phase on each xy element "
+            "plus reset_global_phase(). 'if_only': reset_if_phase only. On chipQM (QM simulator and "
+            "hardware, 2026-10-01) reset_global_phase() makes an element's phase depend on which "
+            "resonators the program reads (q3.xy slips one 4 ns IF cycle when q3 is read), so "
+            "multiplexed readout of both qubits needs 'if_only'. Calibrate with the same setting."
+        )
+    )
+    cancel_tone: Literal["victim", "aggressor"] = Field(
+        "victim",
+        description=(
+            "Frequency of the cancel element(s). 'victim': the victim's IF, the crosstalk phase "
+            "followed by frame steps of phase_rate per subslot. 'aggressor': the element outputs at "
+            "the aggressor's frequency on the victim's line - a scaled copy of the leaked field, "
+            "phase-locked to it with no frame steps (also cancels the leak's AC-Stark shift). "
+            "cancel_amp / init_phase differ between the two; calibrate with the same tone."
         )
     )
     stark_frame_rad: float = Field(
