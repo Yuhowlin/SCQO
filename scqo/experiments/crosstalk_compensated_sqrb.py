@@ -252,20 +252,25 @@ class CrosstalkCompensatedSQRBParameters(
             "cancel_tone='aggressor'; stark_frame_rad is not supported."
         )
     )
-    fpga_dispatch: Literal["per_element", "merged"] = Field(
-        "per_element",
+    fpga_dispatch: Literal["parallel", "per_element", "merged"] = Field(
+        "parallel",
         description=(
-            "sequence_mode='fpga': 'per_element' = one 24-case switch_ per element (measured on hardware, "
-            "~100 ns per Clifford). 'merged' (experimental, never measured) plays both qubits and the "
-            "cancel tracks from ONE 576-case switch_ over gate_p*24+gate_d; heavy to compile on the shared "
-            "gateway, and the simulator shows the ~52 ns per-Clifford gap even with a single switch_, so "
-            "merging is not expected to remove it."
+            "sequence_mode='fpga': how the Cliffords are dispatched. 'parallel' (default): one FPGA loop "
+            "per element, each indexing the gate array with its own loop variable - on chipQM hardware "
+            "(timestamp_stream, 2026-10-01) 48 ns Cliffords back to back and in step on all 4 elements. "
+            "'per_element': one shared loop with a switch_ per element - 160 ns per Clifford with 4 "
+            "elements on hardware. 'merged' (experimental, never measured): one 576-case switch_, heavy "
+            "to compile on the shared gateway."
         ),
     )
     fpga_unroll: int = Field(
-        4,
+        1,
         ge=1,
-        description="sequence_mode='fpga': Cliffords per FPGA-loop iteration (program size grows with it, x576 cases when merged).",
+        description=(
+            "sequence_mode='fpga' with fpga_dispatch per_element/merged: Cliffords per loop iteration "
+            "(ignored by 'parallel'). Keep 1: unrolling needs computed indices (gates[k + u]) that cost "
+            "~50-70 ns per Clifford on chipQM hardware (timestamp_stream, 2026-10-01)."
+        ),
     )
     fpga_max_array_gates: int = Field(
         16000,
