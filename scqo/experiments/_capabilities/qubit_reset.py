@@ -22,7 +22,8 @@ knobs are worth calibrating for their own sake — but it is NOT universally
 realizable, so see the BOUNDARY RULE below.
 
 WHERE THE WAIT LIVES (thermal only): the standing value is the neutral knob
-``thermalization_time_s`` on each target's DRIVE channel (``q1_xy``) — role
+``thermalization_time_s`` on each target's DESIGNED drive channel
+(``xy1.q1``; a borrowed channel never carries it) — role
 ``knob``, so it is stored in scqo_state.json and pushed to the vendor
 (QM: ``q.thermalization_time_ns``; Qblox: ``element.reset.duration``).
 ``qubit_relaxation`` proposes ``thermalization_factor x t1_s`` for it, and it is

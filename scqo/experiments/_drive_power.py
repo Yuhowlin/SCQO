@@ -22,9 +22,14 @@ if TYPE_CHECKING:
 
 
 @contextmanager
-def drive_power_boundary(experiment: "Experiment", target_dbm: float) -> Iterator[None]:
+def drive_power_boundary(experiment: "Experiment", target_dbm: float,
+                         targets: list[str] | None = None) -> Iterator[None]:
     """Recorded set -> (acquire, in the ``with`` body) -> exact revert of
     ``drive_power_dbm`` for every target's drive channel.
+
+    ``targets`` defaults to the experiment's own targets; a pair experiment passes
+    the MEMBER whose drive line carries the tone (its targets are pairs, which have
+    no drive channel).
 
     Each target's standing ``drive_power_dbm`` is read and validated FIRST (a
     single unknown/non-finite chain aborts before any write, so the device is
@@ -36,7 +41,7 @@ def drive_power_boundary(experiment: "Experiment", target_dbm: float) -> Iterato
     chain knob, the amplitude restored verbatim).
     """
     target_dbm = float(target_dbm)
-    targets = list(experiment.params.targets)
+    targets = list(experiment.params.targets if targets is None else targets)
     views = {q: experiment.device.channel(q, "drive") for q in targets}
 
     previous: dict[str, float] = {}

@@ -11,7 +11,9 @@ the run. The CURRENT setup is untouched: select the new one with `scqo user --se
 and re-run with the run's own parameters (`scqo run <experiment> --params <run
 folder>/parameters.json`). A run from another cooldown is refused unless --force
 (frequencies shift between cooldowns). The restored context starts with an empty change
-history, so `scqo state --sources` shows its values as "(no record)". Touches NO
+history, so `scqo state --sources` shows its values as "(no record)". A snapshot taken
+before 4.0.0 carries 3.x store files (channel names like q1_xy); they are re-addressed
+on the way in through the device's roster (scqo.v3_names), values unchanged. Touches NO
 instrument.
 """
 
@@ -25,6 +27,31 @@ from importlib.metadata import version
 from pathlib import Path
 
 from ._review import _confirm
+
+
+def _restore_values_file(src: Path, dst: Path, device_dir: Path) -> None:
+    """Copy one snapshot value file; a 3.x one (schema 3) is re-addressed
+    through the device's roster on the way (immutable run data keeps its old
+    names, so the one place they are read is here and in scqo.v3_names)."""
+    from scqo.roster import load_components
+    from scqo.stores import V3_SCHEMA
+    from scqo.v3_names import convert_store_payload
+
+    try:
+        data = json.loads(src.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        shutil.copy2(src, dst)  # the store quarantines what it cannot parse
+        return
+    if not (isinstance(data, dict) and data.get("schema") == V3_SCHEMA):
+        shutil.copy2(src, dst)
+        return
+    converted, unmapped = convert_store_payload(data, load_components(device_dir))
+    dst.write_text(json.dumps(converted, indent=2, allow_nan=False) + "\n",
+                   encoding="utf-8")
+    print(f"# {src.name}: a 3.x snapshot file, re-addressed for 4.0.0", file=sys.stderr)
+    for entity, fields in sorted(unmapped.items()):
+        print(f"#   not carried (no longer in the roster): {entity}: "
+              f"{', '.join(sorted(fields))}", file=sys.stderr)
 
 
 def _version_warnings(manifest: dict) -> list[str]:
@@ -159,7 +186,8 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
         for fname in (STATE_FILE, PHYSICAL_FILE):
             src = src_scqo / fname
             if src.is_file():
-                shutil.copy2(src, target_scqo / fname)
+                _restore_values_file(src, target_scqo / fname,
+                                     Path(cfg.data_root) / device)
     except OSError as err:
         shutil.rmtree(setup_dir, ignore_errors=True)
         raise SystemExit(f"copy failed - {setup_dir} removed again: {err}") from None

@@ -29,8 +29,11 @@ def session(tmp_path):
 
 
 def test_normalize_target_name():
-    """Rider suffixes strip; a COMPOSITE does not — q1_q2 is a pair, and
-    folding it into q1 files two-qubit numbers under one qubit."""
+    """The pre-4.0.0 rider suffixes strip (statistics recorded before the
+    store-by-line cutover may carry them, and a campaign folder is immutable),
+    as does the ``_res`` a readout rider still mints; a COMPOSITE does not —
+    q1_q2 is a pair, and folding it into q1 files two-qubit numbers under one
+    qubit."""
     assert normalize_target_name("q1") == "q1"
     assert normalize_target_name("q1_xy") == "q1"
     assert normalize_target_name("q1_ro") == "q1"
@@ -103,6 +106,8 @@ def test_get_latest_metric_stat(session):
         steps=[{"experiment": "qubit_relaxation"}],
     ))
 
+    # a pre-4.0.0 channel spelling still names its mode: normalize_target_name
+    # keeps the retired rider suffixes for immutable campaign statistics
     stat = get_latest_metric_stat(
         store, "chipT", target="q0_xy", quantity="t1_s",
         experiment="qubit_relaxation", min_repeats=2,

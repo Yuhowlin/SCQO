@@ -12,8 +12,10 @@ registry (``backend``, optional ``note``, plus the DERIVED ``instrument_config``
 vendor folder injected by ``load_cooldowns`` —
 ``<device>/<cooldown>/<setup>/backend_config``, never typed), and ``roster`` is the
 device's authority on which entities exist: a driver serves views BY ENTITY NAME
-(``q1_xy`` -> its drive view over the vendor's q1 element), so it must resolve
-each channel's target and kind through the roster rather than parsing names.
+(the channel ``xy1.q1`` -> its drive view over the vendor's q1 element, the line
+``z1`` -> that wire's standing bias, the operation ``q1_q2.iswap`` -> the gate's
+macro), so it must resolve each entity's line, target and kind through the
+roster rather than parsing names.
 ``simulated`` (demo qubits, synthetic data) is built in here, so query commands,
 practice runs and CI need no driver at all.
 """

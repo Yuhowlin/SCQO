@@ -1,5 +1,6 @@
 """Roster loader contracts (scqo.roster) — docs/greenfield-schema.md
-sections 3-5, 7 + the section-8 worked example as the primary fixture."""
+sections 3-5, 7 + the section-8 worked example as the primary fixture, with the
+4.0.0 store-by-line addressing (docs/store-by-line-plan.md section 2)."""
 
 import pytest
 
@@ -55,16 +56,45 @@ def roster() -> Roster:
 # ------------------------------------------------------------- the expansion
 
 def test_expanded_names_match_the_design_doc(roster):
-    assert set(roster.entities) == {
+    declared_and_minted = {
         # declared modes + composite + lines
         "q1", "q2", "q3", "q1_q2_c", "q1_q2",
         "fl1", "xy1", "z1", "xyz2", "xy3", "zc12",
-        # minted resonators + channels
-        "q1_res", "q2_res", "q3_res",
-        "q1_ro", "q2_ro", "q3_ro",
-        "q1_xy", "q2_xy", "q3_xy",
-        "q1_z", "q2_z", "q1_q2_c_z",
+        # minted resonators, the declared operation
+        "q1_res", "q2_res", "q3_res", "q1_q2.iswap",
     }
+    designed = {"fl1.q1", "fl1.q2", "fl1.q3", "xy1.q1", "xyz2.q2", "xy3.q3",
+                "z1.q1", "zc12.q1_q2_c"}
+    assert set(roster.channels()) == designed
+    assert set(roster.entities) - designed - set(
+        roster.borrowed_channels()) == declared_and_minted
+
+
+def test_borrowed_channels_reach_every_drivable_mode_on_every_drive_line(roster):
+    """Every drive line lends itself to every mode it does not carry by design
+    - no declaration needed, and the line is in the name."""
+    assert set(roster.borrowed_channels()) == {
+        "xy1.q2", "xy1.q3", "xy1.q1_q2_c",
+        "xyz2.q1", "xyz2.q3", "xyz2.q1_q2_c",
+        "xy3.q1", "xy3.q2", "xy3.q1_q2_c"}
+    ch = roster.entities["xy1.q1_q2_c"]
+    assert ch.borrowed and ch.kind == "drive" and ch.line == "xy1"
+    fields = roster.fields_of("xy1.q1_q2_c")
+    assert {"drive_freq_hz", "pi_amp", "pi_duration_s"} <= set(fields)
+    # the target's own business stays on its designed channel
+    assert "thermalization_time_s" not in fields
+    assert "parity_delta_f_hz" not in fields
+    with pytest.raises(RosterError, match="BORROWED"):
+        roster.spec("xy1.q1_q2_c", "thermalization_time_s")
+    # a borrowed channel is not wiring: no derived op, no default, no lock
+    assert "rx" not in roster.operations("q1_q2_c")
+    assert "xy1.q1_q2_c" not in roster.signatures()
+
+
+def test_a_borrowed_channel_must_be_named_with_its_line(roster):
+    with pytest.raises(RosterError, match=r"xy1\.q1_q2_c\.pi_amp.*xyz2"):
+        roster.resolve_field("q1_q2_c", "pi_amp")
+    assert roster.resolve_field("xyz2.q1_q2_c", "pi_amp")[0] == "xyz2.q1_q2_c"
 
 
 def test_minted_resonators_carry_the_qubit_ref(roster):
@@ -75,14 +105,31 @@ def test_minted_resonators_carry_the_qubit_ref(roster):
 
 
 def test_minted_readout_channel_binds_its_resonator(roster):
-    ro = roster.entities["q3_ro"]
+    ro = roster.entities["fl1.q3"]
     assert isinstance(ro, Channel)
     assert ro.via == "q3_res" and ro.target == ("q3",) and ro.line == "fl1"
 
 
-def test_combined_wire_two_channels_one_line(roster):
-    assert roster.entities["q2_xy"].line == "xyz2"
-    assert roster.entities["q2_z"].line == "xyz2"
+def test_combined_wire_is_one_channel_with_two_kinds(roster):
+    """One (line, target) is one channel whatever it carries: the drive knobs
+    and the flux transfer function share xyz2.q2, the flux bias is the line's."""
+    ch = roster.entities["xyz2.q2"]
+    assert ch.kinds == ("drive", "flux") and ch.kind == "drive"
+    fields = roster.fields_of("xyz2.q2")
+    assert {"pi_amp", "flux_per_phi0"} <= set(fields)
+    assert "idle_flux" in roster.fields_of("xyz2")
+    assert roster.default_channel("q2", "drive") == "xyz2.q2"
+    assert roster.default_channel("q2", "flux") == "xyz2.q2"
+
+
+def test_same_kind_twice_on_one_channel_is_a_load_error():
+    _expect(EXAMPLE + '\n[channels.x]\nkind = "drive"\ntarget = "q1"\n'
+            'line = "xy1"\n', "a second drive channel 'xy1.q1'")
+
+
+def test_drive_and_readout_never_share_one_channel():
+    _expect(EXAMPLE + '\n[channels.x]\nkind = "readout"\ntarget = "q1"\n'
+            'line = "xy1"\nvia = "q1_res"\n', "at most one function with knobs")
 
 
 def test_derived_operations_keyed_on_kind(roster):
@@ -93,26 +140,39 @@ def test_derived_operations_keyed_on_kind(roster):
 
 
 def test_default_addressing_slots(roster):
-    assert roster.default_channel("q1", "drive") == "q1_xy"
-    assert roster.default_channel("q1_q2_c", "flux") == "q1_q2_c_z"
+    assert roster.default_channel("q1", "drive") == "xy1.q1"
+    assert roster.default_channel("q1_q2_c", "flux") == "zc12.q1_q2_c"
     with pytest.raises(RosterError, match="no unique readout"):
         roster.default_channel("q1_q2_c", "readout")
 
 
 # ------------------------------------------------------------- legal fields
 
-def test_flux_channel_spans_both_stores(roster):
-    fields = roster.fields_of("q1_z")
-    assert {"idle_flux", "flux_offset", "flux_per_phi0"} <= set(fields)
+def test_flux_line_holds_the_bias_and_the_channel_the_transfer(roster):
+    assert set(roster.fields_of("z1")) == {
+        "idle_flux", "flux_delay_s", "distortion_amp", "distortion_tau_s"}
+    assert set(roster.fields_of("z1.q1")) == {"flux_offset", "flux_per_phi0"}
+    assert roster.fields_of("z1")["idle_flux"].role == "knob"
+    assert roster.fields_of("z1")["distortion_amp"].role == "fact"
 
 
-def test_operations_instantiate_full_name_knobs(roster):
-    fields = roster.fields_of("q1_q2")
-    assert "iswap_coupler_flux" in fields
-    assert "iswap_waveform" in fields and "iswap_waveform_dt_s" in fields
-    assert "cz_coupler_flux" not in fields  # cz not declared
+def test_shorthand_reaches_the_line_through_the_designed_channel(roster):
+    assert roster.resolve_field("q1", "idle_flux")[0] == "z1"
+    assert roster.resolve_field("q1", "flux_per_phi0")[0] == "z1.q1"
+    assert roster.resolve_field("q1", "pi_amp")[0] == "xy1.q1"
+    assert roster.resolve_field("q1", "f_dress0_hz")[0] == "q1_res"
+    assert roster.resolve_field("q1_q2_c", "idle_flux")[0] == "zc12"
+
+
+def test_operations_are_entities_of_their_own(roster):
+    fields = roster.fields_of("q1_q2.iswap")
+    assert "coupler_flux" in fields
+    assert "waveform" in fields and "waveform_dt_s" in fields
+    assert "coupler_flux" not in roster.fields_of("q1_q2")
     with pytest.raises(RosterError, match="operation 'cz' is not declared"):
-        roster.spec("q1_q2", "cz_amp")
+        roster.spec("q1_q2.cz", "amp")
+    with pytest.raises(RosterError, match=r"q1_q2\.iswap\.coupler_flux"):
+        roster.spec("q1_q2", "coupler_flux")
 
 
 def test_per_leg_couplings_legal_on_single_coupler_pair(roster):
@@ -126,8 +186,9 @@ def test_design_only_fields_excluded_from_store_legality():
     assert "n_jj" in r.fields_of("q3", design=True)
 
 
-def test_lines_have_no_fields(roster):
+def test_drive_and_readout_lines_have_no_fields(roster):
     assert roster.fields_of("fl1") == {}
+    assert roster.fields_of("xy1") == {}
 
 
 def test_spec_gives_exact_cause_on_unknown_field(roster):
@@ -157,9 +218,18 @@ def test_pump_rider_is_refused():
     _expect(EXAMPLE + '\n[lines.p1]\npump = ["q1"]\n', "explicit-only")
 
 
-def test_second_same_kind_rider_collides_with_provenance():
-    _expect(EXAMPLE + '\n[lines.xyB]\ndrive = ["q1"]\n',
-            "already minted")
+def test_a_second_designed_line_makes_the_shorthand_ambiguous():
+    """Two designed drive lines to one qubit are legal wiring; the shorthand
+    then refuses and the channel must be named."""
+    r = parse_components(EXAMPLE + '\n[lines.xyB]\ndrive = ["q1"]\n')
+    assert {"xy1.q1", "xyB.q1"} <= set(r.channels())
+    with pytest.raises(RosterError, match="several drive channels"):
+        r.resolve_field("q1", "pi_amp")
+
+
+def test_a_second_readout_rider_for_one_qubit_needs_the_hatch():
+    _expect(EXAMPLE + '\n[lines.fl2]\nreadout = ["q1"]\n',
+            "a second readout rider")
 
 
 def test_declared_name_colliding_with_minted_resonator():
@@ -167,15 +237,17 @@ def test_declared_name_colliding_with_minted_resonator():
             "one name, one entity")
 
 
-def test_line_name_colliding_with_derived_channel():
-    _expect(EXAMPLE.replace("[lines.z1]", "[lines.q1_z]"),
-            "one name, one entity")
+def test_an_entity_may_not_be_named_like_a_field():
+    """In the nested store files a key under a line or a composite is a field
+    or a sub-entity - the two vocabularies may never meet."""
+    _expect(EXAMPLE.replace("[lines.z1]", "[lines.idle_flux]").replace(
+        'line = "z1"', 'line = "idle_flux"'), "is a field name")
 
 
-def test_explicit_channel_colliding_with_derived_name():
-    _expect(EXAMPLE + '\n[channels.q1_xy]\n'
-            'kind = "drive"\ntarget = "q1"\nline = "xy1"\n',
-            "one name, one entity")
+def test_a_channel_label_may_not_reuse_an_entity_name():
+    _expect(EXAMPLE + '\n[channels.q2]\n'
+            'kind = "pump"\ntarget = "q1"\nline = "xy1"\n',
+            "one name, one meaning")
 
 
 def test_via_required_when_no_resonator_matches():
@@ -186,8 +258,9 @@ def test_via_required_when_no_resonator_matches():
 
 def test_via_required_when_two_resonators_claim_the_qubit():
     extra = ('\n[modes.q1_purcell]\nkind = "resonator"\nqubit = "q1"\n'
+             '[lines.fl2]\n'
              '[channels.q1_ro2]\nkind = "readout"\ntarget = "q1"\n'
-             'line = "fl1"\n')
+             'line = "fl2"\n')
     _expect(EXAMPLE + extra, "several resonators claim")
 
 
@@ -246,20 +319,24 @@ line   = "coil"
 """
 
 
-def test_broadcast_flux_channel_one_knob_per_target_facts():
+def test_broadcast_flux_coil_one_bias_per_line_facts_per_target():
+    """ONE DC offset for the wire; each SQUID it reaches keeps its own
+    transfer function on its own channel (the retired __<target> grammar)."""
     r = parse_components(COIL)
-    fields = r.fields_of("coil_z")
-    assert "idle_flux" in fields                      # ONE knob
-    assert "flux_offset" not in fields                # bare per-target fact illegal
-    assert "flux_per_phi0__q1" in fields              # __<target> instances
-    assert "flux_per_phi0__q1_q2_c" in fields
-    # paired arrays re-point per target — the equal-length check never dangles
-    assert fields["distortion_amp__q1"].paired_with == "distortion_tau_s__q1"
+    assert set(r.fields_of("coil")) == {
+        "idle_flux", "flux_delay_s", "distortion_amp", "distortion_tau_s"}
+    for t in ("q1", "q2", "q1_q2_c"):
+        ch = r.entities[f"coil.{t}"]
+        assert ch.broadcast and ch.origins == {"flux": "coil_z"}
+        assert set(r.fields_of(f"coil.{t}")) == {"flux_offset",
+                                                 "flux_per_phi0"}
+    assert r.fields_of("coil")["distortion_amp"].paired_with == "distortion_tau_s"
 
 
-def test_multi_target_channel_never_consumes_the_default_slot():
+def test_broadcast_channels_never_consume_the_default_slot():
     r = parse_components(COIL)
-    assert r.default_channel("q1", "flux") == "q1_z"
+    assert r.default_channel("q1", "flux") == "z1.q1"
+    assert r.resolve_field("q1", "idle_flux")[0] == "z1"
 
 
 def test_pump_targets_composites_and_lists():
@@ -270,19 +347,22 @@ target = "q1_q2"
 line   = "zc12"
 """
     r = parse_components(text)
-    assert r.entities["pump_zz"].target == ("q1_q2",)
-    assert "pump_freq_hz" in r.fields_of("pump_zz")
+    assert r.entities["zc12.pump_zz"].target == ("q1_q2",)
+    assert "pump_freq_hz" in r.fields_of("zc12.pump_zz")
 
 
 def test_lock_signatures_are_exactly_the_doc_identity(roster):
     """Doc section 7: the lock compares (name, kind, target(s)) — nothing
     more, so doc-legal post-cut appends never change a frozen signature."""
     sigs = roster.signatures()
-    assert "q1_ro" in sigs and "q1_res" in sigs      # derived names freeze too
-    assert sigs["q1_ro"] == ("Channel", "q1_ro", "readout", ("q1",))
+    assert "fl1.q1" in sigs and "q1_res" in sigs      # derived names freeze too
+    assert sigs["fl1.q1"] == ("Channel", "fl1.q1", ("readout",), ("q1",))
+    assert sigs["xyz2.q2"] == ("Channel", "xyz2.q2", ("drive", "flux"), ("q2",))
     assert sigs["q1_q2"] == ("Composite", "q1_q2", "qubit_pair")
     assert sigs["q1_res"] == ("Mode", "q1_res", "resonator")
-    assert "fl1" not in sigs["q1_ro"]                # line/provenance excluded
+    # operations (declared on their composite) and borrowed channels are
+    # never locked
+    assert "q1_q2.iswap" not in sigs and "xy1.q2" not in sigs
     # Appending an operation to a frozen composite is a legal append.
     r2 = parse_components(EXAMPLE.replace('operations = ["iswap"]',
                                           'operations = ["iswap", "cz"]'))
@@ -310,7 +390,7 @@ def test_cavity_readout_works_through_the_explicit_hatch():
                       '[channels.mem_ro]\nkind = "readout"\n'
                       'target = "mem"\nline = "fl1"\nvia = "buf"\n')
     r = parse_components(text)
-    assert r.entities["mem_ro"].via == "buf"
+    assert r.entities["fl1.mem"].via == "buf"
     assert "readout" in r.operations("mem")
 
 
@@ -323,15 +403,20 @@ target = "q1_q2_c"
 line   = "fl1"
 via    = "q1_res"
 """)
-    ch = r.entities["q1_q2_c_ro"]
+    ch = r.entities["fl1.q1_q2_c"]
     assert ch.via == "q1_res" and ch.line == "fl1"
+    assert ch.origins == {"readout": "q1_q2_c_ro"}
     assert "readout" in r.operations("q1_q2_c")
-    assert r.default_channel("q1_q2_c", "readout") == "q1_q2_c_ro"
+    assert r.default_channel("q1_q2_c", "readout") == "fl1.q1_q2_c"
 
 
-def test_operation_name_colliding_with_static_catalogs_is_refused():
-    _expect(EXAMPLE.replace('operations = ["iswap"]', 'operations = ["pi"]'),
-            "already exist in the static catalogs")
+def test_an_operation_may_not_be_named_like_a_field():
+    _expect(EXAMPLE.replace('operations = ["iswap"]', 'operations = ["zz_hz"]'),
+            "is a field name")
+    # no flattening any more: 'pi' is a fine operation name now
+    r = parse_components(EXAMPLE.replace('operations = ["iswap"]',
+                                         'operations = ["pi"]'))
+    assert "q1_q2.pi" in r.entities
 
 
 def test_entity_cannot_fill_two_roles():
@@ -368,8 +453,8 @@ def test_pump_list_may_not_contain_composites():
 
 
 def test_via_must_be_a_mode():
-    _expect(EXAMPLE + '\n[channels.x_ro]\nkind = "readout"\ntarget = "q1"\n'
-            'line = "fl1"\nvia = "fl1"\n', "not a declared mode")
+    _expect(EXAMPLE + '\n[lines.fl2]\n[channels.x_ro]\nkind = "readout"\n'
+            'target = "q1"\nline = "fl2"\nvia = "fl1"\n', "not a declared mode")
 
 
 def test_dunder_names_are_reserved_for_the_field_grammar():
@@ -397,3 +482,50 @@ def test_bom_is_tolerated_in_the_hand_edited_file(tmp_path):
     p = tmp_path / "components.toml"
     p.write_bytes(b"\xef\xbb\xbf" + EXAMPLE.encode())
     assert "q1" in load_components(p).entities
+
+
+# ------------------------------------------------ refusals that teach 4.0.0
+
+def test_a_3x_name_says_where_it_went(roster):
+    """4.0.0 never accepts a 3.x name; the refusal names the new address."""
+    with pytest.raises(RosterError, match=r"3\.x name of z1\.q1, with .*"
+                                          r"idle_flux on its line z1"):
+        roster.fields_of("q1_z")
+    with pytest.raises(RosterError, match=r"3\.x name of xy1\.q1 "):
+        roster.resolve_field("q1_xy", "pi_amp")
+    with pytest.raises(RosterError, match=r"3\.x name of xyz2\.q2 "):
+        roster.resolve_field("q2_xy", "pi_amp")
+    with pytest.raises(RosterError,
+                       match=r"3\.x spelling of q1_q2\.iswap\.coupler_flux"):
+        roster.resolve_field("q1_q2", "iswap_coupler_flux")
+
+
+def test_a_borrowed_route_refuses_a_target_owned_field_exactly(roster):
+    with pytest.raises(RosterError, match="is a BORROWED channel and "
+                       "thermalization_time_s belongs to 'q1_q2_c'"):
+        roster.resolve_field("xy1.q1_q2_c", "thermalization_time_s")
+
+
+def test_a_lone_broadcast_channel_is_not_called_ambiguous():
+    r = parse_components(
+        'schema = 3\n[modes.a]\nkind = "flux_transmon"\n'
+        '[modes.b]\nkind = "flux_transmon"\n[lines.coil]\n'
+        '[channels.coil_z]\nkind = "flux"\ntarget = ["a", "b"]\nline = "coil"\n')
+    with pytest.raises(RosterError, match=r"'coil\.a' is a broadcast channel, "
+                                          r"which never answers the shorthand "
+                                          r"- address coil\.idle_flux"):
+        r.resolve_field("a", "idle_flux")
+    with pytest.raises(RosterError, match=r"address coil\.a\.flux_per_phi0"):
+        r.resolve_field("a", "flux_per_phi0")
+
+
+def test_the_borrowed_routes_in_use_are_listed_first(roster):
+    with pytest.raises(RosterError) as plain:
+        roster.resolve_field("q1_q2_c", "pi_amp")
+    text = str(plain.value)
+    assert text.index("xy1.q1_q2_c") < text.index("xyz2.q1_q2_c")  # by name
+    with pytest.raises(RosterError) as used:
+        roster.resolve_field("q1_q2_c", "pi_amp",
+                             valued=lambda e, f: e == "xyz2.q1_q2_c")
+    text = str(used.value)
+    assert text.index("xyz2.q1_q2_c") < text.index("xy1.q1_q2_c")

@@ -35,7 +35,8 @@ def test_bare_listing_names_and_footer():
     # counts computed from the entries, every capability + the none bucket
     assert lines[-2] == ("# capabilities: state_readout(0) flux(2) "
                          "qubit_reset(1) flux_pulse(0) amplitude(0) "
-                         "drive_detuning(0) readout_detuning(0) none(1)")
+                         "drive_detuning(0) readout_detuning(0) coupler_flux(0) "
+                         "drive_line(0) mapped_readout(0) none(1)")
     assert lines[-1] == ("# filter: scqo run --capability <name>    "
                          "detail: scqo run <name> --help")
     # the NAME columns respect the width (the two meta footer lines may wrap;
@@ -93,21 +94,30 @@ def test_real_catalog_flux_filter_matches_the_pinned_carriers():
     lines = _catalog_listing_lines(_core_entries(), capabilities=["flux"])
     assert lines[1:] == [
         "qubit_echo_flux_pulse",
+        "qubit_ramsey_flux_pulse",
         "qubit_relaxation_flux_pulse",
         "qubit_spectroscopy_flux_pulse",
         "resonator_spectroscopy_flux",
     ]
 
 
-def test_real_catalog_none_bucket_is_the_wideband_resonator_search():
-    """The `none` filter still renders, and it holds exactly one experiment.
-    readout_detuning classified the three resonator sweeps that used to be this
-    bucket; the wideband resonator SEARCH took their place, because its span is
-    absolute Hz rather than a detuning window around a known readout_freq_hz.
+def test_real_catalog_none_bucket_holds_the_two_experiments_that_sweep_no_knob():
+    """The `none` filter still renders, and it holds exactly two experiments.
+
+    `broadband_resonator_spectroscopy` is the wideband resonator SEARCH - its
+    span is absolute Hz rather than a detuning window around a known
+    readout_freq_hz, which is what readout_detuning classifies (and what moved
+    the three resonator sweeps out of this bucket).
+
+    `readout_time_of_flight` joined it for a different reason: its one axis is
+    digitizer TIME, which is not a swept knob at all, and it prepares no qubit
+    state, so it carries neither qubit_reset nor state_readout either.
+
     Zero capabilities stays legal for a NEW experiment (registry.catalog's own
     rule), so this pins today's registry, not a permanent property."""
     lines = _catalog_listing_lines(_core_entries(), capabilities=["none"])
-    assert lines[1:] == ["broadband_resonator_spectroscopy"]
+    assert lines[1:] == ["broadband_resonator_spectroscopy",
+                         "readout_time_of_flight"]
     entries = {e["name"]: e for e in _core_entries()}
     for name in ("resonator_spectroscopy", "resonator_spectroscopy_power_amp",
                  "resonator_spectroscopy_power_chain"):

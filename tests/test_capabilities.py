@@ -24,31 +24,42 @@ from scqo.experiments._capabilities import (
     ABS_AMP_COORD,
     ACTIVE_RESET_ROUNDS_DESC,
     AMP_AXIS,
+    COUPLER_FLUX_AXIS,
     DETUNING_AXIS,
+    DRIVE_LINE_DESC,
+    READOUT_MEMBER_DESC,
+    SELECTIVE_PI_LEN_DESC,
+    END_AMP_FACTOR_DESC,
+    END_COUPLER_FLUX_DESC,
+    NUM_COUPLER_FLUX_DESC,
+    START_COUPLER_FLUX_DESC,
     END_DRIVE_DETUNING_DESC,
+    END_FLUX_DESC,
+    END_FLUX_PULSE_DESC,
     END_READOUT_DETUNING_DESC,
     FLUX_AXIS,
-    MAX_AMP_FACTOR_DESC,
-    MAX_FLUX_DESC,
-    MAX_FLUX_PULSE_DESC,
-    MIN_AMP_FACTOR_DESC,
-    MIN_FLUX_DESC,
-    MIN_FLUX_PULSE_DESC,
     NUM_AMP_POINTS_DESC,
     NUM_AMP_POINTS_OPTIONAL_DESC,
     NUM_FLUX_DESC,
     NUM_FREQ_POINTS_DESC,
     RESET_METHOD_DESC,
+    START_AMP_FACTOR_DESC,
     START_DRIVE_DETUNING_DESC,
+    START_FLUX_DESC,
+    START_FLUX_PULSE_DESC,
     START_READOUT_DETUNING_DESC,
     THERMALIZATION_TIME_DESC,
     AmplitudeSweepParameters,
     DriveDetuningSweepParameters,
     ReadoutDetuningSweepParameters,
     FluxComponentParameters,
+    FluxPulseSweepParameters,
+    FluxSweepParameters,
     QubitResetParameters,
     StateReadoutParameters,
+    amp_sweep,
     drive_detuning_sweep,
+    flux_sweep,
     foreign_flux_source,
     readout_detuning_sweep,
     reset_wait_ns,
@@ -91,7 +102,10 @@ EXPECTED_CAPABILITIES = {
     "qubit_relaxation": ["state_readout", "qubit_reset"],
     "qubit_echo": ["state_readout", "qubit_reset"],
     "qubit_ramsey": ["state_readout", "qubit_reset"],
-    "qubit_power_rabi": ["state_readout", "qubit_reset", "amplitude"],
+    # the first carrier of the coupler pair of capabilities: drive_line (a named,
+    # possibly borrowed, drive channel) and mapped_readout (read through a member)
+    "qubit_power_rabi": ["state_readout", "qubit_reset", "amplitude", "drive_line",
+                         "mapped_readout"],
     "qubit_deterministic_benchmarking": ["state_readout", "qubit_reset", "amplitude"],
     "qubit_sqrb": ["state_readout", "qubit_reset"],
     "crosstalk_compensated_sqrb": ["state_readout", "qubit_reset"],
@@ -118,6 +132,7 @@ EXPECTED_CAPABILITIES = {
     "qubit_stark_phase_echo": ["state_readout", "qubit_reset"],
     "qubit_relaxation_flux_pulse": ["state_readout", "flux", "qubit_reset", "flux_pulse"],
     "qubit_echo_flux_pulse": ["state_readout", "flux", "qubit_reset", "flux_pulse"],
+    "qubit_ramsey_flux_pulse": ["state_readout", "flux", "qubit_reset", "flux_pulse"],
     # parametric drive (both siblings): state_readout + qubit_reset, but NO flux
     # capability — the swept axes are the modulation TONE's own amplitude
     # (absolute volts of a new RF drive, not a z-bias window), its frequency
@@ -140,6 +155,15 @@ EXPECTED_CAPABILITIES = {
     # trio works on raw per-shot IQ by construction).
     "qubit_pi_pulse_error": ["qubit_reset", "amplitude"],
     "pair_zz_coupler": ["qubit_reset"],
+    # the coupler-crossing scan: its window is the COUPLER's flux pulse (relative to
+    # the coupler's idle_flux), not a target z-line window, so coupler_flux and not
+    # flux; discrimination is hardcoded (joint populations), so no state_readout.
+    "pair_coupler_crossing_pulse": ["qubit_reset", "coupler_flux"],
+    # the coupler swap spectroscopy: its tone window is ABSOLUTE Hz (no drive-
+    # detuning origin - the coupler has no drive knob) and its ramp is a fixed
+    # waveform, not a swept coupler-flux window; discrimination is hardcoded.
+    "pair_coupler_spectroscopy_swap": ["qubit_reset"],
+    "pair_coupler_spectroscopy_zz": ["qubit_reset"],
     # the swap maps sweep FLUX but do not carry "flux": that capability is
     # the single-qubit z-bias sweep (FluxSweepParameters, contract axis
     # flux_bias_v), and these sweep a pair's pulse amplitudes instead. Their
@@ -157,7 +181,6 @@ EXPECTED_CAPABILITIES = {
     "qc_trotter_compensation": ["qubit_reset"],
     "qc_unidirectional_trotter": ["qubit_reset"],
     "single_shot_readout": ["qubit_reset"],
-    "single_shot_readout_gef": ["qubit_reset"],
     "qubit_thermal_population": ["qubit_reset"],
     # T1 trackers: qubit_reset only — their probes ALWAYS discriminate (the
     # on-FPGA math consumes the state bit), so there is no I/Q-vs-state choice
@@ -166,7 +189,17 @@ EXPECTED_CAPABILITIES = {
     "qubit_t1_bayesian": ["qubit_reset"],
     "readout_power": ["qubit_reset", "amplitude"],
     "readout_frequency": ["qubit_reset", "readout_detuning"],
+    # readout_time_of_flight: NONE, and deliberately. It prepares no qubit
+    # state (so no qubit_reset), discriminates nothing (so no
+    # state_readout - the variables are raw ADC samples), and sweeps no
+    # knob at all: its one axis is digitizer TIME, which is not a
+    # capability window. The decision is written down, which is what this
+    # map demands; zero capabilities stays legitimate.
+    "readout_time_of_flight": [],
     "qubit_spectroscopy": ["qubit_reset", "drive_detuning"],
+    # the Stark tone's amplitude is a factor of readout_amp; the drive sweeps a
+    # drive-detuning window, as in qubit_spectroscopy
+    "qubit_resonator_stark": ["qubit_reset", "amplitude", "drive_detuning"],
     "qubit_tomography": ["qubit_reset"],
     "qubit_drag_equator": ["qubit_reset"],
     "qubit_drag_alternating": ["qubit_reset"],
@@ -225,7 +258,8 @@ def test_capability_summaries_track_the_derived_set():
 
     assert list(CAPABILITY_SUMMARIES) == [
         "state_readout", "flux", "qubit_reset", "flux_pulse", "amplitude",
-        "drive_detuning", "readout_detuning"]
+        "drive_detuning", "readout_detuning", "coupler_flux", "drive_line",
+        "mapped_readout"]
     assert set(CAPABILITY_SUMMARIES) == {
         cap for caps in EXPECTED_CAPABILITIES.values() for cap in caps}
     # one short plain line each: no reST markup, no scraped "Mixin:" prefix
@@ -262,16 +296,16 @@ def test_canonical_field_text_never_drifts():
             # the window text is per-FRAME; num_flux_points carries no frame
             # information and reuses the one constant in both
             pulse = "flux_pulse" in entry["capabilities"]
-            assert props["min_flux_v"]["description"] == (
-                MIN_FLUX_PULSE_DESC if pulse else MIN_FLUX_DESC), name
-            assert props["max_flux_v"]["description"] == (
-                MAX_FLUX_PULSE_DESC if pulse else MAX_FLUX_DESC), name
+            assert props["start_flux_v"]["description"] == (
+                START_FLUX_PULSE_DESC if pulse else START_FLUX_DESC), name
+            assert props["end_flux_v"]["description"] == (
+                END_FLUX_PULSE_DESC if pulse else END_FLUX_DESC), name
             assert props["num_flux_points"]["description"].startswith(NUM_FLUX_DESC), name
         if "amplitude" in entry["capabilities"]:
             # every carrier re-declares the window (each has its own defaults), so
             # the TEXT is the only thing stopping four descriptions drifting apart
-            assert props["min_amp_factor"]["description"] == MIN_AMP_FACTOR_DESC, name
-            assert props["max_amp_factor"]["description"] == MAX_AMP_FACTOR_DESC, name
+            assert props["start_amp_factor"]["description"] == START_AMP_FACTOR_DESC, name
+            assert props["end_amp_factor"]["description"] == END_AMP_FACTOR_DESC, name
             # deterministic_benchmarking allows a single point and says so
             assert props["num_amp_points"]["description"] in (
                 NUM_AMP_POINTS_DESC, NUM_AMP_POINTS_OPTIONAL_DESC), name
@@ -299,6 +333,19 @@ def test_canonical_field_text_never_drifts():
                 END_READOUT_DETUNING_DESC), name
             assert props["num_readout_freq_points"]["description"].startswith(
                 NUM_FREQ_POINTS_DESC), name
+        if "coupler_flux" in entry["capabilities"]:
+            assert props["start_coupler_flux_v"]["description"] == START_COUPLER_FLUX_DESC, name
+            assert props["end_coupler_flux_v"]["description"] == END_COUPLER_FLUX_DESC, name
+            assert props["num_coupler_flux_points"]["description"].startswith(
+                NUM_COUPLER_FLUX_DESC), name
+        if "drive_line" in entry["capabilities"]:
+            assert props["drive_line"]["description"] == DRIVE_LINE_DESC, name
+        if "mapped_readout" in entry["capabilities"]:
+            assert props["readout_member"]["description"] == READOUT_MEMBER_DESC, name
+            assert props["selective_pi_len_ns"]["description"] == SELECTIVE_PI_LEN_DESC, name
+        # the zz spectroscopy's selective pi IS the map's, one text for both
+        if "selective_pi_len_ns" in props:
+            assert props["selective_pi_len_ns"]["description"] == SELECTIVE_PI_LEN_DESC, name
 
 
 def test_flux_axis_is_the_contract_axis():
@@ -326,10 +373,10 @@ def test_the_two_flux_frames_say_different_things():
     copy-paste that made them identical would erase the distinction while every
     other test still passed.
     """
-    assert MIN_FLUX_DESC != MIN_FLUX_PULSE_DESC
-    assert MAX_FLUX_DESC != MAX_FLUX_PULSE_DESC
-    assert "idle_flux" in MIN_FLUX_PULSE_DESC
-    assert "idle_flux" not in MIN_FLUX_DESC
+    assert START_FLUX_DESC != START_FLUX_PULSE_DESC
+    assert END_FLUX_DESC != END_FLUX_PULSE_DESC
+    assert "idle_flux" in START_FLUX_PULSE_DESC
+    assert "idle_flux" not in START_FLUX_DESC
 
 
 def test_flux_pulse_names_carry_the_suffix():
@@ -351,6 +398,19 @@ def test_flux_pulse_names_carry_the_suffix():
     for name, entry in entries.items():
         if "flux_pulse" in entry["capabilities"]:
             assert "flux" in entry["capabilities"], name
+
+
+def test_coupler_flux_carriers_carry_the_pulse_suffix():
+    """The coupler window has ONE frame - a pulse relative to the coupler's
+    idle_flux - so every carrier announces it in its name, sweeps
+    COUPLER_FLUX_AXIS, and the window text names its origin."""
+    entries = _catalog_by_name()
+    carriers = [n for n, e in entries.items() if "coupler_flux" in e["capabilities"]]
+    assert carriers  # the capability exists
+    for name in carriers:
+        assert name.endswith("_pulse"), name
+        assert COUPLER_FLUX_AXIS in get(name).Contract.sweeps, name
+    assert "idle_flux" in START_COUPLER_FLUX_DESC and "idle_flux" in END_COUPLER_FLUX_DESC
 
 
 def test_reset_wait_precedence():
@@ -428,7 +488,7 @@ def test_relaxation_proposes_the_reset_wait():
     proposed = {(s["entity"], s["field"]): s["after"] for s in out["suggestions"]}
     t1 = out["fit"]["q0"]["t1_s"]
     assert proposed[("q0", "t1_s")] == pytest.approx(t1)
-    assert proposed[("q0_xy", "thermalization_time_s")] == pytest.approx(8.0 * t1)
+    assert proposed[("xy_q0.q0", "thermalization_time_s")] == pytest.approx(8.0 * t1)
 
 
 def test_resonator_spectroscopy_proposes_the_depletion_wait():
@@ -447,10 +507,10 @@ def test_resonator_spectroscopy_proposes_the_depletion_wait():
     kappa = out["fit"]["q0"]["kappa_tot_hz"]
 
     assert proposed[("q0_res", "kappa_tot_hz")] == pytest.approx(kappa)
-    assert proposed[("q0_ro", "readout_depletion_s")] == pytest.approx(
+    assert proposed[("fl.q0", "readout_depletion_s")] == pytest.approx(
         depletion_time_s(kappa, 4.0))
     # the factor is a choice, the linewidth is a fact: the knob must MOVE with it
-    assert proposed[("q0_ro", "readout_depletion_s")] == pytest.approx(
+    assert proposed[("fl.q0", "readout_depletion_s")] == pytest.approx(
         4.0 / (2 * math.pi * kappa))
 
 
@@ -470,6 +530,7 @@ def test_foreign_flux_source_guard():
     ("qubit_sqrb", {"num_random_sequences": 5, "max_circuit_depth": 16}),
     ("qubit_relaxation_flux_pulse", {"num_flux_points": 5, "num_wait_points": 11}),
     ("qubit_echo_flux_pulse", {"num_flux_points": 5, "num_wait_points": 11}),
+    ("qubit_ramsey_flux_pulse", {"num_flux_points": 5, "num_idle_points": 11}),
 ])
 def test_population_contract_accepted_for_newly_wired(name, params):
     """The newly wired carriers emit `population` (no I/Q) in discriminated mode
@@ -501,6 +562,11 @@ AMPLITUDE_CARRIERS = [
     ("qubit_deterministic_benchmarking",
      {"num_amp_points": 5, "target_gate": "x90", "max_repetitions": 20},
      "pi_amp_x90"),
+    # a fresh demo device has no readout_depletion_s, which this one refuses
+    # without — the per-run override stands in for it
+    ("qubit_resonator_stark",
+     {"num_amp_points": 4, "num_drive_freq_points": 41, "readout_depletion_ns": 1000.0},
+     "readout_amp"),
 ]
 
 
@@ -516,7 +582,7 @@ def test_amplitude_carriers_attach_the_absolute_axis(name, params, knob, tmp_pat
 
     ensure_demo_experiments()
     roster, design, vendor = demo_device()
-    channel = "q0_ro" if knob == "readout_amp" else "q0_xy"
+    channel = "fl.q0" if knob == "readout_amp" else "xy_q0.q0"
     base = float(getattr(vendor.component(channel), knob))
     sess = Session(SimulatedBackend(vendor), roster, design=design,
                    scqo_dir=tmp_path / "scqo", data_root=tmp_path / "data")
@@ -542,7 +608,7 @@ def test_absolute_axis_is_per_target_which_is_why_the_input_stays_a_ratio(tmp_pa
     roster, design, vendor = demo_device()
     sess = Session(SimulatedBackend(vendor), roster, design=design,
                    scqo_dir=tmp_path / "scqo", data_root=tmp_path / "data")
-    sess.set_values({"q0_xy.pi_amp": 0.15, "q1_xy.pi_amp": 0.35})
+    sess.set_values({"xy_q0.q0.pi_amp": 0.15, "xy_q1.q1.pi_amp": 0.35})
     out = sess.run("qubit_power_rabi", {"targets": ["q0", "q1"], "num_amp_points": 21})
 
     with xr.open_dataset(f"{out['data_path']}/dataset.nc") as ds:
@@ -606,10 +672,11 @@ def test_the_amplitude_capability_is_derived_from_the_mixin():
 # --------------------------------------------------------------------------
 # drive_detuning capability: the swept drive-frequency window
 # --------------------------------------------------------------------------
-#: the three carriers — every drive-frequency window in the registry. The
-#: readout-side detuning sweeps share the axis NAME but are relative to
-#: readout_freq_hz, and carry the SIBLING readout_detuning capability instead.
+#: every drive-frequency window in the registry. The readout-side detuning
+#: sweeps share the axis NAME but are relative to readout_freq_hz, and carry
+#: the SIBLING readout_detuning capability instead.
 DRIVE_DETUNING_CARRIERS = {
+    "qubit_resonator_stark",
     "qubit_spectroscopy",
     "qubit_spectroscopy_cryoscope",
     "qubit_spectroscopy_flux_pulse",
@@ -631,29 +698,28 @@ def test_the_drive_detuning_capability_is_derived_from_the_mixin():
         assert issubclass(cls.Parameters, DriveDetuningSweepParameters), name
 
 
-def test_drive_detuning_edges_take_either_order():
-    """The pair DEFINES the window, it does not choose a traversal direction.
+def _assert_traversal_order(axis_up, axis_down, start, end):
+    """``axis_down`` is ``axis_up`` walked the other way: same points, start
+    first, NEVER re-sorted (the dataset keeps the order the probe walked)."""
+    assert axis_down[0] == pytest.approx(start)
+    assert axis_down[-1] == pytest.approx(end)
+    assert axis_down == pytest.approx(axis_up[::-1])
+    assert np.all(np.diff(axis_down) < 0)
 
-    A reversed pair is accepted and normalised to the SAME ascending axis --
-    the two orderings are the identical measurement. Normalising here is what
-    keeps scqat safe: `peak_fit` builds its width bound as
-    `detuning[-1] - detuning[0]` with no abs(), so a descending axis inverts it
-    and the fit degrades silently (a 4 MHz line measured back as 174 MHz).
-    """
+
+def test_drive_detuning_edges_are_a_traversal_order():
+    """start -> end IN THAT ORDER (decided 2026-09-26): a high -> low pair sweeps high
+    -> low. It used to be normalised ascending, only to keep a scqat fit that
+    misread a descending axis; scqat now canonicalizes on entry, so the order
+    is the caller's and changes no fitted number."""
     up = DriveDetuningSweepParameters(start_drive_detuning_hz=-80e6,
                                       end_drive_detuning_hz=20e6,
                                       num_drive_freq_points=101)
     down = DriveDetuningSweepParameters(start_drive_detuning_hz=20e6,
                                         end_drive_detuning_hz=-80e6,
                                         num_drive_freq_points=101)
-    axis_up = drive_detuning_sweep(up)[DETUNING_AXIS]
-    axis_down = drive_detuning_sweep(down)[DETUNING_AXIS]
-    assert axis_up == pytest.approx(axis_down)          # same measurement
-    assert np.all(np.diff(axis_down) > 0)               # ... and ascending
-    assert axis_down[0] == pytest.approx(-80e6)
-    assert axis_down[-1] == pytest.approx(20e6)
-    # the edges themselves are preserved verbatim -- only the AXIS is ordered
-    assert down.start_drive_detuning_hz == 20e6
+    _assert_traversal_order(drive_detuning_sweep(up)[DETUNING_AXIS],
+                            drive_detuning_sweep(down)[DETUNING_AXIS], 20e6, -80e6)
 
     # a zero-width window is a typo, not a measurement
     with pytest.raises(ValidationError, match="zero-width"):
@@ -692,30 +758,27 @@ def test_the_readout_detuning_capability_is_derived_from_the_mixin():
         assert issubclass(cls.Parameters, ReadoutDetuningSweepParameters), name
 
 
-def test_readout_detuning_edges_take_either_order():
-    """The readout frame's twin of the drive rule — and the frame where writing
-    the pair 'downward' is the natural one, since a punchout walks the dip DOWN
-    from f_dress0 toward f_bare."""
+def test_readout_detuning_edges_are_a_traversal_order():
+    """The readout frame's twin of the drive rule — and the frame where sweeping
+    DOWN is physics you may want to see: a resonator driven into bistability
+    answers differently swept up than down."""
     up = ReadoutDetuningSweepParameters(start_readout_detuning_hz=-15e6,
                                         end_readout_detuning_hz=10e6,
                                         num_readout_freq_points=51)
     down = ReadoutDetuningSweepParameters(start_readout_detuning_hz=10e6,
                                           end_readout_detuning_hz=-15e6,
                                           num_readout_freq_points=51)
-    axis_up = readout_detuning_sweep(up)[DETUNING_AXIS]
-    axis_down = readout_detuning_sweep(down)[DETUNING_AXIS]
-    assert axis_up == pytest.approx(axis_down)
-    assert np.all(np.diff(axis_down) > 0)
-    assert axis_down[0] == pytest.approx(-15e6)
+    _assert_traversal_order(readout_detuning_sweep(up)[DETUNING_AXIS],
+                            readout_detuning_sweep(down)[DETUNING_AXIS], 10e6, -15e6)
 
     with pytest.raises(ValidationError, match="zero-width"):
         ReadoutDetuningSweepParameters(start_readout_detuning_hz=0.0,
                                        end_readout_detuning_hz=0.0)
 
 
-def test_window_bounds_is_the_one_ordering_point():
+def test_window_bounds_is_the_range_check_by_value():
     """Every 'is x inside the window?' test must go through this helper: a
-    chained ``start <= x <= end`` is silently ALWAYS FALSE on a reversed pair,
+    chained ``start <= x <= end`` is silently ALWAYS FALSE on a descending pair,
     which would fail every good fit while looking like a physics problem."""
     assert window_bounds(-80e6, 20e6) == (-80e6, 20e6)
     assert window_bounds(20e6, -80e6) == (-80e6, 20e6)
@@ -739,3 +802,77 @@ def test_the_two_detuning_frames_are_independent_siblings():
 
     assert not (own(DriveDetuningSweepParameters)
                 & own(ReadoutDetuningSweepParameters))
+
+
+# --------------------------------------------------------------------------
+# flux + amplitude windows: a traversal ORDER too (2026-09-26)
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize("mixin", [FluxSweepParameters, FluxPulseSweepParameters])
+def test_flux_edges_are_a_traversal_order(mixin):
+    """Both frames: start_flux_v -> end_flux_v as given, and the only refusal is
+    a zero-width window (a long flux tail or hysteresis is exactly why the
+    direction must be the caller's)."""
+    up = mixin(start_flux_v=-0.1, end_flux_v=0.2, num_flux_points=31)
+    down = mixin(start_flux_v=0.2, end_flux_v=-0.1, num_flux_points=31)
+    _assert_traversal_order(flux_sweep(up)[FLUX_AXIS], flux_sweep(down)[FLUX_AXIS],
+                            0.2, -0.1)
+    with pytest.raises(ValidationError, match="zero-width"):
+        mixin(start_flux_v=0.05, end_flux_v=0.05)
+
+
+def test_the_old_flux_names_are_refused():
+    """No aliases (no backward compatibility): extra="forbid" rejects the old
+    spelling loudly rather than silently sweeping the default window."""
+    with pytest.raises(ValidationError, match="min_flux_v"):
+        FluxSweepParameters(min_flux_v=-0.1)
+    with pytest.raises(ValidationError, match="max_amp_factor"):
+        AmplitudeSweepParameters(max_amp_factor=1.2)
+
+
+def test_amplitude_edges_are_a_traversal_order():
+    """The old ``min < max`` validator is gone: a high -> low amplitude sweep is
+    legal and played in that order; only zero width is refused."""
+    up = AmplitudeSweepParameters(start_amp_factor=0.2, end_amp_factor=1.4,
+                                  num_amp_points=13)
+    down = AmplitudeSweepParameters(start_amp_factor=1.4, end_amp_factor=0.2,
+                                    num_amp_points=13)
+    _assert_traversal_order(amp_sweep(up)[AMP_AXIS], amp_sweep(down)[AMP_AXIS],
+                            1.4, 0.2)
+    with pytest.raises(ValidationError, match="zero-width"):
+        AmplitudeSweepParameters(start_amp_factor=1.0, end_amp_factor=1.0)
+
+
+@pytest.mark.parametrize("edge", ["start_amp_factor", "end_amp_factor"])
+@pytest.mark.parametrize("value", [-0.1, 2.0])
+def test_amplitude_bounds_hold_on_both_edges(edge, value):
+    """Either edge may be the larger one now, so >= 0 and < 2 bind BOTH."""
+    other = "end_amp_factor" if edge == "start_amp_factor" else "start_amp_factor"
+    with pytest.raises(ValidationError, match=edge):
+        AmplitudeSweepParameters(**{edge: value, other: 1.0})
+
+
+def test_every_amplitude_carrier_bounds_both_edges():
+    """Every carrier re-declares the pair with its own defaults, so the schema is
+    where a one-sided bound would hide: each edge must keep a lower bound at or
+    above 0 and an upper bound at or below 2 (QUA's amplitude_scale range)."""
+    for name, entry in _catalog_by_name().items():
+        if "amplitude" not in entry["capabilities"]:
+            continue
+        props = entry["parameters_schema"]["properties"]
+        for edge in ("start_amp_factor", "end_amp_factor"):
+            spec = props[edge]
+            low = spec.get("minimum", spec.get("exclusiveMinimum"))
+            high = spec.get("exclusiveMaximum", spec.get("maximum"))
+            assert low is not None and low >= 0.0, (name, edge, spec)
+            assert high is not None and high <= 2.0, (name, edge, spec)
+
+
+def test_an_explicit_benchmarking_list_keeps_its_order():
+    """The one carrier overriding amp_values() must honour the order too: an
+    explicit list is played as given, never sorted."""
+    cls = get("qubit_deterministic_benchmarking")
+    listed = cls.Parameters(targets=["q0"], amp_prefactors=[1.05, 0.95, 1.0])
+    assert list(amp_sweep(listed)[AMP_AXIS]) == [1.05, 0.95, 1.0]
+    window = cls.Parameters(targets=["q0"], start_amp_factor=1.1,
+                            end_amp_factor=0.9, num_amp_points=5)
+    assert amp_sweep(window)[AMP_AXIS] == pytest.approx([1.1, 1.05, 1.0, 0.95, 0.9])

@@ -283,7 +283,7 @@ class QubitRamseyCryoscope(Experiment):
         for qubit, fit in self.result.fit.items():
             if self.result.outcomes[qubit] is not Outcome.SUCCESSFUL:
                 continue
-            flux_view = self.device.channel(qubit, "flux")
+            flux_view = self.device.flux_line(qubit)  # the taps are the LINE's
             flux_view.distortion_amp = [float(a) for a in fit["distortion_amp"]]
             flux_view.distortion_tau_s = [float(t) for t in fit["distortion_tau_s"]]
             proposed.append(qubit)

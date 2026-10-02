@@ -73,9 +73,10 @@ class QubitParametricDriveTimeParameters(TargetSelection, AveragingParameters,
     the parametric tone has no standing knob to be relative to. Both windows are
     ``[start, end]`` pairs whose edges may be given in EITHER order — they define
     the window, not a sweep direction, and the axis is always swept ascending
-    (``_window.py``). That matters twice here: scqat's per-slice reductions
-    mis-fit a descending frequency axis silently, and a descending TIME axis is
-    not a decay at all. Only a zero-width window is refused.
+    (``_window.py``). This family predates the traversal-order rule the flux,
+    detuning and amplitude windows follow; moving it is BACKLOG F26 (and
+    ``time_axis_ns`` would first have to accept a descending time window). Only
+    a zero-width window is refused.
     """
 
     parametric_amp_v: float = Field(

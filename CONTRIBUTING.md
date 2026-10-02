@@ -9,7 +9,7 @@ disagree within one cycle.
 | [SCQO](https://github.com/shiau109/SCQO) | the vendor-neutral core: `Experiment` / `Parameters` / `Session`. Depends on no instrument library, ever. |
 | [scqat](https://github.com/shiau109/scqat) | analysis: estimators + fitters. The base of the import arrow. |
 | [scqo-qblox](https://github.com/shiau109/scqo-qblox) | the Qblox backend (`qblox_scheduler`) |
-| [scqo-qm](https://github.com/shiau109/scqo-qm) | the Quantum Machines backend (qm-qua / QUAM / qualibrate) |
+| [scqo-qm](https://github.com/shiau109/scqo-qm) | the Quantum Machines backend (qm-qua / QUAM) |
 
 A working install is always a combo: **SCQO + scqat + one driver**.
 

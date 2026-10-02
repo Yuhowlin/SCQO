@@ -213,7 +213,8 @@ class ResonatorSpectroscopyPowerChain(Experiment):
         targets = self.params.targets
         p = float(getattr(self, "_current_power_dbm", self.params.max_power_dbm))
         top = float(self.params.max_power_dbm)
-        width = float(detuning[-1] - detuning[0])
+        # by VALUE: a positional span on a high -> low sweep mirrors the dip
+        width = float(np.ptp(detuning))
         center = float(detuning[0] + detuning[-1]) / 2
         kappa = width / 15
         truth_rng = np.random.default_rng(
@@ -235,12 +236,12 @@ class ResonatorSpectroscopyPowerChain(Experiment):
             # Both come from truth_rng, which is power-INDEPENDENT, so every
             # per-point call of this simulator sees the same resonator.
             lamb = 8.0e6  # Lamb shift g^2/Delta, dressed above bare
-            width = 1.0   # dB; saturation is sharp, so a bare PLATEAU is reached
-            center = dressed - lamb * 0.5 * (1.0 + np.tanh((p - knee_dbm) / width))
+            knee_db = 1.0   # dB; saturation is sharp, so a bare PLATEAU is reached
+            dip = dressed - lamb * 0.5 * (1.0 + np.tanh((p - knee_dbm) / knee_db))
             # washes out with drive, but saturating — the bare plateau must stay
             # fittable or the points that define f_bare get rejected as outliers
-            depth = 0.8 - 0.3 * 0.5 * (1.0 + np.tanh((p - knee_dbm) / width))
-            magnitude = 1.0 - depth / (1.0 + ((detuning - center) / kappa) ** 2)
+            depth = 0.8 - 0.3 * 0.5 * (1.0 + np.tanh((p - knee_dbm) / knee_db))
+            magnitude = 1.0 - depth / (1.0 + ((detuning - dip) / kappa) ** 2)
             # the return signal still scales with the DELIVERED power (the chain
             # attenuates the drive; the receive path is fixed)
             amp = 10.0 ** ((p - top) / 20.0)

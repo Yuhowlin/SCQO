@@ -126,7 +126,9 @@ class ReadoutFrequency(Experiment):
         n_shots = int(self.params.num_shots)
         targets = self.params.targets
         rng = np.random.default_rng(stable_seed("readout_frequency", *targets))
-        span = float(detuning[-1] - detuning[0])
+        # by VALUE: the window may be swept high -> low, and a positional
+        # detuning[-1] - detuning[0] would turn chi and kappa negative
+        span = float(np.ptp(detuning))
         center = float(detuning[0] + detuning[-1]) / 2
         i_data = np.empty((len(targets), detuning.size, 2, n_shots))
         q_data = np.empty_like(i_data)

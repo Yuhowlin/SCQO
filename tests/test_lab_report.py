@@ -107,10 +107,16 @@ def test_min_repeats_must_be_positive(lab):  # noqa: F811
 def test_a_composite_is_not_a_qubit():
     """q1_q2 is a PAIR. Folding it into q1 files two-qubit numbers under one
     qubit — the defect that motivated the catalog-derived suffix set."""
-    rows = _rows(("q1", "f_01_hz", 5e9), ("q1_xy", "pi_amp", 0.2),
+    rows = _rows(("q1", "f_01_hz", 5e9), ("xy1.q1", "pi_amp", 0.2),
                  ("q1_res", "f_bare_hz", 7e9), ("q1_q2", "zz_hz", 1e5),
+                 ("q1_q2.iswap", "coupler_flux", 0.0),
+                 ("zc12.q1_q2_c", "flux_per_phi0", 0.6),
                  ("q2", "f_01_hz", 5.1e9))
     assert discover_qubits(rows) == ["q1", "q2"]
+
+
+def test_a_qubit_known_only_by_its_channel_is_still_a_qubit():
+    assert discover_qubits(_rows(("fl.q3", "readout_freq_hz", 6e9))) == ["q3"]
 
 
 def test_the_sweet_spot_maximum_never_stands_in_for_the_idle_frequency():
@@ -134,7 +140,7 @@ def test_the_readout_tone_never_stands_in_for_the_dressed_frequency():
     f_dress1. With only the knob, the dressed frequency is REPORTED MISSING,
     and so are the g and kappa computed from it."""
     ctx = {"device": "d", "cooldown": "c", "setup_name": "s", "cycle": {},
-           "state_rows": _rows(("q1_ro", "readout_freq_hz", 7.1e9)),
+           "state_rows": _rows(("fl1.q1", "readout_freq_hz", 7.1e9)),
            "physical_rows": _rows(("q1", "f_01_hz", 5e9),
                                   ("q1_res", "f_bare_hz", 7e9),
                                   ("q1_res", "q_c", 1e4))}
@@ -166,11 +172,22 @@ def test_tunable_reads_the_value_not_the_key():
     """_param_rows emits a row for every observed field, so an unset idle_flux
     still produces a key."""
     base = {"device": "d", "cooldown": "c", "setup_name": "s", "cycle": {},
-            "physical_rows": _rows(("q1", "f_01_hz", 5e9))}
-    unset = extract_chip_metrics({**base, "state_rows": _rows(("q1_z", "idle_flux", None))})
+            "physical_rows": _rows(("q1", "f_01_hz", 5e9)),
+            "flux_lines": {"q1": "z1"}}   # the viewer's roster-derived map
+    unset = extract_chip_metrics({**base, "state_rows": _rows(("z1", "idle_flux", None))})
     assert unset["per_qubit"]["q1"]["tunable"] is False
-    setv = extract_chip_metrics({**base, "state_rows": _rows(("q1_z", "idle_flux", 0.1))})
+    setv = extract_chip_metrics({**base, "state_rows": _rows(("z1", "idle_flux", 0.1))})
     assert setv["per_qubit"]["q1"]["tunable"] is True
+
+
+def test_the_flux_line_is_found_from_the_channel_facts_without_a_roster():
+    """4.0.0: the bias belongs to the LINE (z1.idle_flux), which names no
+    qubit; roster-free, the line comes from the qubit's flux channel z1.q1."""
+    ctx = {"device": "d", "cooldown": "c", "setup_name": "s", "cycle": {},
+           "physical_rows": _rows(("q1", "f_01_hz", 5e9),
+                                  ("z1.q1", "flux_per_phi0", 0.9)),
+           "state_rows": _rows(("z1", "idle_flux", 0.1))}
+    assert extract_chip_metrics(ctx)["per_qubit"]["q1"]["tunable"] is True
 
 
 def test_effective_temperature_and_its_error():

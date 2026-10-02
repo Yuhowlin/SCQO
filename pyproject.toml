@@ -1,6 +1,6 @@
 [project]
 name = "scqo"
-version = "3.12.0"
+version = "4.1.0"
 description = "Superconducting Qubit Orchestration — instrument-agnostic experiment API shared by QM and Qblox backends"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
@@ -88,6 +88,63 @@ dependencies = [
                         # LOUD but late: estimate() imports the new estimator
                         # package, an ImportError after the instrument time is
                         # spent. See RELEASES.toml [v3-12-0].
+                        # As of v3.13.0 the floor is scqat v0.27.0, and it
+                        # carries THREE pairings - two silent, one loud.
+                        # (a) qc_swap_flux_stark's compensation ridge is SILENT
+                        # in BOTH halves - the worst shape this block records.
+                        # estimate() forwards four new kwargs
+                        # (swap_count / swap_angle_rad / stark_amp_2pi /
+                        # min_row_contrast) to an estimator that takes bare
+                        # **kwargs on both hooks and opts into no allowlist, so
+                        # an older scqat SWALLOWS them; and every RIDGE_KEY is
+                        # lifted through .get(key, nan) while the outcome comes
+                        # from the independent transfer verdict. Result:
+                        # SUCCESSFUL, one figure instead of two, and every
+                        # compensation number NaN - exactly the v3.11.0 failure,
+                        # doubled. The arch-fit keys (the errors and the three
+                        # refusal flags) are NaN on any scqat before the fit
+                        # landed, even one that has the ridge. Unlike
+                        # COMPENSATION_KEYS this one HAS a test
+                        # (test_model_experiments.py::
+                        # test_qc_swap_flux_stark_lifts_the_ridge_read_into_the_fit),
+                        # which catches the pairing in the offline suite.
+                        # (b) qc_trotter_compensation's refined optimum is
+                        # SILENT the same way: best_compensation_amp_refined,
+                        # its error and compensation_unresolved are read
+                        # through analysis.get(key, nan), so an older scqat
+                        # leaves the refined value NaN and the flag NaN rather
+                        # than 1, and the operator falls back to the brightest
+                        # pixel - on 5Q4C 0.02-0.04 off the ridge, a third of
+                        # the sink.
+                        # (c) qubit_resonator_stark is LOUD but LATE: its
+                        # estimate() passes twin_coord / amp_ref / chi_hz to
+                        # ac_stark_shift, whose older kwarg whitelist refuses
+                        # twin_coord with a ValueError AFTER the instrument
+                        # time is spent; the dataset is saved and re-fits once
+                        # scqat is current. See RELEASES.toml [v3-13-0].
+                        # As of v3.15.0 the floor is scqat v0.28.0, and it has
+                        # both shapes again. SILENT: scqo stopped normalising
+                        # detuning windows ascending (start/end is a traversal
+                        # order), and only scqat 9305471 on canonicalizes an
+                        # axis's order on entry - an older scqat fed a
+                        # descending axis misfits it with no flag (peak_fit read
+                        # a 4 MHz line as ~180 MHz; power_rabi took the pi pulse
+                        # from the TOP of a descending amplitude window). LOUD
+                        # but LATE, five times: readout_time_of_flight,
+                        # qubit_ramsey_flux_pulse and the three pair_coupler_*
+                        # experiments each import an estimator (or read keys, or
+                        # pass kwargs) an older scqat lacks - the error lands at
+                        # analysis, after the instrument time is spent.
+                        # See RELEASES.toml [v3-15-0].
+                        # As of v4.1.0 the floor is scqat v0.29.0, SILENT three
+                        # times. qc_unidirectional_trotter passes theta_first_rad /
+                        # theta_second_rad (87badbd) and round_duration_ns plus the
+                        # source/sink T1/T2* (201c99d) to an estimator that swallows
+                        # them below it: no ideal or decayed theory, NaN ideal_* /
+                        # model_sink_* in the fit, nothing raised. And a coupler's
+                        # coarse qubit_power_rabi (cea9ea8) below it takes the GLOBAL
+                        # argmax, so a window holding several Rabi periods returns
+                        # 3pi as SUCCESSFUL. See RELEASES.toml [v4-1-0].
     "netcdf4>=1.6",     # datastore: dataset.nc has a string qubit coord (needs netCDF4, not the scipy netCDF3 fallback)
     "tomli>=2.0; python_version<'3.11'",  # labconfig TOML parsing on py3.10
 ]

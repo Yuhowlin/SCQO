@@ -125,3 +125,53 @@ def test_restore_guards_the_cooldown_era_and_warns_on_versions(tmp_path, capsys)
     out, err = capsys.readouterr()
     assert "WARNING: scqo was 0.0.1" in err
     assert json.loads(out)["cooldown"] == "cd2"
+
+
+#: demo_device()'s roster as the device's components.toml - what restore reads
+#: to re-address a 3.x snapshot (rider names q0_ro/q0_xy, op knob <op>_<suffix>).
+_DEMO_COMPONENTS = """schema = 3
+[modes.q0]
+kind = "transmon"
+[modes.q1]
+kind = "transmon"
+[composites.q0_q1]
+kind       = "qubit_pair"
+high       = "q1"
+low        = "q0"
+operations = ["iswap"]
+[lines.fl]
+readout = ["q0", "q1"]
+[lines.xy_q0]
+drive = ["q0"]
+[lines.xy_q1]
+drive = ["q1"]
+"""
+
+
+def test_restore_readdresses_a_3x_snapshot(tmp_path, capsys):
+    """A snapshot taken before 4.0.0 keeps its 3.x store files forever (run
+    data is immutable); restoring it re-addresses them through the device's
+    roster, so the new setup starts on schema 4 - and a value the roster no
+    longer has is named, not carried."""
+    sess, run_id, snap = _snapshot_run(tmp_path)
+    root = tmp_path / "data"
+    (root / "devA" / "components.toml").write_text(_DEMO_COMPONENTS,
+                                                   encoding="utf-8")
+    old = root / snap["path"] / "scqo" / "scqo_state.json"
+    old.write_text(json.dumps({"schema": 3, "values": {
+        "q0_ro": {"readout_freq_hz": 6.0e9},
+        "q0_xy": {"pi_amp": 0.2},
+        "q0_q1": {"iswap_coupler_flux": 0.1},
+        "ghost_xy": {"pi_amp": 0.5}}}), encoding="utf-8")
+
+    assert restore.main([run_id, "--setup", "replay", "--yes",
+                         "--config", _config(tmp_path)]) == 0
+    new = json.loads((root / "devA" / "cd1" / "replay" / "scqo" /
+                      "scqo_state.json").read_text(encoding="utf-8"))
+    assert new == {"schema": 4, "values": {
+        "fl": {"q0": {"readout_freq_hz": 6.0e9}},
+        "xy_q0": {"q0": {"pi_amp": 0.2}},
+        "q0_q1": {"iswap": {"coupler_flux": 0.1}}}}
+    err = capsys.readouterr().err
+    assert "re-addressed for 4.0.0" in err
+    assert "not carried (no longer in the roster): ghost_xy: pi_amp" in err

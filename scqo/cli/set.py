@@ -16,6 +16,14 @@ confirmation table names it (`scqo state --fields` for the full catalog). Fields
 may be calibration knobs (q1.readout_freq_hz, ...) or physical parameters
 (q1.t1_s, q1_res.f_dress0_hz, ...) — the owning store is routed by the field's role. In scripts (no
 terminal) the prompt cannot be asked: pass --yes to apply.
+
+The address is OWNER.FIELD, split at the LAST dot. `q1.<field>` is the qubit
+shorthand (its designed channels, its flux line, its resonator); every owner can
+also be named outright: a line (z1.idle_flux), a channel <line>.<target>
+(xy1.q1.pi_amp), an operation <pair>.<op> (q1_q2.iswap.coupler_flux). A BORROWED
+channel — a mode driven through a line that does not carry it by design — is
+only ever named outright (xy2.q1_q2_c.pi_amp) and only once the instrument
+config realizes it.
 """
 
 from __future__ import annotations
@@ -64,9 +72,10 @@ def main(argv: list[str] | None = None, prog: str | None = None) -> int:
         raise SystemExit(err.args[0] if err.args else str(err))
 
     print("will write:", file=sys.stderr)
+    width = max([10] + [len(item["entity"]) for item in plan["items"]])
     for item in plan["items"]:
         unit = f" {item['unit']}" if item["unit"] else ""
-        print(f"  {item['entity']:10} {item['field']:18} {item['role']:10} "
+        print(f"  {item['entity']:{width}} {item['field']:18} {item['role']:10} "
               f"{_fmt_value(item['current']):>14} -> {_fmt_value(item['after']):>14}{unit}",
               file=sys.stderr)
 

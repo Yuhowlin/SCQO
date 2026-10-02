@@ -17,12 +17,12 @@ def _rec(entity, field, new, run_id=None, **extra):
 
 
 def test_last_record_wins_and_strict_match_credits_the_run():
-    values = {"q0_ro": {"readout_freq_hz": 5.95e9}}
+    values = {"fl.q0": {"readout_freq_hz": 5.95e9}}
     history = [
-        _rec("q0_ro", "readout_freq_hz", 5.90e9, run_id="run-old"),
-        _rec("q0_ro", "readout_freq_hz", 5.95e9, run_id="run-new"),
+        _rec("fl.q0", "readout_freq_hz", 5.90e9, run_id="run-old"),
+        _rec("fl.q0", "readout_freq_hz", 5.95e9, run_id="run-new"),
     ]
-    (info,) = [live_sources(values, history)["q0_ro"]["readout_freq_hz"]]
+    (info,) = [live_sources(values, history)["fl.q0"]["readout_freq_hz"]]
     assert info["status"] == "run"
     assert info["run_id"] == "run-new"  # last record wins
     assert info["value"] == info["recorded"] == 5.95e9
@@ -32,9 +32,9 @@ def test_last_record_wins_and_strict_match_credits_the_run():
 def test_drifted_value_is_external_and_credits_no_run():
     """Strict match: the vendor reseeded (or another tool wrote) — the last record
     carries a run_id, but the value no longer matches, so NO run is credited."""
-    values = {"q0_ro": {"readout_freq_hz": 6.2e9}}
-    history = [_rec("q0_ro", "readout_freq_hz", 5.95e9, run_id="run-a")]
-    info = live_sources(values, history)["q0_ro"]["readout_freq_hz"]
+    values = {"fl.q0": {"readout_freq_hz": 6.2e9}}
+    history = [_rec("fl.q0", "readout_freq_hz", 5.95e9, run_id="run-a")]
+    info = live_sources(values, history)["fl.q0"]["readout_freq_hz"]
     assert info["status"] == "external"
     assert info["run_id"] is None  # never a false credit
     assert info["recorded"] == 5.95e9 and info["value"] == 6.2e9
@@ -42,26 +42,26 @@ def test_drifted_value_is_external_and_credits_no_run():
 
 
 def test_manual_and_unrecorded_and_none_values():
-    values = {"q0_xy": {"pi_amp": 0.31},
-              "q0_ro": {"readout_freq_hz": 5.95e9, "fidelity_g": None}}
-    history = [_rec("q0_xy", "pi_amp", 0.31, run_id=None)]  # notebook write
+    values = {"xy_q0.q0": {"pi_amp": 0.31},
+              "fl.q0": {"readout_freq_hz": 5.95e9, "fidelity_g": None}}
+    history = [_rec("xy_q0.q0", "pi_amp", 0.31, run_id=None)]  # notebook write
     sources = live_sources(values, history)
-    assert sources["q0_xy"]["pi_amp"]["status"] == "manual"
-    assert sources["q0_ro"]["readout_freq_hz"]["status"] == "unrecorded"  # vendor pull-seed
-    assert sources["q0_ro"]["readout_freq_hz"]["timestamp"] is None
-    assert "fidelity_g" not in sources["q0_ro"]  # None values are skipped
+    assert sources["xy_q0.q0"]["pi_amp"]["status"] == "manual"
+    assert sources["fl.q0"]["readout_freq_hz"]["status"] == "unrecorded"  # vendor pull-seed
+    assert sources["fl.q0"]["readout_freq_hz"]["timestamp"] is None
+    assert "fidelity_g" not in sources["fl.q0"]  # None values are skipped
 
 
 def test_live_sources_handles_records_missing_entity_or_field():
-    values = {"q0_xy": {"pi_amp": 0.31}}
+    values = {"xy_q0.q0": {"pi_amp": 0.31}}
     history = [
         {"timestamp": "2026-07-12T10:00:00+08:00", "invalid_key": "val"},  # no entity/field
-        {"timestamp": "2026-07-12T10:00:00+08:00", "entity": "q0_xy"},      # no field
-        _rec("q0_xy", "pi_amp", 0.31, run_id="run-1"),
+        {"timestamp": "2026-07-12T10:00:00+08:00", "entity": "xy_q0.q0"},   # no field
+        _rec("xy_q0.q0", "pi_amp", 0.31, run_id="run-1"),
     ]
     sources = live_sources(values, history)
-    assert sources["q0_xy"]["pi_amp"]["status"] == "run"
-    assert sources["q0_xy"]["pi_amp"]["run_id"] == "run-1"
+    assert sources["xy_q0.q0"]["pi_amp"]["status"] == "run"
+    assert sources["xy_q0.q0"]["pi_amp"]["run_id"] == "run-1"
 
 
 def test_operator_suggested_value_credits_the_run(tmp_path):
@@ -88,25 +88,25 @@ def test_operator_suggested_value_credits_the_run(tmp_path):
 
 def test_live_run_map_merges_stores_and_keeps_runs_only():
     state = live_sources(
-        {"q0_ro": {"readout_freq_hz": 1.0},
-         "q1_ro": {"readout_freq_hz": 2.0}, "q1_xy": {"pi_amp": 0.2}},
-        [_rec("q0_ro", "readout_freq_hz", 1.0, run_id="run-x"),
-         _rec("q1_ro", "readout_freq_hz", 2.0, run_id="run-x"),
-         _rec("q1_xy", "pi_amp", 0.2, run_id=None)],  # manual: not in the map
+        {"fl.q0": {"readout_freq_hz": 1.0},
+         "fl.q1": {"readout_freq_hz": 2.0}, "xy_q1.q1": {"pi_amp": 0.2}},
+        [_rec("fl.q0", "readout_freq_hz", 1.0, run_id="run-x"),
+         _rec("fl.q1", "readout_freq_hz", 2.0, run_id="run-x"),
+         _rec("xy_q1.q1", "pi_amp", 0.2, run_id=None)],  # manual: not in the map
     )
     phys = live_sources(
         {"q1": {"t1_s": 3.0}},
         [_rec("q1", "t1_s", 3.0, run_id="run-y")],
     )
     merged = live_run_map(state, phys)
-    assert merged == {"run-x": [("q0_ro", "readout_freq_hz"),
-                                ("q1_ro", "readout_freq_hz")],
+    assert merged == {"run-x": [("fl.q0", "readout_freq_hz"),
+                                ("fl.q1", "readout_freq_hz")],
                       "run-y": [("q1", "t1_s")]}
 
 
 def test_summarize_live_groups_by_field():
-    pairs = [("q0_ro", "readout_freq_hz"), ("q1_ro", "readout_freq_hz"), ("q1", "t1_s")]
-    assert summarize_live(pairs) == "readout_freq_hz (q0_ro,q1_ro), t1_s (q1)"
+    pairs = [("fl.q0", "readout_freq_hz"), ("fl.q1", "readout_freq_hz"), ("q1", "t1_s")]
+    assert summarize_live(pairs) == "readout_freq_hz (fl.q0,fl.q1), t1_s (q1)"
 
 
 def test_campaign_accept_is_credited_as_campaign():

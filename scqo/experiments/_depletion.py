@@ -10,7 +10,7 @@ measured FACT        ``t1_s`` (qubit mode)           ``kappa_tot_hz`` (resonator
 measured by          ``qubit_relaxation``            ``resonator_spectroscopy``
 per-run FACTOR       ``thermalization_factor`` 10    ``depletion_factor`` 10
 proposed KNOB        ``thermalization_time_s``       ``readout_depletion_s``
-   ... on            the DRIVE channel (q1_xy)       the READOUT channel (q1_ro)
+   ... on            the DRIVE channel (xy1.q1)      the READOUT channel (fl1.q1)
 per-run override     ``thermalization_time_ns``      ``readout_depletion_ns``
 precedence helper    ``reset_wait_ns``               :func:`depletion_wait_ns`
 ===================  ==============================  ==============================

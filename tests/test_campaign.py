@@ -904,7 +904,7 @@ def test_finalized_campaign_carries_grouped_suggestions(session):
     assert t1["role"] == "fact" and t1["before"] is None
     assert t1["after"] == pytest.approx(
         out["statistics"]["qubit_relaxation"]["q0"]["t1_s"]["mean"])
-    therm = by_key[("qubit_relaxation", "q0_xy", "thermalization_time_s")]
+    therm = by_key[("qubit_relaxation", "xy_q0.q0", "thermalization_time_s")]
     assert therm["role"] == "knob"
     assert ("qubit_echo", "q0", "t2_echo_s") in by_key
 
@@ -1209,7 +1209,7 @@ def test_accept_campaign_applies_grouped_and_stamps_campaign_provenance(session)
     stats = out["statistics"]
     assert session.physical_state()["q0"]["t1_s"] == pytest.approx(
         stats["qubit_relaxation"]["q0"]["t1_s"]["mean"])
-    assert session.device_state()["q0_xy"]["thermalization_time_s"] > 0
+    assert session.device_state()["xy_q0.q0"]["thermalization_time_s"] > 0
 
     # every history row is stamped (campaign_id, experiment), never a run_id
     rows = [r for r in session.history(store="physical")
@@ -1284,8 +1284,8 @@ def test_accept_campaign_selection_filters(session):
     summary = session.accept_campaign(cid, fields=["t1_s"])
     assert [(a["entity"], a["field"]) for a in summary["applied"]] == [("q0", "t1_s")]
     assert summary["pending_left"] >= 1  # the thermalization knob still waits
-    summary = session.accept_campaign(cid, entities=["q0_xy"])
-    assert {a["entity"] for a in summary["applied"]} == {"q0_xy"}
+    summary = session.accept_campaign(cid, entities=["xy_q0.q0"])
+    assert {a["entity"] for a in summary["applied"]} == {"xy_q0.q0"}
     assert summary["pending_left"] == 0
 
 

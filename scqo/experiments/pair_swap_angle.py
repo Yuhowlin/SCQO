@@ -60,8 +60,8 @@ both modes yield identical angles.
 RECORD-ONLY for the DEVICE: there is no ``update()`` and nothing lands on the
 device surface. The angle is reported in ``result.fit`` and the operator sets the
 coupler amplitude by re-registering the pulse (TUTORIAL section 12 step 2) —
-the same hand-run writeback the rest of the pair family uses. The composite knob
-``<op>_coupler_flux`` exists in the catalog but its QM binding expects a
+the same hand-run writeback the rest of the pair family uses. The operation knob
+``<composite>.<op>.coupler_flux`` exists in the catalog but its QM binding expects a
 CZ-shaped macro and does not reach ``ISwapImplementation``, so proposing it here
 would write nothing.
 """

@@ -90,9 +90,12 @@ def _derived_capabilities(cls: type[Experiment]) -> list[str]:
     the datastore's user-attached run tags (``run(..., tags=)`` / ``scqo tag``)."""
     from ._capabilities import (
         AmplitudeSweepParameters,
+        CouplerFluxPulseSweepParameters,
         DriveDetuningSweepParameters,
+        DriveLineParameters,
         FluxPulseSweepParameters,
         FluxSweepParameters,
+        MappedReadoutParameters,
         QubitResetParameters,
         ReadoutDetuningSweepParameters,
         StateReadoutParameters,
@@ -101,7 +104,8 @@ def _derived_capabilities(cls: type[Experiment]) -> list[str]:
     # Derivation order is fixed (tests pin the exact lists): the two original
     # capabilities first, then each later addition appended at the END so it
     # does not reshuffle every existing entry — qubit_reset, then flux_pulse,
-    # then amplitude, then drive_detuning, then readout_detuning.
+    # then amplitude, then drive_detuning, then readout_detuning, then coupler_flux,
+    # then drive_line and mapped_readout.
     caps = []
     if issubclass(cls.Parameters, StateReadoutParameters):
         caps.append("state_readout")
@@ -110,7 +114,7 @@ def _derived_capabilities(cls: type[Experiment]) -> list[str]:
     if issubclass(cls.Parameters, QubitResetParameters):
         caps.append("qubit_reset")
     # A REFINEMENT of "flux", not a sibling: the window is measured from the
-    # channel's idle_flux rather than from the DAC zero. Carriers must also end
+    # flux line's idle_flux rather than from the DAC zero. Carriers must also end
     # their name in "_pulse" (test_capabilities pins it).
     if issubclass(cls.Parameters, FluxPulseSweepParameters):
         caps.append("flux_pulse")
@@ -126,6 +130,17 @@ def _derived_capabilities(cls: type[Experiment]) -> list[str]:
         caps.append("drive_detuning")
     if issubclass(cls.Parameters, ReadoutDetuningSweepParameters):
         caps.append("readout_detuning")
+    # a pair's COUPLER flux-pulse window, relative to the coupler's idle_flux; the
+    # only frame there is, so every carrier ends its name in "_pulse" (test-pinned)
+    if issubclass(cls.Parameters, CouplerFluxPulseSweepParameters):
+        caps.append("coupler_flux")
+    # the two halves of taking a mode with no designed drive or readout (a
+    # coupler): drive it through a named line's (borrowed) channel, read it
+    # through a pair member. Independent - drive_line alone is a crosstalk drive.
+    if issubclass(cls.Parameters, DriveLineParameters):
+        caps.append("drive_line")
+    if issubclass(cls.Parameters, MappedReadoutParameters):
+        caps.append("mapped_readout")
     return caps
 
 
@@ -166,6 +181,9 @@ from ._capabilities import (  # noqa: E402
     reset_wait_ns,
     states_to_joint_population,
 )
+from .pair_coupler_crossing_pulse import PairCouplerCrossingPulse  # noqa: E402
+from .pair_coupler_spectroscopy_swap import PairCouplerSpectroscopySwap  # noqa: E402
+from .pair_coupler_spectroscopy_zz import PairCouplerSpectroscopyZZ  # noqa: E402
 from .pair_swap_chevron import PairSwapChevron  # noqa: E402
 from .pair_swap_flux_map import PairSwapFluxMap  # noqa: E402
 from .pair_swap_angle import PairSwapAngle  # noqa: E402
@@ -177,6 +195,7 @@ from .qc_unidirectional_trotter import QcUnidirectionalTrotter  # noqa: E402
 from .qc_trotter_compensation import QcTrotterCompensation  # noqa: E402
 from .qubit_ramsey_cryoscope import QubitRamseyCryoscope  # noqa: E402
 from .qubit_ramsey_phasor import QubitRamseyPhasor  # noqa: E402
+from .qubit_ramsey_flux_pulse import QubitRamseyFluxPulse  # noqa: E402
 from .qubit_deterministic_benchmarking import QubitDeterministicBenchmarking  # noqa: E402
 from .qubit_drag_alternating import QubitDragAlternating  # noqa: E402
 from .qubit_drag_equator import QubitDragEquator  # noqa: E402
@@ -193,6 +212,7 @@ from .qubit_power_rabi import QubitPowerRabi  # noqa: E402
 from .qubit_ramsey import QubitRamsey  # noqa: E402
 from .qubit_relaxation import QubitRelaxation  # noqa: E402
 from .qubit_relaxation_flux_pulse import QubitRelaxationFluxPulse  # noqa: E402
+from .qubit_resonator_stark import QubitResonatorStark  # noqa: E402
 from .qubit_spectroscopy import QubitSpectroscopy  # noqa: E402
 from .qubit_spectroscopy_cryoscope import QubitSpectroscopyCryoscope  # noqa: E402
 from .qubit_spectroscopy_flux_pulse import (  # noqa: E402
@@ -207,6 +227,7 @@ from .qubit_tomography import QubitTomography  # noqa: E402
 from .qubit_xyz_delay import QubitXyzDelay  # noqa: E402
 from .readout_frequency import ReadoutFrequency  # noqa: E402
 from .readout_power import ReadoutPower  # noqa: E402
+from .readout_time_of_flight import ReadoutTimeOfFlight  # noqa: E402
 from .broadband_resonator_spectroscopy import (  # noqa: E402
     BroadbandResonatorSpectroscopy,
 )
@@ -222,7 +243,6 @@ from .resonator_spectroscopy_power_chain import (  # noqa: E402
     ResonatorSpectroscopyPowerChain,
 )
 from .single_shot_readout import SingleShotReadout  # noqa: E402
-from .single_shot_readout_gef import SingleShotReadoutGEF  # noqa: E402
 
 __all__ = [
     "catalog", "get", "register",
@@ -233,20 +253,23 @@ __all__ = [
     "BroadbandResonatorSpectroscopy",
     "CrosstalkCompensatedSQRB",
     "CrosstalkCancellationTomography",
+    "PairCouplerCrossingPulse", "PairCouplerSpectroscopySwap",
+    "PairCouplerSpectroscopyZZ",
     "PairSwapAngle", "PairSwapChevron", "PairSwapFluxMap",
     "PairZZCoupler", "QcNStarkAmp", "QcNSwapAmp", "QcSwapFluxStark",
     "QcTrotterCompensation", "QcUnidirectionalTrotter",
-    "QubitRamseyCryoscope", "QubitRamseyPhasor", "QubitDeterministicBenchmarking", "QubitDragAlternating", "QubitDragEquator", "QubitEcho",
+    "QubitRamseyCryoscope", "QubitRamseyFluxPulse", "QubitRamseyPhasor", "QubitDeterministicBenchmarking", "QubitDragAlternating", "QubitDragEquator", "QubitEcho",
     "QubitEchoFluxPulse", "QubitParametricDriveAmp", "QubitParametricDriveTime",
     "QubitParitySwitchContinuous", "QubitParitySwitchDiscrete",
     "QubitPiPulseError", "QubitPowerRabi", "QubitRamsey",
-    "QubitRelaxation", "QubitRelaxationFluxPulse", "QubitSQRB",
+    "QubitRelaxation", "QubitRelaxationFluxPulse", "QubitResonatorStark", "QubitSQRB",
     "QubitSpectroscopy", "QubitSpectroscopyCryoscope", "QubitSpectroscopyFluxPulse",
     "QubitStarkPhaseEcho",
     "QubitT1Ade", "QubitT1Bayesian",
     "QubitThermalPopulation", "QubitTomography", "QubitXyzDelay",
-    "ReadoutFrequency", "ReadoutPower", "ResonatorSpectroscopy",
+    "ReadoutFrequency", "ReadoutPower", "ReadoutTimeOfFlight",
+    "ResonatorSpectroscopy",
     "ResonatorSpectroscopyFlux", "ResonatorSpectroscopyPowerAmp",
-    "ResonatorSpectroscopyPowerChain", "SingleShotReadout", "SingleShotReadoutGEF",
+    "ResonatorSpectroscopyPowerChain", "SingleShotReadout",
 ]
 

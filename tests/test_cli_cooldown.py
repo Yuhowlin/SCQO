@@ -55,7 +55,7 @@ def _components(tmp_path: Path) -> None:
     """A configured device needs its roster (components.toml) to build sessions.
 
     Schema-3 roster: one transmon mode whose readout/drive riders mint the
-    q0_ro / q0_xy channels and the q0_res resonator. The datasheet beside it
+    fl.q0 / xy0.q0 channels and the q0_res resonator. The datasheet beside it
     (design.toml) is what the simulated vendor seed starts the readout knob
     from — without it every run fails 'no standing value and no design
     fallback', which would test the seed rules, not the cooldown chain.

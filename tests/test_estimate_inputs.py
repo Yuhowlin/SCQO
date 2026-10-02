@@ -25,13 +25,17 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from scqo import RecordingDevice, parse_components, state_store
+from scqo import RecordingDevice, RosterError, parse_components, state_store
 from scqo.design import Design
 from scqo.estimate_inputs import (
+    ATTR_DESIGN,
     ATTR_DEVICE,
+    ATTR_EXPERIMENT,
+    ATTR_PARAMETERS,
     ATTR_PHYSICAL,
     ATTR_SCHEMA,
     SCHEMA,
+    V3_SCHEMA,
     FrozenDevice,
     FrozenWriteError,
     MissingEmbeddedInputs,
@@ -56,17 +60,19 @@ def roster():
 @pytest.fixture()
 def live(tmp_path, roster):
     """A RecordingDevice with knobs seeded, one monitor measured, one entity
-    left entirely unseeded (q2_xy) — the three read outcomes in one device."""
+    left entirely unseeded (xyz2.q2) — the three read outcomes in one device —
+    plus an adopted borrowed route (xy1.q1_q2_c)."""
     vendor = FakeVendor({
-        "q1_xy": {"drive_freq_hz": 5.136e9, "pi_amp": 0.209},
-        "q1_ro": {"readout_freq_hz": 5.934e9, "readout_amp": 0.112,
-                  "readout_power_dbm": -30.0},
-        "q1_z": {"idle_flux": 0.118},
-        "q1_q2": {"iswap_coupler_flux": 0.031},
+        "xy1.q1": {"drive_freq_hz": 5.136e9, "pi_amp": 0.209},
+        "fl1.q1": {"readout_freq_hz": 5.934e9, "readout_amp": 0.112,
+                   "readout_power_dbm": -30.0},
+        "z1": {"idle_flux": 0.118},
+        "q1_q2.iswap": {"coupler_flux": 0.031},
+        "xy1.q1_q2_c": {"drive_freq_hz": 7.1e9, "pi_amp": 0.12},
     })
     device = RecordingDevice(vendor, roster,
                             state_store(tmp_path, roster, setup="qm_a"))
-    device.component("q1_ro").fidelity_g = 0.96  # a measured monitor
+    device.component("fl1.q1").fidelity_g = 0.96  # a measured monitor
     return device
 
 
@@ -108,46 +114,61 @@ def test_unseeded_knob_raises_keyerror_so_anchor_still_falls_back(frozen):
     # anchor() catches (KeyError, AttributeError) and drops to the design
     # seed; any other exception type would break that fallback.
     with pytest.raises(KeyError, match="acquired"):
-        frozen.component("q2_xy").drive_freq_hz
+        frozen.component("xyz2.q2").drive_freq_hz
 
 
 def test_monitor_reads_none_when_it_was_never_measured(frozen):
-    assert frozen.component("q1_ro").fidelity_e is None
+    assert frozen.component("fl1.q1").fidelity_e is None
 
 
 def test_measured_monitor_comes_back(frozen):
-    assert frozen.component("q1_ro").fidelity_g == 0.96
+    assert frozen.component("fl1.q1").fidelity_g == 0.96
 
 
-def test_composite_knob_reads_through_read_knob(frozen):
-    assert frozen.component("q1_q2").read_knob("iswap_coupler_flux") == 0.031
+def test_operation_knob_reads_through_read_knob(frozen):
+    assert frozen.operation("q1_q2", "iswap").read_knob("coupler_flux") == 0.031
 
 
-def test_fact_reads_still_point_at_the_physical_store(frozen):
-    with pytest.raises(KeyError, match="physical.json"):
-        frozen.component("q1_q2").read_knob("zz_hz")
+def test_fact_reads_are_refused_never_answered(frozen):
+    """Facts never come off the device surface: the composite that owns
+    zz_hz has no view at all (its knobs live on its operations), and an
+    operation refuses a composite fact by name instead of answering None."""
+    with pytest.raises(KeyError, match=r"q1_q2\.iswap"):
+        frozen.component("q1_q2")
+    with pytest.raises(RosterError, match="unknown field"):
+        frozen.operation("q1_q2", "iswap").read_knob("zz_hz")
 
 
 def test_channel_and_resonator_addressing_match(live, frozen):
     assert frozen.channel("q1", "readout").readout_freq_hz == 5.934e9
     assert frozen.resonator_of("q1") == live.resonator_of("q1")
+    # the 4.0.0 addressing helpers resolve identically on both surfaces
+    assert frozen.flux_line("q1").idle_flux == live.flux_line("q1").idle_flux
+    assert frozen.line("z1").idle_flux == 0.118
+    assert (frozen.channel_on("xy1", "q1_q2_c").pi_amp
+            == live.channel_on("xy1", "q1_q2_c").pi_amp == 0.12)
 
 
 # ------------------------------------------------------------ writes refused
 
 def test_knob_write_is_refused_by_name(frozen):
-    with pytest.raises(FrozenWriteError, match="q1_xy.pi_amp"):
-        frozen.component("q1_xy").pi_amp = 0.3
+    with pytest.raises(FrozenWriteError, match=r"xy1\.q1\.pi_amp"):
+        frozen.component("xy1.q1").pi_amp = 0.3
+
+
+def test_line_knob_write_is_refused_by_name(frozen):
+    with pytest.raises(FrozenWriteError, match=r"z1\.idle_flux"):
+        frozen.flux_line("q1").idle_flux = 0.2
 
 
 def test_monitor_write_is_refused_by_name(frozen):
     with pytest.raises(FrozenWriteError, match="fidelity_g"):
-        frozen.component("q1_ro").fidelity_g = 0.99
+        frozen.component("fl1.q1").fidelity_g = 0.99
 
 
-def test_composite_write_is_refused_by_name(frozen):
-    with pytest.raises(FrozenWriteError, match="iswap_coupler_flux"):
-        frozen.component("q1_q2").write_knob("iswap_coupler_flux", 0.2)
+def test_operation_write_is_refused_by_name(frozen):
+    with pytest.raises(FrozenWriteError, match=r"q1_q2\.iswap\.coupler_flux"):
+        frozen.operation("q1_q2", "iswap").write_knob("coupler_flux", 0.2)
 
 
 def test_save_is_refused(frozen):
@@ -175,10 +196,10 @@ def test_round_trip_rebuilds_all_three_surfaces(live, roster):
     inputs = load_frozen(ds, roster)
     assert inputs.experiment == "resonator_spectroscopy"
     assert inputs.parameters["num_averages"] == 100
-    assert inputs.device.component("q1_xy").drive_freq_hz == 5.136e9
+    assert inputs.device.component("xy1.q1").drive_freq_hz == 5.136e9
     assert inputs.physical.get("q1_res", "kappa_tot_hz") == 1.2e6
     assert inputs.design.get("q1_res", "f_bare_hz") == 5.9e9
-    assert ("device", "q1_xy", "drive_freq_hz") in inputs.reads()
+    assert ("device", "xy1.q1", "drive_freq_hz") in inputs.reads()
     assert ("physical", "q1_res", "kappa_tot_hz") in inputs.reads()
     assert ("design", "q1_res", "f_bare_hz") in inputs.reads()
 
@@ -202,9 +223,54 @@ def test_an_unknown_schema_is_refused_rather_than_guessed(live, roster):
     ds = _dataset()
     embed(ds, experiment="x", params=_Params(), device=live.snapshot(),
           physical={}, design=Design({}))
+    assert ds.attrs[ATTR_SCHEMA] == SCHEMA == 2    # 4.0.0 owner names
     ds.attrs[ATTR_SCHEMA] = SCHEMA + 1
     with pytest.raises(MissingEmbeddedInputs, match="immutable"):
         load_frozen(ds, roster)
+
+
+def _v3_dataset(device: dict, physical: dict | None):
+    """A dataset.nc embedding as a pre-4.0.0 scqo wrote it: scqo_schema 1,
+    the 3.x names (q1_xy, q1_z, the flattened iswap_coupler_flux)."""
+    ds = _dataset()
+    ds.attrs[ATTR_SCHEMA] = V3_SCHEMA
+    ds.attrs[ATTR_EXPERIMENT] = "qubit_power_rabi"
+    ds.attrs[ATTR_PARAMETERS] = json.dumps({"targets": ["q1"]})
+    ds.attrs[ATTR_DEVICE] = json.dumps(device)
+    ds.attrs[ATTR_PHYSICAL] = json.dumps(physical)
+    ds.attrs[ATTR_DESIGN] = json.dumps({"q1": {"f_q_max_hz": 5.15e9}})
+    return ds
+
+
+def test_a_pre_4_0_embedding_is_read_through_the_v3_name_map(roster):
+    """Run data is immutable: a 3.x dataset.nc keeps its 3.x names forever,
+    and the reader re-keys them through the CURRENT roster (scqo.v3_names) -
+    the old flux channel split between its line and its channel, the
+    flattened gate knob onto its operation, monitors still monitors."""
+    ds = _v3_dataset(
+        device={"q1_xy": {"drive_freq_hz": 5.136e9, "pi_amp": 0.209},
+                "q1_ro": {"readout_freq_hz": 5.934e9, "fidelity_g": 0.96},
+                "q1_z": {"idle_flux": 0.118},
+                "q1_q2": {"iswap_coupler_flux": 0.031}},
+        physical={"q1_z": {"flux_offset": 0.0134, "distortion_amp": [0.02],
+                           "distortion_tau_s": [6.0e-7]},
+                  "q1_res": {"kappa_tot_hz": 1.2e6}})
+    inputs = load_frozen(ds, roster)
+    device = inputs.device
+    assert device.component("xy1.q1").pi_amp == 0.209
+    assert device.channel("q1", "readout").fidelity_g == 0.96
+    assert device.flux_line("q1").idle_flux == 0.118
+    assert device.operation("q1_q2", "iswap").read_knob("coupler_flux") == 0.031
+    assert inputs.physical.get("z1.q1", "flux_offset") == 0.0134
+    assert inputs.physical.get("z1", "distortion_tau_s") == [6.0e-7]
+    assert inputs.physical.get("q1_res", "kappa_tot_hz") == 1.2e6
+    assert inputs.design.get("q1", "f_q_max_hz") == 5.15e9
+    # the reads are credited under the 4.0.0 names
+    assert ("device", "xy1.q1", "pi_amp") in inputs.reads()
+    assert ("physical", "z1.q1", "flux_offset") in inputs.reads()
+    # standalone stays standalone: no facts is not an empty store
+    assert load_frozen(_v3_dataset(device={}, physical=None),
+                       roster).physical is None
 
 
 def test_a_non_finite_value_never_costs_the_measurement(live, roster, capsys):
@@ -212,14 +278,14 @@ def test_a_non_finite_value_never_costs_the_measurement(live, roster, capsys):
     is the path a hand-built Parameters or a driver monitor could take.)"""
     ds = _dataset()
     snapshot = live.snapshot()
-    snapshot["q1_xy"]["pi_amp"] = float("nan")
+    snapshot["xy1.q1"]["pi_amp"] = float("nan")
     embed(ds, experiment="x", params=_Params(), device=snapshot,
           physical={}, design=Design({}))
     assert "could not embed" in capsys.readouterr().err
     inputs = load_frozen(ds, roster)
     with pytest.raises(KeyError):  # scrubbed to None == "had no value"
-        inputs.device.component("q1_xy").pi_amp
-    assert inputs.device.component("q1_xy").drive_freq_hz == 5.136e9
+        inputs.device.component("xy1.q1").pi_amp
+    assert inputs.device.component("xy1.q1").drive_freq_hz == 5.136e9
 
 
 def test_is_embedded_is_the_witness_session_run_checks(live):
@@ -313,7 +379,7 @@ def test_a_persisted_run_is_self_contained(session):
     ds = session.datastore.open_dataset(out["run_id"])
     assert ds.attrs[ATTR_SCHEMA] == SCHEMA
     device = json.loads(ds.attrs[ATTR_DEVICE])
-    assert device["q0_ro"]["readout_freq_hz"] > 0
+    assert device["fl.q0"]["readout_freq_hz"] > 0
     run = json.loads(ds.attrs["scqo_run"])
     assert run["run_id"] == out["run_id"] and run["cooldown"] == "cd1"
     assert run["versions"]["scqo"] and run["versions"]["scqat"]
@@ -328,8 +394,8 @@ def test_the_embedded_snapshot_is_the_pre_update_one(session):
     out = session.run("resonator_spectroscopy", {"targets": ["q0"]},
                       update="apply")
     ds = session.datastore.open_dataset(out["run_id"])
-    embedded = json.loads(ds.attrs[ATTR_DEVICE])["q0_ro"]["readout_freq_hz"]
-    applied = session.device_state()["q0_ro"]["readout_freq_hz"]
+    embedded = json.loads(ds.attrs[ATTR_DEVICE])["fl.q0"]["readout_freq_hz"]
+    applied = session.device_state()["fl.q0"]["readout_freq_hz"]
     assert embedded != applied
     assert json.loads(ds.attrs[ATTR_PHYSICAL]) == {}  # facts were empty at acquisition
 
@@ -358,7 +424,50 @@ def test_estimate_runs_frozen_and_hands_the_live_surface_back(session):
     assert result.error is None
     # the detuning -> absolute-frequency anchor is the read this whole feature
     # exists for, and it came off the frozen surface
-    assert ("device", "q0_ro", "readout_freq_hz") in exp.inputs_used
+    assert ("device", "fl.q0", "readout_freq_hz") in exp.inputs_used
     assert exp.device is session.device
     assert exp.physical is session.physical
     assert exp.design is session.design
+
+
+def test_a_pre_4_0_run_refits_to_the_same_result(session):
+    """The offline re-fit of a SAVED pre-4.0.0 run: the same dataset with its
+    embedding rewritten the way 3.x wrote it (scqo_schema 1, fl.q0 back to
+    q0_ro, ...) re-fits to exactly the result of the 4.0.0 embedding. The
+    anchor is moved off its design seed first, so a value the translation
+    dropped would fall back to the datasheet and change the fit."""
+    from scqo import experiments as registry
+    from scqo.v3_names import v3_address_map
+
+    session.set_values({"q0.readout_freq_hz": 5.957e9})
+    out = session.run("resonator_spectroscopy", {"targets": ["q0"]},
+                      update="none")
+    acquired = session.datastore.open_dataset(out["run_id"]).load()
+
+    old_name = {new: old for old, new in v3_address_map(session.roster).items()}
+    v3_device: dict = {}
+    for entity, fields in json.loads(acquired.attrs[ATTR_DEVICE]).items():
+        for field, value in fields.items():
+            old_entity, old_field = old_name[(entity, field)]
+            v3_device.setdefault(old_entity, {})[old_field] = value
+    assert v3_device["q0_ro"]["readout_freq_hz"] == 5.957e9  # really 3.x-keyed
+    v3 = acquired.copy()
+    v3.attrs[ATTR_SCHEMA] = V3_SCHEMA
+    v3.attrs[ATTR_DEVICE] = json.dumps(v3_device)
+    assert acquired.attrs[ATTR_SCHEMA] == SCHEMA       # two embeddings, not one
+
+    def refit(dataset):
+        cls = registry.get("resonator_spectroscopy")
+        exp = cls(session.backend, cls.Parameters(targets=["q0"]))
+        exp.device, exp.design = session.device, session.design
+        exp.physical = session.physical
+        exp.sweep_axes = exp.define_sweep()
+        exp.dataset = dataset
+        return exp.run_estimate(frozen=True), exp.inputs_used
+
+    now, now_reads = refit(acquired)
+    then, then_reads = refit(v3)
+    assert now.error is None and then.error is None
+    assert then.fit == now.fit
+    assert then.fit["q0"]["old_readout_freq_hz"] == 5.957e9
+    assert then_reads == now_reads == [("device", "fl.q0", "readout_freq_hz")]

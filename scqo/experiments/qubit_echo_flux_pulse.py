@@ -8,7 +8,7 @@ kind-based gating inherited from the greenfield base.
 
 FRAME (``_pulse`` in the name, ``FluxPulseSweepParameters`` in the schema):
 the z bias is a PULSE played inside the echo and the DAC adds it to the
-standing bias, so the window is measured from the channel's ``idle_flux`` and
+standing bias, so the window is measured from the flux line's ``idle_flux`` and
 0 means "sit at the operating point". See :mod:`._capabilities.flux`.
 """
 
@@ -21,8 +21,8 @@ from pydantic import Field
 
 from ..contract import DatasetContract
 from ._capabilities.flux import (
-    MAX_FLUX_PULSE_DESC,
-    MIN_FLUX_PULSE_DESC,
+    END_FLUX_PULSE_DESC,
+    START_FLUX_PULSE_DESC,
     FluxPulseSweepParameters,
     flux_anchor_v,
     flux_sweep,
@@ -52,8 +52,8 @@ class QubitEchoFluxPulseParameters(
     max_wait_ns: float = Field(40000.0, gt=0.0, description="Maximum idle delay (total tau).")
     num_wait_points: int = Field(51, gt=1, description="Number of wait time points.")
     # capability defaults narrowed to the coherence window (canonical text constants)
-    min_flux_v: float = Field(-0.08, description=MIN_FLUX_PULSE_DESC)
-    max_flux_v: float = Field(0.08, description=MAX_FLUX_PULSE_DESC)
+    start_flux_v: float = Field(-0.08, description=START_FLUX_PULSE_DESC)
+    end_flux_v: float = Field(0.08, description=END_FLUX_PULSE_DESC)
 
 
 class QubitEchoFluxPulseResult(Result):
@@ -70,7 +70,7 @@ class QubitEchoFluxPulse(Experiment):
 
     name: ClassVar[str] = "qubit_echo_flux_pulse"
     description: ClassVar[str] = (
-        "Sweep a Z PULSE amplitude — RELATIVE to the flux channel's idle_flux, "
+        "Sweep a Z PULSE amplitude — RELATIVE to the flux line's idle_flux, "
         "0 = stay parked — and a total wait delay in a Hahn echo sequence, "
         "fitting T2_echo decay at each flux point to map out the T2_echo "
         "spectrum. Record-only: the fits are saved, nothing is proposed."

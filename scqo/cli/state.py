@@ -2,7 +2,9 @@
 
 State is per SETUP: the first output line names the device, the resolved setup
 and its state file, so two users of one sample know whose numbers they see.
-Entities are grouped by KIND (the roster decides what each name is).
+Entities are grouped by KIND (the roster decides what each name is); a channel
+is <line>.<target> and every row names its wire with the instrument port the
+backend reports for it (``xy2 (con1/6/3)``).
 
     scqo state                        # calibration tables per kind (YOUR setup)
     scqo state --history              # last 20 changes (old -> new + cause + operator)
@@ -31,8 +33,11 @@ _RULE = """\
 Where does a value live? (the placement rule - full version: TUTORIAL.md)
 
 A field lives on the ENTITY whose kind declares it (components.toml is the
-roster; q1 = the transmon mode, q1_res = its resonator, and q1_ro/q1_xy/q1_z =
-its readout/drive/flux channels, minted by the lines they ride). Classify each USE of a quantity; ask in order, first match wins:
+roster; q1 = the transmon mode, q1_res = its resonator, xy1.q1 / feedline.q1 /
+z1.q1 = its drive / readout / flux channels on the lines xy1, feedline, z1, and
+z1 itself owns what exists once per wire - the flux bias, the delay, the
+distortion taps; q1_q2.iswap owns that gate's knobs). Classify each USE of a
+quantity; ask in order, first match wins:
  1. Gone when the run ends? (sweep windows, shot counts, analysis assumptions,
     Optional-None overrides)          -> per-run experiment Parameters
  2. True of the chip in the dark - no instrument SETTING realizes it?
@@ -138,9 +143,23 @@ def _print_context(sess, cfg) -> None:
           f"cooldown: {sess.cooldown_id or '-'}   scqo dir: {sess.scqo_dir or '-'}")
 
 
+def _wire(roster, entity: str, ports: dict) -> str:
+    """The line an entity lives on, with the instrument port the backend
+    reports for it: ``xy2 (con1/6/3)`` for ``xy2.q1_q2_c``, ``-`` for an
+    operation or a mode."""
+    e = roster.entities.get(entity)
+    line = getattr(e, "line", None) or (entity if entity in roster.lines()
+                                        else None)
+    if line is None:
+        return "-"
+    port = ports.get(line)
+    return f"{line} ({port})" if port else line
+
+
 def _print_state(sess, entity_filter: str | None) -> int:
     """The operating tables, ONE PER ENTITY KIND present — columns in the
-    kind catalog's declaration order."""
+    kind catalog's declaration order, each row naming its wire and port."""
+    ports = _hook(sess.backend, "line_ports", {})
     rows = [r for r in state_rows(sess.roster, sess.device_state(),
                                   sess.physical_state())
             if r["store"] == "scqo_state.json"
@@ -160,15 +179,19 @@ def _print_state(sess, entity_filter: str | None) -> int:
         # 21-character fields (readout_integration_s, thermalization_time_s) ran
         # into their left neighbour and the header became unreadable.
         w = max(20, max(len(f) for f in fields) + 2)
+        wires = {name: _wire(sess.roster, name, ports) for name in names}
+        nw = max(12, max(len(n) for n in names) + 2)
+        ww = max(6, max(len(v) for v in wires.values()) + 2)
         print(f"# {kind}")
-        print(f"{'entity':12s}" + "".join(f"{f:>{w}s}" for f in fields))
+        print(f"{'entity':{nw}s}{'wire':{ww}s}"
+              + "".join(f"{f:>{w}s}" for f in fields))
         for name in names:
             row = "".join(
                 f"{values.get((name, f)):>{w}.6g}"
                 if isinstance(values.get((name, f)), float)
                 else f"{str(values.get((name, f))):>{w}s}"
                 for f in fields)
-            print(f"{name:12s}{row}")
+            print(f"{name:{nw}s}{wires[name]:{ww}s}{row}")
     if not by_kind:
         print("no operating state (entity filter matched nothing?)")
     return 0
@@ -215,7 +238,7 @@ def _fields_payload(sess, cfg) -> dict:
     pre-probe."""
     from dataclasses import asdict
 
-    from ..catalog import CHANNELS, COMPOSITES, MODES
+    from ..catalog import CHANNELS, COMPOSITES, MODES, OPERATION_FIELDS
 
     bindings = _hook(sess.backend, "field_bindings", {})
     unrealized = _hook(sess.backend, "unrealized", {})
@@ -227,24 +250,46 @@ def _fields_payload(sess, cfg) -> dict:
         for kind, spec in catalog.items():
             fields = []
             declared = kind in bindings or kind in unrealized
-            for fname, fs in spec.fields.items():
-                b = bindings.get(kind, {}).get(fname)
-                u = unrealized.get(kind, {}).get(fname)
-                fields.append({
-                    "name": fname, "unit": fs.unit, "role": fs.role,
-                    "portable": fs.portable, "shape": fs.shape,
-                    "design_ok": fs.design_ok,
-                    "binding": asdict(b) if b is not None else None,
-                    "unrealized": asdict(u) if u is not None else None,
-                })
-                if declared and fs.role == "knob" and b is None and u is None:
-                    missing.append(f"{kind}.{fname}")
+            levels = [("channel" if family == "channel" else family, spec.fields)]
+            if family == "channel":
+                levels.append(("line", spec.line_fields))
+            for level, specs in levels:
+                for fname, fs in specs.items():
+                    b = bindings.get(kind, {}).get(fname)
+                    u = unrealized.get(kind, {}).get(fname)
+                    fields.append({
+                        "name": fname, "level": level, "unit": fs.unit,
+                        "role": fs.role, "portable": fs.portable,
+                        "shape": fs.shape, "design_ok": fs.design_ok,
+                        "binding": asdict(b) if b is not None else None,
+                        "unrealized": asdict(u) if u is not None else None,
+                    })
+                    if (declared and fs.role == "knob" and b is None
+                            and u is None):
+                        missing.append(f"{kind}.{fname}")
             kinds.append({
                 "kind": kind, "family": family, "doc": spec.doc,
                 "roles": sorted(getattr(spec, "roles", None)
                                 or getattr(spec, "refs", None) or {}),
                 "fields": fields,
             })
+    op_bindings = _hook(sess.backend, "operation_bindings", {})
+    op_unrealized = _hook(sess.backend, "operation_unrealized", {})
+    kinds.append({
+        "kind": "operation", "family": "operation",
+        "doc": "A declared composite operation, <composite>.<op> - that "
+               "gate's knobs.",
+        "roles": [],
+        "fields": [{
+            "name": fname, "level": "operation", "unit": fs.unit,
+            "role": fs.role, "portable": fs.portable, "shape": fs.shape,
+            "design_ok": fs.design_ok,
+            "binding": (asdict(op_bindings[fname])
+                        if fname in op_bindings else None),
+            "unrealized": (asdict(op_unrealized[fname])
+                           if fname in op_unrealized else None),
+        } for fname, fs in OPERATION_FIELDS.items()],
+    })
     return {
         "device": cfg.device or None,
         "setup": sess.setup_name or None,
@@ -343,11 +388,11 @@ def _print_fields(sess, cfg, *, as_json: bool) -> int:
     _print_context(sess, cfg)
     print(f"# backend: {payload['backend']}   (bindings are declared metadata; the "
           f"executable conversion lives in the driver's views)")
-    indent = 20 + 6 + 13 + 10
+    indent = 26 + 6 + 13 + 10
     for cat in payload["kinds"]:
         roles = f"   roles: {', '.join(cat['roles'])}" if cat["roles"] else ""
         print(f"\n# {cat['kind']} ({cat['family']}){roles}")
-        print(f"{'field':20s}{'unit':6s}{'role':13s}{'portable':10s}"
+        print(f"{'field':26s}{'unit':6s}{'role':13s}{'portable':10s}"
               f"vendor binding ({payload['backend']})")
         for f in cat["fields"]:
             b = f["binding"]
@@ -359,7 +404,9 @@ def _print_fields(sess, cfg, *, as_json: bool) -> int:
                 bound = "-"
             # portable "NO" is upper-case on purpose: it is the value you must
             # NOT copy to another backend's config.
-            print(f"{f['name']:20s}{f['unit'] or '-':6s}{f['role']:13s}"
+            # a LINE field lives once per wire (z1.idle_flux), not per channel
+            name = f["name"] + (" [line]" if f.get("level") == "line" else "")
+            print(f"{name:26s}{f['unit'] or '-':6s}{f['role']:13s}"
                   f"{'yes' if f['portable'] else 'NO':10s}{bound}")
             if b:
                 for label, text in (("convert", b["convert"]),
@@ -394,11 +441,12 @@ def _print_physical(sess, entity_filter: str | None) -> int:
             print("no physical parameters recorded yet (accept a run that "
                   "proposes them)")
         return 0
-    print(f"{'entity':12s}{'kind':18s}{'field':20s}{'value':>16s}{'  unit'}")
+    nw = max(12, max(len(r["entity"]) for r in rows) + 2)
+    print(f"{'entity':{nw}s}{'kind':18s}{'field':20s}{'value':>16s}{'  unit'}")
     for r in rows:
         value = (f"{r['value']:>16.6g}" if isinstance(r["value"], float)
                  else f"{str(r['value']):>16s}")
-        print(f"{r['entity']:12s}{r['kind']:18s}{r['field']:20s}{value}"
+        print(f"{r['entity']:{nw}s}{r['kind']:18s}{r['field']:20s}{value}"
               f"  {r['unit']}")
     return 0
 

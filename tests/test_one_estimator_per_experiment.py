@@ -41,11 +41,11 @@ KNOWN_SHARED_BINDINGS: dict[str, tuple[tuple[str, ...], str]] = {
         "advanced-user knob over a backend-chosen default.",
     ),
     "state_discrimination": (
-        ("qubit_thermal_population", "single_shot_readout", "single_shot_readout_gef"),
+        ("qubit_thermal_population", "single_shot_readout"),
         "Identical shape and identical GMM model; only the label mapping differs (2x2 "
-        "majority diagonal / permutations(range(3)) / pinned centers) and it lives in "
-        "SCQO's estimate(), i.e. fitting logic in the orchestration layer. Migration: three "
-        "estimators over tools/discriminate.py + estimators/_iq_plane.py.",
+        "majority diagonal / pinned centers) and it lives in SCQO's estimate(), i.e. "
+        "fitting logic in the orchestration layer. Migration: two estimators over "
+        "tools/discriminate.py + estimators/_iq_plane.py.",
     ),
 }
 

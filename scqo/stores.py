@@ -1,10 +1,27 @@
-"""The two per-context value stores — schema 3, one shape, two role sets.
+"""The two per-context value stores — schema 4, one shape, two role sets.
 
 docs/greenfield-schema.md section 1: per (cooldown, setup) the device has
 ``physical.json`` (facts — measured sample physics) and ``scqo_state.json``
-(knobs + monitors — the operating state), both machine-written JSON::
+(knobs + monitors — the operating state), both machine-written JSON. Since
+4.0.0 (docs/store-by-line-plan.md) every value belongs to one OWNER entity - a
+mode, a composite, an operation ``<composite>.<op>``, a line, or a channel
+``<line>.<target>`` - and each file nests an owner with a dot under its first
+name, so a line's own fields sit beside its channels (ROLE still picks the
+file: the line's knobs in the state file, its facts in the physical one)::
 
-    {"schema": 3, "values": {entity: {field: float | [float, ...]}}}
+    scqo_state.json  {"schema": 4, "values": {
+        "xy2": {"q2": {"pi_amp": 0.21, ...}, "q1_q2_c": {"pi_amp": 0.12}},
+        "z1":  {"idle_flux": 0.26, "flux_delay_s": 4e-09},
+        "q1_q2": {"iswap": {"coupler_flux": 0.0}}}}
+    physical.json    {"schema": 4, "values": {
+        "q1":  {"f_01_hz": 5.1e9, ...},
+        "z1":  {"distortion_amp": [...], "q1": {"flux_per_phi0": 0.96}},
+        "q1_q2": {"zz_hz": 1.2e5}}}
+
+In memory the store is FLAT, ``{owner: {field: float | [float, ...]}}`` with
+dotted owner names (``flatten_values`` / ``nest_values``). A key under an owner
+is a field when its value is a number or a list and a sub-owner when it is a
+table; the roster guarantees no entity is named like a field.
 
 Change provenance lives in the context's shared ``history.sqlite``
 (:mod:`scqo.changes` — ONE database per scqo/ folder serving both stores
@@ -23,14 +40,14 @@ checked, paired arrays equal-length (both directions, re-checked against the
 MERGED values before a save commits), a ``*_waveform`` write requires its
 ``*_waveform_dt_s`` companion already set.
 
-FRESH-START POLICY (doc section 10): a values file without the
-``"schema": 3`` stamp is pre-cutover — archived aside (``*.v2.bak``, with
-any live legacy sidecar, keep-oldest) on first contact and never read, at
-BOTH the load and the save site (the v1->v2 precedent). An UNPARSEABLE
-values file is different: it is quarantined alone as ``*.corrupt.bak`` —
-the history database is untouched either way; provenance is never
-collateral damage. Knobs reseed from the vendor via ``state_sync="pull"``;
-monitors are re-measured; facts re-accumulate.
+A schema-3 file (3.x, flat channel names like ``q1_xy``) is REFUSED, never
+read and never archived: its facts cannot be regenerated, so the one-time
+conversion (``scripts/convert_store_v4.py``, shipped with 4.0.0 only) must run
+first. A values file with no known stamp at all predates greenfield and keeps
+the old fresh-start policy — archived aside (``*.v2.bak``, with any live
+legacy sidecar, keep-oldest) on first contact and never read. An UNPARSEABLE
+values file is quarantined alone as ``*.corrupt.bak`` — the history database
+is untouched either way; provenance is never collateral damage.
 
 Crash consistency in ``save()`` (ported from the proven store): everything
 re-read and validated under the lock BEFORE the history transaction
@@ -63,7 +80,9 @@ from .catalog import FieldSpec
 from .changes import HISTORY_FILE, ChangeDB, ChangeRecord, record_from_row
 from .roster import Roster
 
-STATE_SCHEMA = 3
+STATE_SCHEMA = 4
+#: The 3.x store schema: refused by name, converted once by the 4.0.0 script.
+V3_SCHEMA = 3
 PHYSICAL_FILE = "physical.json"
 STATE_FILE = "scqo_state.json"
 
@@ -94,7 +113,8 @@ def _current_operator() -> str:
 # ``ChangeRecord`` lives in :mod:`scqo.changes` with the database that
 # stores it; re-exported here (and from the package root) unchanged.
 __all__ = ["ChangeRecord", "Store", "StoreError", "PHYSICAL_FILE",
-           "STATE_FILE", "STATE_SCHEMA", "physical_store", "state_store"]
+           "STATE_FILE", "STATE_SCHEMA", "flatten_values", "nest_values",
+           "physical_store", "state_store"]
 
 
 # ------------------------------------------------------------ file plumbing
@@ -117,13 +137,15 @@ def _archive_pre_v3(path: Path, *, sidecar_only: bool = False) -> None:
             pass
 
 
-def _load_v3(path: Path) -> dict | None:
-    """The values file's JSON if (and only if) it carries the v3 stamp.
+def _load_values_file(path: Path) -> dict | None:
+    """The values file's JSON if (and only if) it carries the schema-4 stamp.
 
-    A parseable file WITHOUT the stamp is pre-cutover: archived aside with
-    its sidecar. An UNPARSEABLE file (torn write, disk fault) is NOT
-    pre-cutover: it is quarantined alone as ``*.corrupt.bak`` and the intact
-    sidecar survives — provenance is never collateral damage.
+    A schema-3 file is refused by name (StoreError) - it holds facts that
+    cannot be regenerated, so it waits for the one-time conversion. A
+    parseable file with no known stamp predates greenfield: archived aside
+    with its sidecar. An UNPARSEABLE file (torn write, disk fault) is
+    quarantined alone as ``*.corrupt.bak`` and the intact sidecar survives —
+    provenance is never collateral damage.
     """
     if not path.is_file():
         return None
@@ -137,8 +159,21 @@ def _load_v3(path: Path) -> dict | None:
         return None
     if isinstance(data, dict) and data.get("schema") == STATE_SCHEMA:
         return data
+    if isinstance(data, dict) and data.get("schema") == V3_SCHEMA:
+        raise StoreError(
+            f"{path} is a 3.x store (schema {V3_SCHEMA}): 4.0.0 addresses every "
+            f"value by line and channel (docs/store-by-line-plan.md) and never "
+            f"reads or archives a 3.x file - convert the data root once with "
+            f"`python scripts/convert_store_v4.py <data_root> --apply` from the "
+            f"4.0.0 SCQO checkout")
     _archive_pre_v3(path)
     return None
+
+
+def is_waveform(field: str) -> bool:
+    """A waveform array - one that needs its ``<field>_dt_s`` first: a
+    channel's ``*_waveform`` or an operation's plain ``waveform``."""
+    return field == "waveform" or field.endswith("_waveform")
 
 
 def _is_number(v: Any) -> bool:
@@ -149,32 +184,63 @@ def _finite_number(v: Any) -> bool:
     return _is_number(v) and math.isfinite(v)
 
 
-def _clean_values(raw: Any, roster: Roster
-                  ) -> dict[str, dict[str, float | list[float]]]:
-    """Sanitize a file's ``values`` block — a hand-mangled file must not
-    poison the store: only finite numbers and lists of finite numbers
-    survive (json.loads accepts Infinity/NaN tokens; we do not), and a value
-    whose shape contradicts the roster's spec for a KNOWN field is dropped
-    (a scalar sitting in a float[] slot would crash the relation checks)."""
-    if not isinstance(raw, dict):
-        return {}
+def flatten_values(raw: Any, roster: Roster | None = None
+                   ) -> dict[str, dict[str, float | list[float]]]:
+    """A file's nested ``values`` block as the flat ``{owner: {field: v}}``
+    the store holds, sanitized — a hand-mangled file must not poison the
+    store: only finite numbers and lists of finite numbers survive (json.loads
+    accepts Infinity/NaN tokens; we do not), and with a roster a value whose
+    shape contradicts the spec of a KNOWN field is dropped (a scalar in a
+    float[] slot would crash the relation checks). A table under an owner is a
+    sub-owner (``xy2`` -> ``xy2.q2``); owners and fields the roster does not
+    know are KEPT, so a roster edit never silently deletes stored values."""
     out: dict[str, dict[str, float | list[float]]] = {}
-    for entity, fields in raw.items():
-        if not isinstance(fields, dict):
-            continue
-        specs = roster.fields_of(entity) if entity in roster else {}
-        kept: dict[str, float | list[float]] = {}
-        for field, v in fields.items():
-            spec = specs.get(field)
-            if _finite_number(v):
-                if spec is None or spec.shape == "float":
-                    kept[field] = float(v)
-            elif (isinstance(v, list) and v
-                  and all(_finite_number(x) for x in v)):
-                if spec is None or spec.shape == "float[]":
-                    kept[field] = [float(x) for x in v]
-        out[entity] = kept
+    if not isinstance(raw, dict):
+        return out
+    for owner, block in raw.items():
+        if isinstance(block, dict):
+            _flatten_block(str(owner), block, roster, out)
     return out
+
+
+def _flatten_block(owner: str, block: dict, roster: Roster | None,
+                   out: dict[str, dict[str, float | list[float]]]) -> None:
+    specs = (roster.fields_of(owner)
+             if roster is not None and owner in roster else {})
+    kept: dict[str, float | list[float]] = {}
+    for key, v in block.items():
+        if isinstance(v, dict):
+            _flatten_block(f"{owner}.{key}", v, roster, out)
+            continue
+        spec = specs.get(key)
+        if _finite_number(v):
+            if spec is None or spec.shape == "float":
+                kept[key] = float(v)
+        elif (isinstance(v, list) and v
+              and all(_finite_number(x) for x in v)):
+            if spec is None or spec.shape == "float[]":
+                kept[key] = [float(x) for x in v]
+    if kept:
+        out.setdefault(owner, {}).update(kept)
+
+
+def nest_values(flat: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """The inverse of :func:`flatten_values`: a dotted owner goes under its
+    first name, after that name's own fields (``z1`` before ``z1.q1``)."""
+    out: dict[str, dict[str, Any]] = {}
+    for owner, fields in flat.items():
+        head, dot, _ = owner.partition(".")
+        if not dot:
+            out.setdefault(head, {}).update(
+                {f: (list(v) if isinstance(v, list) else v)
+                 for f, v in fields.items()})
+    for owner, fields in flat.items():
+        head, dot, tail = owner.partition(".")
+        if dot and fields:
+            out.setdefault(head, {})[tail] = {
+                f: (list(v) if isinstance(v, list) else v)
+                for f, v in fields.items()}
+    return {k: v for k, v in out.items() if v}
 
 
 # ------------------------------------------------------------------ stores
@@ -212,9 +278,9 @@ class Store:
         self._dirty: set[tuple[str, str]] = set()
         if self._path is None:
             return
-        data = _load_v3(self._path)
+        data = _load_values_file(self._path)
         if data is not None:
-            self._values = _clean_values(data.get("values"), roster)
+            self._values = flatten_values(data.get("values"), roster)
 
     # ------------------------------------------------------------- reading
 
@@ -281,7 +347,7 @@ class Store:
         both partners' length in one batch, so it is a BATCH-END invariant
         (the session validates it) and a SAVE invariant (:meth:`_check_merged`
         — a direct store user meets it there at the latest)."""
-        if (spec.shape == "float[]" and field.endswith("_waveform")
+        if (spec.shape == "float[]" and is_waveform(field)
                 and values.get(entity, {}).get(f"{field}_dt_s") is None):
             raise StoreError(
                 f"{entity}.{field}: set {field}_dt_s first — a waveform "
@@ -352,7 +418,7 @@ class Store:
     def save(self) -> None:
         """Merge-persist under the lock (ported crash discipline).
 
-        Under the lock the on-disk values are re-read THROUGH THE V3 GATE;
+        Under the lock the on-disk values are re-read THROUGH THE SCHEMA GATE;
         OUR unsaved rows are appended to the context's history database in
         ONE transaction, and each value key WE wrote is set to the
         LATEST-timestamp record across ALL sessions' rows (a same-timestamp
@@ -371,8 +437,8 @@ class Store:
             return
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with _file_lock(self._path):
-            data = _load_v3(self._path)  # archive side effects under the lock
-            file_values = (_clean_values(data.get("values"), self._roster)
+            data = _load_values_file(self._path)  # archive side effects under the lock
+            file_values = (flatten_values(data.get("values"), self._roster)
                            if data else {})
             with self._changes.transaction() as db:
                 ChangeDB.insert(db, self._unsaved, store=self._store_name)
@@ -386,7 +452,7 @@ class Store:
                 self._check_merged(candidate)  # veto -> rollback, zero rows
             self._unsaved.clear()  # committed — a retry must not re-insert
             payload = json.dumps({"schema": STATE_SCHEMA,
-                                  "values": candidate},
+                                  "values": nest_values(candidate)},
                                  indent=2, allow_nan=False)
             tmp = self._path.with_name(
                 f"{self._path.name}.{os.getpid()}.tmp")

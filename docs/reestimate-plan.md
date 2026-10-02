@@ -114,7 +114,7 @@ def run_estimate(self, *, frozen: bool = False) -> Result:
 
 | attr | 內容 | 誰蓋 |
 |---|---|---|
-| `scqo_schema` | `1`（內嵌格式版本；immutable run data 是 no-backward-compat 規則的唯一例外，所以讀取端要認版本） | `run_estimate` |
+| `scqo_schema` | `2`（內嵌格式版本；4.0.0 起 snapshot 用 owner 位址，如 `xy1.q1`、`z1`。4.0.0 前的 dataset 是 `1`、3.x 名字，`load_frozen` 經 `scqo/v3_names.py` 翻譯。immutable run data 是 no-backward-compat 規則的唯一例外，所以讀取端要認版本） | `run_estimate` |
 | `scqo_experiment` | 註冊名稱 | `run_estimate` |
 | `scqo_parameters` | `params.model_dump(mode="json")` | `run_estimate` |
 | `scqo_device` | `RecordingDevice.snapshot()`：所有 entity 的 knobs + monitors | `run_estimate` |
@@ -128,7 +128,7 @@ def run_estimate(self, *, frozen: bool = False) -> Result:
   persist dataset——這正是最需要重估的情況。
 - 大小：5Q4C 全部約 10 KB（compact JSON）。風險：HDF5 compact attribute 上限 64 KB；三個 attr 各自遠低於
   此，但 waveform knob（`list[float]`）變多或 20+ qubit 時要注意。加一支 size guard 測試；超過時的退路是
-  改成 per-entity attrs（`scqo_schema` 升 2）。
+  改成 per-entity attrs（`scqo_schema` 再升一版）。
 - `_scqat.py` 的 `per_qubit_results` / `whole_dataset_results` 在交給 estimator 前剝掉 `scqo_*` attrs
   （2 行）——scqat 維持「只讀 dataset、不知道 scqo 的內嵌」；也避免 10 KB JSON 被那兩個會複製 attrs 的地方
   帶進 `plotdata.nc`。
@@ -141,9 +141,10 @@ def run_estimate(self, *, frozen: bool = False) -> Result:
   （store 本來就拒絕 NaN）；`json.dumps(allow_nan=False)`，萬一丟例外則 scrub + stderr 警告，絕不讓一次
   量測因為 provenance 失敗。
 - `FrozenDevice(roster, snapshot)`：`RecordingDevice` **讀取語意**的唯讀雙胞胎——
-  `component()` / `channel()` / `resonator_of()` / `.roster` / `snapshot()`；knob 為 `None` 或缺 →
+  `component()` / `channel()` / `channel_on()` / `line()` / `flux_line()` / `operation()` /
+  `resonator_of()` / `.roster` / `snapshot()`；knob 為 `None` 或缺 →
   `KeyError`（與 `_get_knob(strict=True)` 同，`anchor()` 因此照常落到 design fallback）；monitor 缺 →
-  `None`；composite 走 `read_knob`，fact 讀取照樣被拒；任何寫入 → 指名拒絕。
+  `None`；operation（4.0.0 起，如 `q1_q2.iswap`）走 `read_knob`，fact 讀取照樣被拒；任何寫入 → 指名拒絕。
   `resonator_of` 的 8 行邏輯抽成 `device.py` 的 module-level helper，兩邊共用。
 - `FrozenStore(values)`：只有 `.get(entity, field)`。另有 **unavailable 模式**（見 §3.4）：任何 `.get()`
   丟 `UnavailableInputError`。這個例外**不可以**是 `KeyError` / `AttributeError` 的子類——否則會被
@@ -162,8 +163,12 @@ def run_estimate(self, *, frozen: bool = False) -> Result:
 | design | live `design.toml` | 舊 run 沒有快照；datasheet 很少變。在 `scqo_run` 標 `design_source: "live"` |
 
 - 以上來源**蓋進衍生 run 的 dataset attrs**，所以舊資料第一次重估後，衍生 run 就是自足的。
+- 現有沒有 attrs 的 run 全都早於 4.0.0：它們的 `device_before.json` 和 snapshot 的 `physical.json`
+  用的是 3.x 名字（`q1_xy`、`q1_z`），組進來之前要經 `scqo/v3_names.py` 翻成 owner 位址——和
+  `load_frozen` 讀 `scqo_schema` = 1 的 dataset 同一張表。
 - `--input entity.field=value`：操作者明說的值，依 roster 的 role 疊到 device 或 physical 上
-  （解析重用 `Session._parse_assignments`，含 `q1.pi_amp → q1_xy` 的 closure 定址）；標記來源 `operator`。
+  （解析重用 `Session._parse_assignments`，含 `q1.pi_amp → xy1.q1` 的 closure 定址，位址在最後一個點
+  切出欄位）；標記來源 `operator`。
 - `--facts live`：明確選擇用現在的 `physical.json`，標記 `facts_source: "live@<時間>"`。
 - **永遠不會隱式讀 live device。** 實際讀 fact 的只有 flux 家族（`resonator_spectroscopy_flux` 等），
   所以 unavailable 模式影響面很小；`resonator_spectroscopy` 只讀一個 knob，所有舊 run 都能重估。

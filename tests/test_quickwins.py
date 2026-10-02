@@ -86,14 +86,14 @@ class _BrokenExperiment(ResonatorSpectroscopy):
 
 def test_session_returns_structured_failure_on_contract_violation():
     sess = _session()
-    before = sess.device_state()["q0_ro"]["readout_freq_hz"]
+    before = sess.device_state()["fl.q0"]["readout_freq_hz"]
 
     result = sess.run("broken_contract", {"targets": ["q0"]})  # must NOT raise
 
     assert result["error"], "failed run should carry a non-empty error message"
     assert result["outcomes"]["q0"] == Outcome.NO_DATA.value
     # nothing was written back on failure
-    assert sess.device_state()["q0_ro"]["readout_freq_hz"] == before
+    assert sess.device_state()["fl.q0"]["readout_freq_hz"] == before
 
 
 @register
@@ -174,15 +174,15 @@ class _PartialExperiment(ResonatorSpectroscopy):
 
 def test_partial_success_writes_only_good_qubits():
     sess = _session()
-    before_q1 = sess.device_state()["q1_ro"]["readout_freq_hz"]
+    before_q1 = sess.device_state()["fl.q1"]["readout_freq_hz"]
 
     result = sess.run("partial_success", {"targets": ["q0", "q1"]}, update="apply")
 
     assert result["outcomes"]["q0"] == Outcome.SUCCESSFUL.value
     assert result["outcomes"]["q1"] == Outcome.FAILED.value
     state = sess.device_state()
-    assert np.isclose(state["q0_ro"]["readout_freq_hz"], 7.0e9)  # good qubit written
-    assert np.isclose(state["q1_ro"]["readout_freq_hz"], before_q1)  # failed qubit untouched
+    assert np.isclose(state["fl.q0"]["readout_freq_hz"], 7.0e9)  # good qubit written
+    assert np.isclose(state["fl.q1"]["readout_freq_hz"], before_q1)  # failed qubit untouched
 
 
 # ---------------------------------------------------------------------------- B

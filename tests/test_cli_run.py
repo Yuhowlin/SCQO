@@ -2,10 +2,11 @@
 
 Subprocess-based (python -m scqo.cli), cwd = an arbitrary tmp dir — the commands must
 work from ANY directory. Absorbs the parameter-cascade coverage that previously lived
-in LCHQBDriver/tests/test_cli_parameters.py.
+in LCHQBDriver/tests/test_cli_parameters.py. The --params loader (``_load_params``)
+is also tested in-process, for the file-handling cases a run need not pay for.
 
 Greenfield: the temp lab now writes a schema-3 components.toml (modes + lines; the
-readout rider mints q0_res/q0_ro, the drive rider q0_xy) plus the design.toml the
+readout rider declares fl.q0 and mints q0_res, the drive rider xy_q0.q0) plus the design.toml the
 simulated vendor seeds its knobs from, and the neutral field names moved with the
 model (readout_freq -> readout_freq_hz on <q>_ro, f_dress0_hz/kappa_tot_hz on <q>_res,
 t1_s on the qubit mode).
@@ -18,6 +19,10 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
+
+from scqo.cli._engine import _load_params
 
 #: Design targets the simulated vendor seeds from — without a datasheet the
 #: readout/drive knobs have no standing value and every run fails pre-probe.
@@ -40,7 +45,7 @@ def _run_cli(tmp_path: Path, *args: str, parameters_toml: str | None = None) -> 
             blocks.append(f'[modes.{q}]\nkind = "transmon"')
         # one multiplexed feedline (mints <q>_res + <q>_ro), one drive wire each
         blocks.append('[lines.fl]\nreadout = ["q0", "q1"]')
-        blocks.extend(f'[lines.{q}_xyl]\ndrive = ["{q}"]' for q in ("q0", "q1"))
+        blocks.extend(f'[lines.xy_{q}]\ndrive = ["{q}"]' for q in ("q0", "q1"))
         roster.write_text("\n".join(blocks) + "\n", encoding="utf-8")
     design = data_root / "simdev" / "design.toml"
     if not design.is_file():
@@ -94,7 +99,8 @@ def test_catalog_capability_filter(tmp_path):
     proc = _run_cli(tmp_path, "run", "--capability", "flux")
     assert proc.returncode == 0, proc.stderr
     body = [l for l in proc.stdout.splitlines() if l and not l.startswith("#")]
-    assert body == ["qubit_echo_flux_pulse", "qubit_relaxation_flux_pulse",
+    assert body == ["qubit_echo_flux_pulse", "qubit_ramsey_flux_pulse",
+                    "qubit_relaxation_flux_pulse",
                     "qubit_spectroscopy_flux_pulse", "resonator_spectroscopy_flux"]
 
 
@@ -129,6 +135,95 @@ def test_cli_set_beats_file_defaults(tmp_path):
     assert saved["num_readout_freq_points"] == 99
 
 
+# ------------------------------------------------------------------ --params files
+
+
+def test_toml_params_sit_between_the_parameters_file_and_set(tmp_path):
+    # a RELATIVE path, resolved against the cwd (_run_cli runs in tmp_path)
+    (tmp_path / "run.toml").write_text(
+        'targets = ["q0"]\nnum_readout_freq_points = 61\nstart_readout_detuning_hz = -6e6\n',
+        encoding="utf-8")
+    proc = _run_cli(
+        tmp_path, "run", "resonator_spectroscopy", "--params", "run.toml",
+        "--set", "num_readout_freq_points=71",
+        parameters_toml="[resonator_spectroscopy]\nnum_readout_freq_points = 51\n"
+                        "start_readout_detuning_hz = -5e6\n",
+    )
+    assert proc.returncode == 0, proc.stderr
+    result = _result(proc)
+    assert result["outcomes"] == {"q0": "successful"}
+    saved = json.loads((Path(result["data_path"]) / "parameters.json").read_text(encoding="utf-8"))
+    assert saved["start_readout_detuning_hz"] == -6e6  # the TOML file beats parameters.toml
+    assert saved["num_readout_freq_points"] == 71  # --set beats the TOML file
+    # both keys parameters.toml sets were overridden, so it contributed nothing
+    assert "# parameter defaults from" not in proc.stderr
+
+
+def test_params_file_is_read_as_toml_by_its_extension(tmp_path):
+    path = tmp_path / "chain.TOML"  # the extension check ignores case
+    path.write_text('first_pair = { pair = "q1_q2", operation = "partial_swap" }\n'
+                    "num_averages = 400\nstark_detuning_hz = 50e6\n", encoding="utf-8")
+    # a table-valued PARAMETER is fine: only a table named after an experiment is refused
+    assert _load_params(str(path), {"qc_unidirectional_trotter"}) == {
+        "first_pair": {"pair": "q1_q2", "operation": "partial_swap"},
+        "num_averages": 400,
+        "stark_detuning_hz": 50e6,
+    }
+
+
+def test_params_files_with_a_bom_parse(tmp_path):
+    # Windows PowerShell 5.1's `Out-File -Encoding utf8` writes UTF-8 WITH a BOM
+    (tmp_path / "p.json").write_text('{"num_points": 201}', encoding="utf-8-sig")
+    (tmp_path / "p.toml").write_text("num_points = 201\n", encoding="utf-8-sig")
+    for name in ("p.json", "p.toml"):
+        assert _load_params(str(tmp_path / name), set()) == {"num_points": 201}
+
+
+def test_a_missing_params_file_is_reported_as_missing(tmp_path, monkeypatch):
+    # not as malformed inline JSON, which is what a relative path run from the
+    # wrong directory used to produce
+    monkeypatch.chdir(tmp_path)
+    for name in ("chain.toml", "chain.json"):
+        with pytest.raises(SystemExit) as exc:
+            _load_params(name, set())
+        message = str(exc.value)
+        assert "file not found" in message
+        assert str((tmp_path / name).resolve()) in message
+
+
+def test_a_leading_tilde_is_expanded(tmp_path, monkeypatch):
+    # PowerShell hands `~` to a native command unexpanded
+    monkeypatch.setenv("HOME", str(tmp_path))  # POSIX
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows
+    (tmp_path / "p.toml").write_text("num_points = 201\n", encoding="utf-8")
+    assert _load_params("~/p.toml", set()) == {"num_points": 201}
+
+
+def test_a_broken_toml_file_names_itself(tmp_path):
+    path = tmp_path / "bad.toml"
+    path.write_text("num_points =\n", encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        _load_params(str(path), set())
+    assert "invalid TOML" in str(exc.value) and "bad.toml" in str(exc.value)
+
+
+def test_an_experiment_table_is_refused_with_the_layout_hint(tmp_path):
+    # the parameters.toml layout pasted into a --params file
+    path = tmp_path / "p.toml"
+    path.write_text("[resonator_spectroscopy]\nnum_readout_freq_points = 51\n", encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        _load_params(str(path), {"resonator_spectroscopy", "qubit_ramsey"})
+    assert "resonator_spectroscopy" in str(exc.value) and "parameters.toml" in str(exc.value)
+
+
+def test_inline_json_params_keep_their_behavior():
+    assert _load_params('{"num_points": 201}', set()) == {"num_points": 201}
+    with pytest.raises(SystemExit, match="Did you mean:  --set num_points=201"):
+        _load_params("num_points=201", set())
+    with pytest.raises(SystemExit, match="must be a JSON object"):
+        _load_params("[1, 2]", set())
+
+
 # ------------------------------------------------------- suggest / review / accept
 
 
@@ -143,7 +238,7 @@ def test_default_run_suggests_then_accept_by_run_id(tmp_path):
     assert [s["field"] for s in result["suggestions"]] == [
         "readout_freq_hz", "f_dress0_hz", "kappa_tot_hz", "readout_depletion_s"]
     assert [s["entity"] for s in result["suggestions"]] == [
-        "q0_ro", "q0_res", "q0_res", "q0_ro"]
+        "fl.q0", "q0_res", "q0_res", "fl.q0"]
     assert {s["status"] for s in result["suggestions"]} == {"pending"}
     assert "suggested updates" in proc.stderr
     assert f"scqo accept {result['run_id']}" in proc.stderr
@@ -202,7 +297,7 @@ def test_reject_needs_no_backend(tmp_path):
     # KNOB on the drive channel. Rejecting drops BOTH.
     assert summary["rejected"] == [
         {"entity": "q0", "field": "t1_s"},
-        {"entity": "q0_xy", "field": "thermalization_time_s"},
+        {"entity": "xy_q0.q0", "field": "thermalization_time_s"},
     ]
     assert "no runs match" in _run_cli(tmp_path, "find", "--pending").stdout
     # the T1 was never applied: the physical table stays empty
@@ -218,7 +313,7 @@ def test_suggest_attaches_operator_value_then_accept(tmp_path):
     run_id = _result(proc)["run_id"]
     assert "no runs match" in _run_cli(tmp_path, "find", "--pending").stdout
 
-    # q0.readout_freq_hz routes through the qubit closure to the q0_ro channel
+    # q0.readout_freq_hz routes through the qubit closure to the fl.q0 channel
     suggest = _run_cli(tmp_path, "suggest", run_id,
                        "q0.readout_freq_hz=5.912e9", "q0_res.f_dress0_hz=5.912e9",
                        "--comment", "read off the dip")
@@ -226,7 +321,7 @@ def test_suggest_attaches_operator_value_then_accept(tmp_path):
     summary = json.loads(suggest.stdout)  # stdout stays parseable JSON
     assert summary["pending_total"] == 2
     assert [a["field"] for a in summary["added"]] == ["readout_freq_hz", "f_dress0_hz"]
-    assert [a["entity"] for a in summary["added"]] == ["q0_ro", "q0_res"]
+    assert [a["entity"] for a in summary["added"]] == ["fl.q0", "q0_res"]
     # non-TTY: table + operator marker + decide-later hint on stderr, nothing applied
     assert "[operator:" in suggest.stderr and "read off the dip" in suggest.stderr
     assert f"scqo accept {run_id}" in suggest.stderr
@@ -330,8 +425,9 @@ def test_device_sources_traces_current_values(tmp_path):
     # strict match: a hand-edited value credits no run (per-(cooldown, setup) file)
     state_path = tmp_path / "data" / "simdev" / "cd1" / "main" / "scqo" / "scqo_state.json"
     data = json.loads(state_path.read_text(encoding="utf-8"))
-    # schema 3: ONE top-level "values" block in both store files, keyed by ENTITY
-    data["values"]["q0_ro"]["readout_freq_hz"] = 9.9e9  # another tool wrote the state
+    # schema 4: ONE top-level "values" block in both store files, keyed by
+    # ENTITY with a channel nested under its line (fl.q0 -> ["fl"]["q0"])
+    data["values"]["fl"]["q0"]["readout_freq_hz"] = 9.9e9  # another tool wrote it
     state_path.write_text(json.dumps(data), encoding="utf-8")
     src3 = _run_cli(tmp_path, "state", "--sources")
     readout_row3 = next(line for line in src3.stdout.splitlines() if "readout_freq_hz" in line)

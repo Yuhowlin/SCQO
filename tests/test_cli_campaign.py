@@ -57,7 +57,7 @@ def _lab(tmp_path: Path) -> Path:
     for q in ("q0", "q1"):
         blocks.append(f'[modes.{q}]\nkind = "transmon"')
     blocks.append('[lines.fl]\nreadout = ["q0", "q1"]')
-    blocks.extend(f'[lines.{q}_xyl]\ndrive = ["{q}"]' for q in ("q0", "q1"))
+    blocks.extend(f'[lines.xy_{q}]\ndrive = ["{q}"]' for q in ("q0", "q1"))
     (data_root / "simdev" / "components.toml").write_text(
         "\n".join(blocks) + "\n", encoding="utf-8")
     design = ["schema = 1"]
@@ -448,7 +448,7 @@ def test_accept_campaign_reject_and_filters(tmp_path):
     assert [a["field"] for a in summary["applied"]] == ["t1_s"]
     assert summary["pending_left"] == 1  # the thermalization knob still waits
 
-    knob = _cli(tmp_path, "accept", "--campaign", cid, "--entity", "q0_xy")
+    knob = _cli(tmp_path, "accept", "--campaign", cid, "--entity", "xy_q0.q0")
     assert json.loads(knob.stdout)["pending_left"] == 0
 
 

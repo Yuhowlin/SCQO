@@ -70,26 +70,30 @@ scqo run                                         # no arguments = show the menu
 ```
 
 ```
-pair_swap_chevron                   qubit_spectroscopy_cryoscope
-pair_swap_flux_map                  qubit_spectroscopy_flux_pulse
-pair_zz_coupler                     qubit_sqrb
-qc_n_stark_amp                      qubit_stark_phase_echo
-qc_n_swap_amp                       qubit_t1_ade
+broadband_qubit_spectroscopy        qubit_ramsey_cryoscope
+broadband_resonator_spectroscopy    qubit_ramsey_phasor
+pair_swap_angle                     qubit_relaxation
+pair_swap_chevron                   qubit_relaxation_flux_pulse
+pair_swap_flux_map                  qubit_resonator_stark
+pair_zz_coupler                     qubit_spectroscopy
+qc_n_stark_amp                      qubit_spectroscopy_cryoscope
+qc_n_swap_amp                       qubit_spectroscopy_flux_pulse
+qc_swap_flux_stark                  qubit_sqrb
+qc_trotter_compensation             qubit_stark_phase_echo
+qc_unidirectional_trotter           qubit_t1_ade
 qubit_deterministic_benchmarking    qubit_t1_bayesian
 qubit_drag_alternating              qubit_thermal_population
 qubit_drag_equator                  qubit_tomography
 qubit_echo                          qubit_xyz_delay
 qubit_echo_flux_pulse               readout_frequency
-qubit_parity_switch_continuous      readout_power
-qubit_parity_switch_discrete        resonator_spectroscopy
-qubit_pi_pulse_error                resonator_spectroscopy_flux
-qubit_power_rabi                    resonator_spectroscopy_power_amp
-qubit_ramsey                        resonator_spectroscopy_power_chain
-qubit_ramsey_cryoscope              single_shot_readout
-qubit_relaxation                    single_shot_readout_gef
-qubit_relaxation_flux_pulse
-qubit_spectroscopy
-# capabilities: state_readout(14) flux(4) qubit_reset(30) flux_pulse(3) amplitude(4) drive_detuning(4) readout_detuning(5) none(0)
+qubit_parametric_drive_amp          readout_power
+qubit_parametric_drive_time         readout_time_of_flight
+qubit_parity_switch_continuous      resonator_spectroscopy
+qubit_parity_switch_discrete        resonator_spectroscopy_flux
+qubit_pi_pulse_error                resonator_spectroscopy_power_amp
+qubit_power_rabi                    resonator_spectroscopy_power_chain
+qubit_ramsey                        single_shot_readout
+# capabilities: state_readout(17) flux(4) qubit_reset(37) flux_pulse(3) amplitude(5) drive_detuning(4) readout_detuning(5) none(2)
 # filter: scqo run --capability <name>    detail: scqo run <name> --help
 ```
 
@@ -123,7 +127,7 @@ You get the structured result as JSON — extracted physics, not raw traces:
   "error": null,
   "run_id": "20260704-225450-SQ_demo-resonator_spectroscopy-01",
   "data_path": "D:\\qpu_data\\SQ_demo\\2026-07-04\\...-01",
-  "suggestions": [ { "entity": "q1_ro", "field": "readout_freq_hz", "role": "knob",
+  "suggestions": [ { "entity": "fl1.q1", "field": "readout_freq_hz", "role": "knob",
                      "before": 5909267253.9, "after": 5907471431.6, "status": "pending" },
                    { "entity": "q1_res", "field": "f_dress0_hz", "role": "fact", "..." : "..." },
                    { "entity": "q1_res", "field": "kappa_tot_hz", "role": "fact", "..." : "..." } ]
@@ -131,8 +135,9 @@ You get the structured result as JSON — extracted physics, not raw traces:
 ```
 
 Notice the two kinds of proposal: the *setting* lands on the readout CHANNEL
-(`q1_ro`, role `knob`), the *measurement* on the resonator MODE (`q1_res`, role
-`fact`) — section 9 explains the entities, section 10 the roles.
+(`fl1.q1` — the feedline `fl1`'s channel to q1; role `knob`), the *measurement* on
+the resonator MODE (`q1_res`, role `fact`) — section 9 explains the entities,
+section 10 the roles.
 
 **Nothing is applied automatically.** The fitted `readout_freq_hz` is a *suggested
 update*: after the JSON, `scqo run` shows the suggestion table and asks you —
@@ -140,10 +145,10 @@ update*: after the JSON, `scqo run` shows the suggestion table and asks you —
 ```
 suggested updates (3 pending):
     # entity     field              role              current         suggested   status
-    1 q1_ro      readout_freq_hz    knob          5.90927e+09 ->    5.90747e+09 Hz   pending
-    2 q1_res     f_dress0_hz             fact         (unmeasured) ->    5.90747e+09 Hz   pending
+    1 fl1.q1     readout_freq_hz    knob          5.90927e+09 ->    5.90747e+09 Hz   pending
+    2 q1_res     f_dress0_hz        fact         (unmeasured) ->    5.90747e+09 Hz   pending
     3 q1_res     kappa_tot_hz       fact         (unmeasured) ->    1.32741e+06 Hz   pending
-apply which updates? [a]ll / [n]one (default) / rows, component, field or component.field:
+apply which updates? [a]ll / [n]one (default) / rows, entity, field or entity.field:
 ```
 
 Press Enter to apply **nothing** (the default) — the device state is then unchanged
@@ -196,8 +201,9 @@ scqo suggest <run_id> q1.readout_freq_hz=5.912e9 --comment "read off the dip, fi
 scqo suggest <run_id> q1_res.f_dress0_hz=5.912e9 q1_res.kappa_tot_hz=1.1e6   # several at once; either store
 ```
 
-(Assignments are `entity.field`; the qubit name works as sugar —
-`q1.readout_freq_hz` routes to `q1_ro`, `q1.f_dress0_hz` to `q1_res` — see section 9.)
+(Assignments are `entity.field`, the field after the LAST dot; the qubit name works
+as sugar — `q1.readout_freq_hz` routes to the readout channel `fl1.q1`,
+`q1.f_dress0_hz` to `q1_res` — see section 9.)
 
 Your value lands on that run as a pending suggestion marked `[operator: <you>]`
 (the viewer shows the same badge), and from there everything above applies
@@ -213,7 +219,7 @@ Once the readout is in place, the qubit experiments follow the same pattern:
 scqo run qubit_ramsey --targets q1 --set num_points=201            # drive_freq_hz + T2*
 scqo run qubit_power_rabi --accept                                # apply updates immediately
 scqo run resonator_spectroscopy --no-update ...                   # analyze only, nothing suggested
-scqo run qubit_ramsey --params my.json                            # parameters from a file
+scqo run qubit_ramsey --params my.toml                            # parameters from a file (.toml or .json)
 ```
 
 **See the sequence before you run it** — `--preview` builds and compiles the
@@ -247,10 +253,11 @@ the suggestion table's `role` column says which side each value belongs to. Both
 land in YOUR context's `<device>/<cooldown>/<setup>/scqo/` folder, so two users on
 two setups of one sample never see (or overwrite) each other's numbers.
 Calibration knobs (`readout_freq_hz`, `pi_amp`, ... — they live on the CHANNEL
-entities `q1_ro`/`q1_xy`/`q1_z`; `role: knob`) are pushed to the instrument on
-accept and recorded in `scqo_state.json`. Measured physics — facts (`role: fact`):
-T1, T2*, T2echo on the qubit mode, the flux maps' `flux_offset`/`flux_per_phi0`
-on the z channel, `ej_sum_hz`/`f_bare_hz`/`g_hz` — lands in `physical.json` beside
+entities `fl1.q1`/`xy1.q1`, each named `<line>.<target>`, and the flux bias on the
+flux LINE itself, `z1`; `role: knob`) are pushed to the instrument on accept and
+recorded in `scqo_state.json`. Measured physics — facts (`role: fact`): T1, T2*,
+T2echo on the qubit mode, the flux maps' `flux_offset`/`flux_per_phi0` on the flux
+channel `z1.q1`, `ej_sum_hz`/`f_bare_hz`/`g_hz` — lands in `physical.json` beside
 it (same accept flow). A third role, `monitor` (`fidelity_g`/`fidelity_e`, the
 blob positions), records measured performance OF the current knobs: stored in
 `scqo_state.json` but never pushed anywhere. The context's full change history
@@ -289,9 +296,13 @@ Three tiers of parameters — each overriding the previous:
    `default=15e6 [parameters.toml]`. With this file in place, most runs need no
    parameter flags at all.
 3. **The command line** — always wins. **`--set KEY=VALUE`** changes *one* knob
-   (repeat it for several), while **`--params`** loads a *whole set* as JSON — a file
-   path or an inline object like `--params "{""num_points"": 201}"`. Don't mix the
-   two syntaxes.
+   (repeat it for several), while **`--params`** loads a *whole set* — from a file,
+   read as TOML when it ends in `.toml` and as JSON otherwise, or from an inline JSON
+   object like `--params "{""num_points"": 201}"`. The file holds the keys at its top
+   level (no `[experiment]` table: that layout is `parameters.toml`'s), and a relative
+   path is resolved against the directory you run from. When both name a key, `--set`
+   wins. TOML has no null, so a knob that `parameters.toml` sets can only be reset to
+   None with `--set KEY=null`. Don't mix the two syntaxes.
 
 See every knob an experiment has — with your standing defaults marked — via
 `scqo run <experiment> --help`.
@@ -662,6 +673,9 @@ from a DIFFERENT cooldown is refused (frequencies shift between cooldowns); `--f
 overrides. The restored context starts with an empty change history, so `scqo state
 --sources` shows its values as `(no record)`; a version WARNING means the snapshot was
 written by other driver/vendor versions and a QM `__class__` path may no longer import.
+A snapshot taken before 4.0.0 holds the old store names (`q1_xy`, `q1_z`); restore
+re-addresses its `scqo_state.json` / `physical.json` to the current ones on the way
+in, values unchanged, and names anything the roster no longer has.
 
 **The folder is the truth.** The SQLite index (`<data_root>/index.sqlite`) is only a
 cache — if it is ever missing or stale, rebuild it losslessly:
@@ -679,8 +693,7 @@ One command opens the lab's data as a website (one-time: viewer extras via
 python -m scqo.viewer            # -> http://127.0.0.1:8080
 ```
 
-Six pages (port convention: **8001 qualibrate · 8080 viewer · 8081 datasette** —
-all can run at once):
+Six pages (port convention: **8080 viewer · 8081 datasette** — both can run at once):
 
 - **Runs** — filter by experiment / qubit / tag / outcome / date / campaign, plus a
   **pending only** checkbox for runs with undecided suggested updates; click any run.
@@ -857,7 +870,7 @@ sess.find_runs(pending=True)                             # undecided suggestions
 sess.load_run(result["run_id"])                          # record + params + figure paths
 
 sess.device_state()             # the operating state per entity (this context)
-sess.qubit_state("q1")          # one qubit's ASSEMBLED view: mode + its channels + resonator
+sess.qubit_state("q1")          # one qubit's ASSEMBLED view: mode, channels, flux line, resonator
 sess.physical_state()           # this context's measured physics
 sess.history()                  # every calibration change: who, what, old → new, which run
 sess.history(store="physical")  # same, for the physical-parameter ledger
@@ -921,36 +934,44 @@ kind = "flux_transmon"
 kind = "flux_transmon"
 
 [lines.fl1]
-readout = ["q1", "q2"]     # ONE feedline, two riders -> channels q1_ro + q2_ro
+readout = ["q1", "q2"]     # ONE feedline, two riders -> channels fl1.q1 + fl1.q2
                            # (+ minted resonator modes q1_res + q2_res): two
                            # readout_freq_hz on one wire IS frequency-
                            # multiplexed readout
 [lines.xy1]
-drive = ["q1"]             # -> channel q1_xy
+drive = ["q1"]             # -> channel xy1.q1
 [lines.xy2]
 drive = ["q2"]
 [lines.z1]
-flux = ["q1"]              # -> channel q1_z (a flux rider naming a fixed
+flux = ["q1"]              # -> channel z1.q1 (a flux rider naming a fixed
 [lines.z2]                 # `transmon` would be a LOAD ERROR — capability
 flux = ["q2"]              # by construction, not a pruned field)
 ```
 
-You never declare `q1_res`, `q1_ro`, `q1_xy` or `q1_z` — the riders MINT them
-(`readout` → `<t>_ro` plus the `<t>_res` resonator mode, `drive` → `<t>_xy`,
-`flux` → `<t>_z`), and single-mode operations (`rx`, `readout`, `flux_bias`)
-are DERIVED from the wiring, never declared. Every value then lives on the
-entity that owns it: knobs on CHANNELS (`q1_ro.readout_freq_hz`, `q1_xy.pi_amp`,
-`q1_z.idle_flux`), facts on MODES (`q1.t1_s`, `q1.f_01_hz`, `q1_res.f_dress0_hz`),
-monitors on channels too (`q1_ro.fidelity_g`).
+You never declare `q1_res` or a channel — the riders MINT them. A channel is
+named by its ADDRESS, `<line>.<target>`: the `readout` rider on `fl1` gives
+`fl1.q1` (plus the `q1_res` resonator mode), `drive` on `xy1` gives `xy1.q1`,
+`flux` on `z1` gives `z1.q1` — and single-mode operations (`rx`, `readout`,
+`flux_bias`) are DERIVED from the wiring, never declared. Every value then lives
+on the entity that owns it: knobs on CHANNELS (`fl1.q1.readout_freq_hz`,
+`xy1.q1.pi_amp`), what a wire has ONCE however many qubits ride it on the LINE
+itself (`z1.idle_flux` — one DC bias per flux wire), facts on MODES
+(`q1.t1_s`, `q1.f_01_hz`, `q1_res.f_dress0_hz`) and on the flux channel
+(`z1.q1.flux_per_phi0`), monitors on channels too (`fl1.q1.fidelity_g`).
 
-Addressing is `entity.field` — `scqo set q1_z.idle_flux=0.12`,
+Addressing is `entity.field`, the field after the LAST dot —
+`scqo set z1.idle_flux=0.12`, `scqo set xy1.q1.pi_amp=0.21`,
 `scqo set q1_res.kappa_tot_hz=...` — with QUBIT sugar: `q1.pi_amp` routes to
-`q1_xy`, `q1.readout_freq_hz` to `q1_ro`, `q1.f_dress0_hz` to `q1_res` (first hit
-in the qubit's closure). A wrong home answers with the right one
-("`q1_ro.pi_amp`: no entity in `q1_ro`'s closure carries this field — did you
-mean `q1_xy.pi_amp`?"). One fit may legally write a knob AND a fact: resonator
-spectroscopy proposes `q1_ro.readout_freq_hz` (the setting) and `q1_res.f_dress0_hz`
-(the measurement) from the same dip.
+`xy1.q1`, `q1.readout_freq_hz` to `fl1.q1`, `q1.flux_per_phi0` to `z1.q1`,
+`q1.idle_flux` to the line `z1`, `q1.f_dress0_hz` to `q1_res` (first hit in the
+qubit's closure). The line hop holds only while q1 is the line's ONLY flux
+target: on a flux wire shared by several qubits `q1.idle_flux` refuses and
+names `<line>.idle_flux`, because that bias moves every qubit on it. A wrong
+home answers with the right one ("`fl1.q1.pi_amp`: no entity in `fl1.q1`'s
+closure carries this field — did you mean `xy1.q1.pi_amp` or `xy2.q2.pi_amp`?").
+One fit may legally write a knob AND a fact: resonator spectroscopy proposes
+`fl1.q1.readout_freq_hz` (the setting) and `q1_res.f_dress0_hz` (the
+measurement) from the same dip.
 
 **Design targets** live in the sibling `design.toml` (the DATASHEET), never in
 the roster — entity-named tables of as-designed, context-free values:
@@ -980,18 +1001,56 @@ kind       = "qubit_pair"          # zz_hz, j_hz — the pair's measured facts
 high       = "q1"                  # design-nominal frequency ordering — NEVER
 low        = "q2"                  # control/target ("which qubit moves" is a
 coupler    = "q1_q2_c"             # per-operation vendor fact, not topology)
-operations = ["iswap"]             # declared gates mint the knob family:
-[lines.zc12]                       # iswap_coupler_flux, iswap_duration_s, ...
-flux = ["q1_q2_c"]                 # -> channel q1_q2_c_z
+operations = ["iswap"]             # each declared gate is an entity owning
+[lines.zc12]                       # its knobs: q1_q2.iswap.coupler_flux, ...
+flux = ["q1_q2_c"]                 # -> channel zc12.q1_q2_c (zc12 owns the bias)
 ```
 
-The coupler's standing (decouple) bias is `idle_flux` on ITS OWN flux channel —
-`scqo set q1_q2_c_z.idle_flux=0.081` replaces hand-editing the vendor config —
-and per-gate operating points are the pair's per-operation knobs
-(`q1_q2.iswap_coupler_flux`, ...). The `pair_zz_coupler` experiment automates
-the decouple point: it maps the signed residual ZZ vs coupler bias (echo
-fringe) and proposes the zero crossing as the coupler z channel's `idle_flux`
-plus the residual `zz_hz` fact on the pair.
+The coupler's standing (decouple) bias is `idle_flux` on ITS OWN flux LINE —
+`scqo set zc12.idle_flux=0.081` (or the sugar `q1_q2_c.idle_flux=0.081`)
+replaces hand-editing the vendor config — and per-gate operating points are the
+knobs of the pair's operations (`q1_q2.iswap.coupler_flux`,
+`q1_q2.iswap.duration_s`, ...; always written out in full —
+`q1_q2.coupler_flux` refuses and names the operation). The `pair_zz_coupler`
+experiment automates the decouple point: it maps the signed residual ZZ vs
+coupler bias (echo fringe) and proposes the zero crossing as the coupler flux
+line's `idle_flux` plus the residual `zz_hz` fact on the pair.
+
+**Borrowed channels.** A drive line reaches more than the qubit it was wired
+for: through it, every drivable mode it does not carry by design exists as a
+BORROWED channel, with no declaration — `xy2.q1` (q1 driven through q2's line,
+e.g. for a microwave-crosstalk study), or the coupler through either neighbour's
+line, `xy1.q1_q2_c` and `xy2.q1_q2_c`, each route keeping its own values and
+history. The line is part of the name, so the qubit sugar never picks a borrowed
+channel: `scqo set q1_q2_c.pi_amp=...` refuses and lists
+`xy1.q1_q2_c.pi_amp, xy2.q1_q2_c.pi_amp` — say which line. A borrowed channel
+carries the drive knobs except the target's own `thermalization_time_s` (and the
+`parity_delta_f_hz` monitor), and it holds values only once the setup's vendor
+config has an element for that route: until then a read finds no value and a
+write is refused.
+
+**A coupler as a target.** The `qubit_*` experiments that carry the
+`drive_line` and `mapped_readout` capabilities (`scqo run --capability
+mapped_readout`; `qubit_power_rabi` first) take a tunable coupler as their
+target. `drive_line` names the line whose (usually borrowed) channel plays the
+pulse; that channel's knobs (`pi_amp`, ...) are the ones read and calibrated.
+`readout_member` reads the coupler through a member of its pair: a selective pi
+on the member, narrower than the member-coupler ZZ (the selective pi of
+`pair_coupler_spectroscopy_zz`), plus the member's x180 copy the coupler's state
+onto the member, whose discriminated readout is the signal. On QM, adopt the
+borrowed channel first, once per setup: `scqo-qm adopt-channel --list` to look,
+then `scqo-qm adopt-channel xy2.q1_q2_c --lo-hz 7.1e9`, which adds an element on
+q2's port through its second upconverter, tuned to the coupler's measured
+`f_01_hz`. Qblox refuses both fields by name. Then
+
+```
+scqo run qubit_power_rabi --targets q1_q2_c --set drive_line=xy2 --set readout_member=q1 --set use_state_discrimination=true
+```
+
+proposes `xy2.q1_q2_c.pi_amp`. One target per run, discriminated readout and
+thermal reset only, each refused by name otherwise; a coupler target without the
+fields is refused with the lines and members it could use. Design and the 5Q4C
+numbers: `docs/coupler-transmon-plan.md`.
 
 Two record-only maps come BEFORE it at bring-up, when no two-qubit gate is
 defined yet: `pair_swap_chevron` excites one member and sweeps a flux pulse
@@ -1007,8 +1066,8 @@ per-operation knobs by hand. Both need a calibrated discriminator
 tracked coupler.
 
 **Assignable flux source.** The flux-map experiments take `flux_component`:
-ANY entity with a flux channel (another qubit's z, a coupler's z) swept
-INSTEAD of each target's own z — `scqo run resonator_spectroscopy_flux
+ANY entity with its own flux channel (another qubit, a coupler), whose flux LINE
+is swept INSTEAD of each target's own — `scqo run resonator_spectroscopy_flux
 --targets q1 --set flux_component=q1_q2_c`. Such runs are RECORD-ONLY (the
 fits describe crosstalk / coupler-induced shift, so nothing is proposed as the
 target's own physics), and with a source assigned the targets themselves no
@@ -1019,7 +1078,8 @@ freely editable (`scqo doctor` reports the trial phase). The manager's
 production cut freezes the expanded name set into `components.lock`; from then
 on names are append-only forever — add entities or retire them
 (`retired = true`), never rename or delete, because store keys, trends and
-history key on the names — and `scqo doctor` FAILS on drift. Experiments
+history key on the names (a channel is named by its line, so moving a rider to
+another line is a rename) — and `scqo doctor` FAILS on drift. Experiments
 declare `target_kinds` + `required_operations`, and `scqo run` refuses
 mismatched targets BEFORE touching hardware — a flux experiment on a
 fixed-frequency chip is machine-refused (its qubits carry no flux channel),
@@ -1033,7 +1093,7 @@ store. When you don't know where a value belongs — or why `scqo set` refuses a
 name — apply this checklist **in order; first match wins**. Bench form:
 `scqo state --rule`. Classify each *use* of a quantity, not each name: one fit
 may legally write a knob AND a fact (`resonator_spectroscopy` writes the
-`q1_ro.readout_freq_hz` setting and the `q1_res.f_dress0_hz` measurement from the
+`fl1.q1.readout_freq_hz` setting and the `q1_res.f_dress0_hz` measurement from the
 same dip — two roles, two homes, on purpose).
 
 1. **Gone when the run ends?** Sweep windows, shot counts, analysis assumptions,
@@ -1044,8 +1104,9 @@ same dip — two roles, two homes, on purpose).
    instrument off and no pulse ever sent (T1, f_r, EJ, the flux arch) →
    **role `fact` → physical.json.** "Instrument-independent" means *no
    instrument setting realizes it* — a sample fact in setup coordinates
-   (`q1_z.flux_per_phi0`, source units per flux quantum at the DAC) still
-   lives here, on the flux CHANNEL, in the flux source's native unit. One file
+   (`z1.q1.flux_per_phi0`, source units per flux quantum at the DAC) still
+   lives here, on the flux CHANNEL `z1.q1` (the wire `z1` to the qubit `q1`: the
+   transfer function is per target), in the flux source's native unit. One file
    per (cooldown, setup): each value is conditioned on trusting that instrument,
    and cross-setup disagreement is *information* (instrument systematics).
    Write: estimator suggest→accept, or `scqo set`.
@@ -1055,7 +1116,10 @@ same dip — two roles, two homes, on purpose).
    calibrated by an experiment never changes ownership.
 4. **A knob the calibration loop must read/write vendor-neutrally — meaning the
    same signal on every backend?** → **role `knob` → scqo_state.json, on the
-   channel that emits it.** Defined in the *experiment's frame*: each driver
+   line or channel that emits it** (a channel's own signal on `<line>.<target>`,
+   `xy1.q1.pi_amp`; what the wire has once, however many targets ride it, on the
+   line, `z1.idle_flux`; a gate's operating point on its operation,
+   `q1_q2.iswap.coupler_flux`). Defined in the *experiment's frame*: each driver
    converts instrument ↔ experiment (hub-and-spoke — N converters, never N×N;
    instruments never convert to each other). Two value conventions:
    - absolute at the closest **declared** calibratable plane (Hz; dBm at the
@@ -1259,8 +1323,8 @@ residual around a point the chevron already fixed, not to locate it.
 - accepted `single_shot_readout` on both members (the pair maps read out jointly
   discriminated);
 - accepted `pair_zz_coupler` (the coupler parks at its decouple point —
-  `idle_flux` on the coupler's flux channel — so the swap only happens while the
-  coupler pulse plays);
+  `idle_flux` on the coupler's flux line, `zc12.idle_flux` — so the swap only
+  happens while the coupler pulse plays);
 - the pair declared in `components.toml` with its `coupler` role.
 
 ### Step 1 — survey the swap spot
@@ -1415,11 +1479,11 @@ flux_side = "low"
 - **The angle is read by eye** (period counting). scqat's
   `SwapOscillationEstimator` already fits `f = θ/π` per amplitude row and is
   unused — wiring it per-amplitude is the natural first automation.
-- **The register scripts ARE the writeback.** The composite per-operation knobs
-  (`partial_swap_duration_s`, …) exist in the catalog, but the QM binding for a
-  pair duration is deliberately Unrealized until a calibrating experiment lands
-  ("promote to a coupled binding"), and no experiment proposes a composite knob
-  yet — the future closed loop gives the flux map and `qc_n_swap_amp` real
+- **The register scripts ARE the writeback.** The per-operation knobs
+  (`q1_q2.partial_swap.duration_s`, …) exist in the catalog, but the QM binding
+  for a pair duration is deliberately Unrealized until a calibrating experiment
+  lands ("promote to a coupled binding"), and no experiment proposes an operation
+  knob yet — the future closed loop gives the flux map and `qc_n_swap_amp` real
   `update()`s.
 - **The chevron** (`pair_swap_chevron`) is the sibling survey (member flux ×
   duration). With `coupler_flux_v` unset it is the directly-coupled-pair tool it
@@ -1449,6 +1513,8 @@ roster-vs-vendor wiring), and tells you what is wrong and how to fix it.
 | `device ... is on backend 'qblox' ... driver is not registered in this environment` | right command, wrong venv — the message names the venv to activate (or, if you ARE in it, the install line to re-run) |
 | `invalid cooldown registry ...` or another refusal naming `cooldowns.toml` at run start | the manager's cycle registry is broken or incomplete (it stamps runs and selects the instrument, so runs refuse BEFORE instrument time) — `scqo device cooldown` (no args) validates it; the message names the fix (INSTALL §6 has the full list) |
 | `no ...components.toml — the roster is required` | the device is not described yet — the manager writes its `components.toml` (schema 3; the message prints the smallest valid file) and, usually, a `design.toml` beside it (section 9) |
+| `... is a 3.x store (schema 3)` / `... is a 3.x change history` at session start | the data root still holds pre-4.0.0 store files — convert it once from the 4.0.0 SCQO checkout: `python scripts/convert_store_v4.py <data_root>` (dry run: what moves, what blocks), then `--apply`. It refuses while runs hold PENDING suggestions (3.x names): decide those first, or add `--reject-pending`. Each file is kept as `*.v3.bak` |
+| `unknown entity 'q1_z': that is the 3.x name of ...` | an old address from a script or habit — 4.0.0 addresses by line and channel; the message names the new one (`z1.idle_flux`, `z1.q1.flux_per_phi0`), and the shorthand `q1.idle_flux` still works |
 | `cycle ... has N setups and none is selected` | the ACTIVE cycle offers several measurement setups and a run will not guess — pick yours once: `scqo user --setup <name>` (a single-setup cycle needs no selection) |
 | `setup 'x' ... does not exist in the ACTIVE cycle` | your selection went stale (typically after a new cycle started) — `scqo user --setup <name>` picks a current one, `scqo user --clear-setup` returns to auto-selection; bare `scqo user` always shows what a run would resolve to |
 | A run shows `datastore_error` | measurement succeeded; only saving failed (disk full/locked). Fix the disk, rerun |

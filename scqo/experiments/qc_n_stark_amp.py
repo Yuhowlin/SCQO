@@ -30,19 +30,27 @@ labels; ``"shot"`` keeps every shot as per-member integer levels
 full-information / more-memory trade. ``estimate()`` reduces the shot form to the
 same joint distribution before analysis, so both modes yield identical maps.
 
-RECORD-ONLY for the DEVICE: there is no ``update()`` and nothing lands on the
-device surface; the summary lives in ``result.fit``. The scqat estimator
-(``qc_n_stark_amp``) draws the raw joint state populations — a per-pair 2x2
-population figure plus plotdata/metadata under ``analysis/<pair>/`` — and READS
-THE COMPENSATING STARK AMPLITUDE off the map: at each stark amplitude it measures
-the transfer's oscillation along the swap count, and the compensating amplitude
-is the one whose oscillation is the STRONGEST (contrast is maximal when the
-residual detuning is nulled) and the SLOWEST (the per-swap composite angle, and
-hence the oscillation frequency, bottoms out there). Both criteria, the combined
-pick (also interpolated between swept amplitudes) and its ``theta_eff`` are
-lifted into ``result.fit``; nothing is proposed and nothing is written back, and
-the SUCCESS verdict (``min_transfer``) is still made here in ``estimate()``, not
-by the estimator.
+The scqat estimator (``qc_n_stark_amp``) draws the raw joint state populations —
+a per-pair 2x2 population figure plus plotdata/metadata under
+``analysis/<pair>/`` — and READS THE COMPENSATING STARK AMPLITUDE off the map: at
+each stark amplitude it measures the transfer's oscillation along the swap count,
+and the compensating amplitude is the one whose oscillation is the STRONGEST
+(contrast is maximal when the residual detuning is nulled) and the SLOWEST (the
+per-swap composite angle, and hence the oscillation frequency, bottoms out
+there). Both criteria, the combined pick (also interpolated between swept
+amplitudes) and its ``theta_eff`` are lifted into ``result.fit``, and the SUCCESS
+verdict (``min_transfer``) is still made here in ``estimate()``, not by the
+estimator.
+
+THE ONE WRITE-BACK is the angle: ``update()`` proposes ``compensating_theta_rad``
+as the ``theta_rad`` MONITOR of the swap operation it measured
+(``<pair>.<swap_operation>``) — the period angle the pair-partial-swap procedure
+takes as the reference, and what the chain analysis draws its ideal curves from.
+Nothing is pushed to the instrument. It is proposed only when the reading is
+trustworthy (both criteria agree and the fastest row stays at or above two
+counts per cycle, see below), and only for an operation the roster DECLARES —
+an undeclared one has no entity to hold the value, so the run says so and
+proposes nothing.
 
 THE READING ASSUMES NO ROW SWAPS BY MORE THAN pi/2 — every period at least TWO
 counts, the Nyquist period of an integer-N axis. Past that an oscillation aliases
@@ -172,9 +180,11 @@ class QcNStarkAmpResult(Result):
     is AT the pi/2-per-swap limit the reading assumes it stays under. The
     per-amplitude curves behind them stay in the scqat metadata.
 
-    Record-only: no ``update()``, nothing written to the device — and the verdict
-    is still ``min_transfer`` alone, so a map that transfers without oscillating
-    is SUCCESSFUL with NaN compensation fields."""
+    ``update()`` proposes ``compensating_theta_rad`` as the swap operation's
+    ``theta_rad`` monitor when the reading passes its gates (module docstring);
+    nothing is pushed. The verdict is still ``min_transfer`` alone, so a map that
+    transfers without oscillating is SUCCESSFUL with NaN compensation fields —
+    and proposes nothing."""
 
 
 @register
@@ -190,8 +200,9 @@ class QcNStarkAmp(Experiment):
         "amplifies a small residual detuning, so the populations vs (stark amplitude, N) locate "
         "the compensating stark amplitude far more finely than a single swap. readout_mode='shot' "
         "keeps every shot (per-member states) instead of the averaged joint distribution. "
-        "Record-only diagnostic: the per-map summary lands in result.fit and nothing is written "
-        "back to the device."
+        "The per-map summary lands in result.fit; the per-swap angle read off the period at "
+        "the compensating amplitude is proposed as the swap operation's theta_rad monitor "
+        "(never pushed) when both criteria agree and the operation is declared in the roster."
     )
     Parameters: ClassVar[type] = QcNStarkAmpParameters
     Result: ClassVar[type] = QcNStarkAmpResult
@@ -347,6 +358,37 @@ class QcNStarkAmp(Experiment):
             # oscillates is a real (NaN-compensation) result, not a failure.
             result.outcomes[pair] = Outcome.SUCCESSFUL if ok else Outcome.FAILED
         return result
+
+    def update(self) -> None:
+        """Propose the period angle as the swap operation's ``theta_rad`` monitor.
+
+        Gated on the reading, not only the verdict: a SUCCESSFUL map may still
+        have NaN compensation (transfer without oscillation), criteria that
+        disagree (a stark window wider than one turn holds two branches), or a
+        fastest row under two counts per cycle (the period reading aliases).
+        """
+        if self.result is None:
+            return
+        import sys
+
+        op = self.params.swap_operation
+        for pair, fit in self.result.fit.items():
+            if self.result.outcomes[pair] is not Outcome.SUCCESSFUL:
+                continue
+            theta = fit.get("compensating_theta_rad", float("nan"))
+            trusted = (np.isfinite(theta)
+                       and fit.get("osc_criteria_agree") == 1.0
+                       and fit.get("min_osc_period", float("nan")) >= 2.0)
+            if not trusted:
+                continue
+            entity = f"{pair}.{op}"
+            if entity not in self.device.roster:
+                print(f"scqo: {entity} is not declared in the roster, so its "
+                      f"theta_rad ({theta:.4f} rad) has nowhere to go - add "
+                      f"{op!r} to [composites.{pair}].operations to keep it",
+                      file=sys.stderr)
+                continue
+            self.device.operation(pair, op).write_knob("theta_rad", float(theta))
 
     @classmethod
     def validate_targets(cls, roster, targets):

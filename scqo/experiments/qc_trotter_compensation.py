@@ -46,7 +46,10 @@ reduces it to the same marginals average mode stores.
 RECORD-ONLY for the DEVICE: there is no ``update()``. A Stark compensation factor
 is a per-run sequence choice with no vendor home — there is no knob to write it
 to — so the optimum lands in ``result.fit`` and is passed back as the
-``compensation_amps`` parameter of the next run.
+``compensation_amps`` parameter of the next run. The value to pass back is
+``best_compensation_amp_refined``, the vertex of the sink averaged over the rounds
+that interfere. ``best_compensation_amp`` is the single brightest pixel, which one
+noisy pixel moves; on 5Q4C it sat 0.02-0.04 off the ridge on four scans.
 """
 
 from __future__ import annotations
@@ -104,11 +107,22 @@ class QcTrotterCompensationParameters(QcUnidirectionalTrotterParameters):
 
 
 class QcTrotterCompensationResult(Result):
-    """``fit[qubit]``: the run-wide optimum — ``best_compensation_amp``,
-    ``best_sink_p_max``, ``best_n_at_max``, ``worst_compensation_amp`` and
-    ``contrast`` (best/worst sink peak; ~1.0 means the phase knob does nothing on
-    this chain) — repeated on every row so one target's record is readable on its
-    own, plus that qubit's own transport summary AT the optimum
+    """``fit[qubit]``: the run-wide optimum, repeated on every row so one target's
+    record is readable on its own —
+
+    * ``best_compensation_amp_refined`` ± ``best_compensation_amp_err`` — THE
+      compensation: the parabola vertex of the sink averaged over rounds >= 2
+      (earlier rounds hold at most one path, so no phase), and its spread under
+      resampling the rounds. NaN with ``compensation_unresolved`` = 1 when that
+      curve shows no interior peak (a window that misses the optimum, fewer than
+      three rounds that interfere).
+    * ``best_compensation_amp`` — the raw reading: the single brightest
+      (amplitude, round) pixel. ``best_sink_p_max`` / ``best_n_at_max`` describe
+      the transport there, and ``worst_compensation_amp`` / ``contrast`` (best/worst
+      sink peak; ~1.0 means the phase knob does nothing on this chain) the other
+      end of the scan.
+
+    Plus that qubit's own transport summary at the brightest pixel
     (``p_initial`` / ``p_final`` / ``p_max`` / ``p_min`` / ``n_at_max``).
 
     The OUTCOME is the SCAN's: SUCCESSFUL means an optimum was located and its
@@ -148,7 +162,9 @@ class QcTrotterCompensation(Experiment):
         "push the peak out to several, so n_at_max reads the phase condition independently "
         "of the peak height — and the slice at the optimum is the population-vs-N curve, so "
         "one run gives both the phase and the transport. Record-only diagnostic: the "
-        "optimum lands in result.fit and is fed back as the next run's compensation_amps."
+        "optimum lands in result.fit as best_compensation_amp_refined (the vertex of the "
+        "round-averaged sink, with its spread; best_compensation_amp is only the brightest "
+        "pixel) and is fed back as the next run's compensation_amps."
     )
     Parameters: ClassVar[type] = QcTrotterCompensationParameters
     Result: ClassVar[type] = QcTrotterCompensationResult
@@ -319,7 +335,9 @@ class QcTrotterCompensation(Experiment):
         curves = analysis.get("per_qubit_at_best", {})
         run_wide = {
             key: float(analysis.get(key, float("nan")))
-            for key in ("best_compensation_amp", "best_sink_p_max", "best_n_at_max",
+            for key in ("best_compensation_amp_refined", "best_compensation_amp_err",
+                        "compensation_unresolved",
+                        "best_compensation_amp", "best_sink_p_max", "best_n_at_max",
                         "worst_compensation_amp", "worst_sink_p_max", "contrast")
         }
         # The verdict is the SCAN's — was an optimum located at all — never a

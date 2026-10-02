@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from .design import Design
-from .entities import Channel, Composite, Mode
+from .entities import Mode
 from .lock import LockError, additions, verify
 from .roster import Roster
 
@@ -47,8 +47,10 @@ def roster_checks(roster: Roster) -> list[Check]:
     channels = roster.channels()
     out.append(Check(
         OK, "roster",
-        f"{len(modes)} mode(s), {len(composites)} composite(s), "
-        f"{len(roster.lines())} line(s), {len(channels)} channel(s)"))
+        f"{len(modes)} mode(s), {len(composites)} composite(s) with "
+        f"{len(roster.operation_entities())} operation(s), "
+        f"{len(roster.lines())} line(s), {len(channels)} designed channel(s) "
+        f"(+{len(roster.borrowed_channels())} borrowable)"))
 
     # A mode no channel addresses cannot be driven, read, or biased: it
     # exists in the stores but no experiment can target it.
@@ -149,16 +151,28 @@ def lock_checks(roster: Roster, device_dir) -> list[Check]:
 
 # ------------------------------------------------------------------ vendor
 
+def knob_carriers(roster: Roster) -> set[str]:
+    """The DESIGNED entities with at least one knob field - the channels,
+    lines and operations whose values the backend must realize to push.
+    A borrowed channel is realized only once adopted, so it is never
+    expected; a knob-free entity (a flux channel's transfer-function facts)
+    has nothing to push."""
+    borrowed = roster.borrowed_channels()
+    return {name for name in roster.entities
+            if name not in borrowed
+            and any(spec.role == "knob"
+                    for spec in roster.fields_of(name).values())}
+
+
 def vendor_checks(roster: Roster, inventory: dict | None) -> list[Check]:
     """Roster-vs-vendor witness: which knob-carrying entities the backend
     actually realizes. ``inventory`` is the driver's ``components()`` map
-    (name -> ComponentInfo); None = the backend declares none."""
+    (entity name -> ComponentInfo); None = the backend declares none."""
     if inventory is None:
         return [Check(WARN, "vendor",
                       "backend declares no inventory - roster names cannot "
                       "be cross-checked against the instrument")]
-    expected = {name for name, e in roster.entities.items()
-                if isinstance(e, (Channel, Composite))}
+    expected = knob_carriers(roster)
     realized = set(inventory)
     out: list[Check] = []
     missing = sorted(expected - realized)
@@ -168,15 +182,20 @@ def vendor_checks(roster: Roster, inventory: dict | None) -> list[Check]:
             f"roster entit(y|ies) the backend does not realize: {missing} - "
             f"their knobs cannot be pushed (wiring gap, or roster names "
             f"that do not match the vendor config)"))
-    extra = sorted(realized - expected)
+    extra = sorted(realized - set(roster.entities))
     if extra:
         out.append(Check(
             WARN, "vendor",
             f"backend realizes {extra}, absent from the roster - the roster "
             f"is the authority; declare them or ignore them"))
+    adopted = sorted(realized & set(roster.borrowed_channels()))
+    if adopted:
+        out.append(Check(
+            OK, "vendor",
+            f"borrowed channel(s) adopted by the backend: {adopted}"))
     # Kind disagreement is a hard mismatch: the same name meaning different
     # things on the two sides corrupts pushes.
-    for name in sorted(expected & realized):
+    for name in sorted(realized & set(roster.entities)):
         info = inventory[name]
         vendor_kind = getattr(info, "kind", None)
         if vendor_kind and vendor_kind != roster.entities[name].kind:
@@ -184,10 +203,10 @@ def vendor_checks(roster: Roster, inventory: dict | None) -> list[Check]:
                 FAIL, "vendor",
                 f"{name}: roster says {roster.entities[name].kind!r}, "
                 f"backend says {vendor_kind!r}"))
-    if not out:
-        out.append(Check(OK, "vendor",
-                         f"{len(expected)} knob-carrying entit(y|ies) "
-                         f"realized by the backend"))
+    if not any(c.status != OK for c in out):
+        out.insert(0, Check(OK, "vendor",
+                            f"{len(expected)} knob-carrying entit(y|ies) "
+                            f"realized by the backend"))
     return out
 
 
@@ -207,8 +226,7 @@ def wiring_checks(roster: Roster,
                          f"port annotation names non-roster line(s): "
                          f"{unknown}"))
     for line_name in sorted(roster.lines()):
-        riders = [c for c in roster.channels().values()
-                  if c.line == line_name]
+        riders = list(roster.channels_on(line_name))
         entry = ports.get(line_name)
         if entry is None:
             if riders:
@@ -219,7 +237,7 @@ def wiring_checks(roster: Roster,
                     f"ports for it"))
             continue
         outputs = list(entry.get("outputs", []))
-        kinds = {c.kind for c in riders}
+        kinds = {kind for c in riders for kind in c.kinds}
         # A combined wire must be fed by enough distinct outputs to carry
         # every function riding it (MW + LF at the bias tee).
         if len(kinds) > 1 and len(outputs) < len(kinds):
@@ -231,7 +249,7 @@ def wiring_checks(roster: Roster,
         # Same-kind channels sharing a wire are multiplexed: one output,
         # distinct intermediate frequencies.
         for kind in sorted(kinds):
-            same = [c.name for c in riders if c.kind == kind]
+            same = [c.name for c in riders if kind in c.kinds]
             if len(same) > 1 and len(outputs) > 1:
                 out.append(Check(
                     WARN, "wiring",

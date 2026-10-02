@@ -393,7 +393,7 @@ def test_make_session_scqo_folder_and_forced_push(tmp_path):
     sess = labconfig.make_session(SimulatedBackend(vendor), cfg, roster, design=design,
                                   backend_label="simulated",
                                   setup_name="bench", cooldown_id="cd1")
-    sess.device.component("q0_xy").pi_amp = 0.33  # knobs live on the drive CHANNEL
+    sess.device.component("xy_q0.q0").pi_amp = 0.33  # knobs live on the drive CHANNEL
     sess.physical.record("q0", "t1_s", 25e-6)
     sess.device.save(); sess.physical.save()
     assert sess.scqo_dir == scqo_dir
@@ -405,7 +405,7 @@ def test_make_session_scqo_folder_and_forced_push(tmp_path):
     sess2 = labconfig.make_session(SimulatedBackend(vendor2), cfg, roster2, design=design2,
                                    backend_label="simulated",
                                    setup_name="bench", cooldown_id="cd1")
-    assert sess2.device_state()["q0_xy"]["pi_amp"] == 0.33
+    assert sess2.device_state()["xy_q0.q0"]["pi_amp"] == 0.33
 
 
 def test_make_session_refuses_persistence_without_setup_or_cooldown(tmp_path):
@@ -493,4 +493,4 @@ def test_make_session_pull_seeds_hardware_backend_from_vendor(tmp_path):
     sess = labconfig.make_session(SimulatedBackend(vendor), cfg, roster, design=design,
                                   backend_label="qm")
     assert sess.backend_label == "qm"
-    assert sess.device_state()["q0_xy"]["pi_amp"] == 0.1
+    assert sess.device_state()["xy_q0.q0"]["pi_amp"] == 0.1

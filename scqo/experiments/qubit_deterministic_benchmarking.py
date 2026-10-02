@@ -18,8 +18,8 @@ from ._capabilities.amplitude import (
     ABS_AMP_COORD,
     ABS_AMP_LABEL,
     AMP_AXIS,
-    MAX_AMP_FACTOR_DESC,
-    MIN_AMP_FACTOR_DESC,
+    END_AMP_FACTOR_DESC,
+    START_AMP_FACTOR_DESC,
     NUM_AMP_POINTS_OPTIONAL_DESC,
     AmplitudeSweepParameters,
     amp_anchor,
@@ -66,15 +66,15 @@ class QubitDeterministicBenchmarkingParameters(
         None,
         description="Optional explicit array of repetition counts N.",
     )
-    min_amp_factor: float = Field(0.9, ge=0.0, description=MIN_AMP_FACTOR_DESC)
-    max_amp_factor: float = Field(1.1, gt=0.0, lt=2.0, description=MAX_AMP_FACTOR_DESC)
+    start_amp_factor: float = Field(0.9, ge=0.0, lt=2.0, description=START_AMP_FACTOR_DESC)
+    end_amp_factor: float = Field(1.1, ge=0.0, lt=2.0, description=END_AMP_FACTOR_DESC)
     # the ONE carrier that legitimately allows a single point — benchmarking the
     # CURRENT amplitude (no sweep, no amplitude fitted), hence its own gt=0 and text
     num_amp_points: int = Field(1, gt=0, description=NUM_AMP_POINTS_OPTIONAL_DESC)
     amp_prefactors: Optional[List[float]] = Field(
         None,
-        description="Optional explicit list of amplitude factors, replacing the "
-                    "min/max/num window.",
+        description="Optional explicit list of amplitude factors, played IN THE "
+                    "ORDER GIVEN, replacing the start/end/num window.",
     )
 
     def get_repetitions(self) -> list[int]:
@@ -90,14 +90,14 @@ class QubitDeterministicBenchmarkingParameters(
         return list(range(0, self.max_repetitions + 1, st))
 
     def amp_values(self) -> np.ndarray:
-        """Overrides the mixin's plain linspace: an explicit list wins, and a
-        single point means "benchmark the CURRENT amplitude" (factor 1.0), not a
-        one-point window."""
+        """Overrides the mixin's plain linspace: an explicit list wins (in its
+        own order, never sorted), and a single point means "benchmark the
+        CURRENT amplitude" (factor 1.0), not a one-point window."""
         if self.amp_prefactors is not None:
             return np.asarray(self.amp_prefactors, dtype=float)
         if self.num_amp_points <= 1:
             return np.array([1.0])
-        return np.linspace(self.min_amp_factor, self.max_amp_factor,
+        return np.linspace(self.start_amp_factor, self.end_amp_factor,
                            self.num_amp_points)
 
 

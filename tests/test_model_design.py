@@ -99,7 +99,8 @@ def test_measured_only_facts_are_not_designable(roster):
 
 
 def test_channel_knobs_are_chosen_not_designed(roster):
-    _expect('schema = 1\n[q1_ro]\nreadout_freq_hz = 5.9e9\n', roster,
+    # a table keyed by the channel's address (quoted: the name has a dot)
+    _expect('schema = 1\n["fl1.q1"]\nreadout_freq_hz = 5.9e9\n', roster,
             "never the datasheet")
 
 
@@ -126,10 +127,22 @@ def test_overflowing_integer_fails_as_non_finite(roster):
 
 
 def test_store_legal_fields_are_redirected_to_their_store(roster):
-    _expect("schema = 1\n[q1_z]\nflux_offset = 0.013\n", roster,
+    _expect('schema = 1\n["z1.q1"]\nflux_offset = 0.013\n', roster,
             "physical.json")
-    _expect("schema = 1\n[q1_ro]\nreadout_freq_hz = 5.9e9\n", roster,
+    _expect('schema = 1\n["fl1.q1"]\nreadout_freq_hz = 5.9e9\n', roster,
             "scqo_state.json")
+    # the flux bias is the LINE's knob
+    _expect("schema = 1\n[z1]\nidle_flux = 0.1\n", roster, "scqo_state.json")
+
+
+def test_a_dotted_header_is_judged_as_the_entity_it_spells(roster):
+    """TOML reads ``[fl1.q1]`` as table q1 inside table fl1 - the store
+    files' own nesting - so it gets the entity's exact-cause message, not a
+    complaint about a field named q1 on the line."""
+    _expect("schema = 1\n[fl1.q1]\nreadout_freq_hz = 5.9e9\n", roster,
+            r"\[fl1\.q1\]\.readout_freq_hz: a calibration knob")
+    _expect("schema = 1\n[q1_q2.iswap]\ncoupler_flux = 0.1\n", roster,
+            r"\[q1_q2\.iswap\]\.coupler_flux: a calibration knob")
 
 
 def test_empty_design_vocabulary_says_so(roster):
@@ -150,9 +163,9 @@ def test_design_is_immutable_after_load(design):
 
 def test_seed_lookup_has_one_exception_surface(roster, design):
     with pytest.raises(DesignError, match="unknown entity"):
-        seed_value(roster, design, "ghost_xy", "drive_freq_hz")
+        seed_value(roster, design, "xy9.q1", "drive_freq_hz")
     with pytest.raises(DesignError, match="unknown field"):
-        seed_value(roster, design, "q1_xy", "no_such_knob")
+        seed_value(roster, design, "xy1.q1", "no_such_knob")
 
 
 def test_n_jj_is_design_legal_as_integer():
@@ -179,22 +192,22 @@ def test_bom_is_tolerated(tmp_path, roster):
 
 def test_drive_seed_hops_to_the_target_fact(roster, design):
     # q3 is fixed-frequency: drive_freq_hz seeds from its design f_01_hz.
-    assert seed_value(roster, design, "q3_xy", "drive_freq_hz") == 4.70e9
+    assert seed_value(roster, design, "xy3.q3", "drive_freq_hz") == 4.70e9
 
 
 def test_readout_seed_hops_via_the_resonator(roster, design):
-    assert seed_value(roster, design, "q1_ro", "readout_freq_hz") == 5.93e9
+    assert seed_value(roster, design, "fl1.q1", "readout_freq_hz") == 5.93e9
 
 
 def test_drive_seed_candidates_cover_flux_tunables(roster, design):
     # q1 is flux-tunable: no design f_01_hz, but the candidate list falls
     # through to f_q_max_hz — park-at-sweet-spot is the bring-up seed.
-    assert seed_value(roster, design, "q1_xy", "drive_freq_hz") == 5.15e9
+    assert seed_value(roster, design, "xy1.q1", "drive_freq_hz") == 5.15e9
 
 
 def test_seed_is_none_when_undeclared_or_sourceless(roster, design):
     # no candidate declared at all -> None (an empty datasheet).
     empty = parse_design("schema = 1", roster)
-    assert seed_value(roster, empty, "q1_xy", "drive_freq_hz") is None
+    assert seed_value(roster, empty, "xy1.q1", "drive_freq_hz") is None
     # pi_amp declares no design_source at all.
-    assert seed_value(roster, design, "q1_xy", "pi_amp") is None
+    assert seed_value(roster, design, "xy1.q1", "pi_amp") is None

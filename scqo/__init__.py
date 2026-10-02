@@ -27,9 +27,18 @@ from .catalog import (
     CompositeKind,
     FieldSpec,
     ModeKind,
+    OPERATION_FIELDS,
     derived_op,
 )
-from .entities import Channel, Composite, Entity, Line, Mode, Provenance
+from .entities import (
+    Channel,
+    Composite,
+    Entity,
+    Line,
+    Mode,
+    Operation,
+    Provenance,
+)
 from .roster import Roster, RosterError, load_components, parse_components
 from .design import (
     Design,
@@ -48,10 +57,11 @@ from .stores import (
 )
 from .device import (
     ComponentInfo,
-    CompositeView,
     DeviceModel,
     EntityView,
+    OperationView,
     RecordingDevice,
+    make_line_view_base,
     make_view_base,
 )
 from .suggestions import Suggestion, SuggestionCapture
@@ -72,15 +82,16 @@ __all__ = [
     "Result", "Outcome", "DatasetContract", "ContractError",
     # the device model
     "MODES", "COMPOSITES", "CHANNELS", "ModeKind", "CompositeKind",
-    "ChannelKind", "FieldSpec", "derived_op",
-    "Entity", "Mode", "Composite", "Line", "Channel", "Provenance",
+    "ChannelKind", "FieldSpec", "OPERATION_FIELDS", "derived_op",
+    "Entity", "Mode", "Composite", "Operation", "Line", "Channel",
+    "Provenance",
     "Roster", "RosterError", "load_components", "parse_components",
     "Design", "DesignError", "load_design", "parse_design",
     "seed_anchor", "seed_value",
     # stores + device
     "Store", "StoreError", "ChangeRecord", "physical_store", "state_store",
-    "DeviceModel", "EntityView", "CompositeView", "ComponentInfo",
-    "RecordingDevice", "make_view_base",
+    "DeviceModel", "EntityView", "OperationView", "ComponentInfo",
+    "RecordingDevice", "make_line_view_base", "make_view_base",
     "Suggestion", "SuggestionCapture",
     # operations
     "freeze", "verify", "LockError", "Check", "all_checks",

@@ -60,8 +60,9 @@ class QubitParametricDriveAmpParameters(TargetSelection, AveragingParameters,
     not factors or detunings: the parametric tone has no standing knob to be
     relative to. Each is a ``[start, end]`` pair whose edges may be given in
     EITHER order — they define the window, not a sweep direction, and the axis
-    is always swept ascending (``_window.py``; scqat's per-slice peak fit
-    mis-fits a descending axis silently). Only a zero-width window is refused.
+    is always swept ascending (``_window.py``). This family predates the
+    traversal-order rule the flux, detuning and amplitude windows follow; moving
+    it is BACKLOG F26. Only a zero-width window is refused.
     """
 
     start_parametric_amp_v: float = Field(

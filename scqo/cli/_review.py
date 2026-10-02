@@ -6,7 +6,7 @@ facing goes to **stderr** — stdout stays parseable result JSON (``| jq`` safe)
 
 Selection grammar (``parse_selection``): ``a``/``all`` — every pending item;
 ``n``/``none``/empty — nothing (the default: no update); otherwise a comma/space
-list mixing displayed row numbers (1-based), entity names (``q0_ro``, ``q0_res``),
+list mixing displayed row numbers (1-based), entity names (``fl.q0``, ``q0_res``),
 field names (``readout_freq_hz``) and ``entity.field`` pairs. Pure functions here are unit-tested
 without a TTY.
 """
@@ -91,13 +91,17 @@ def parse_selection(text: str, suggestions: list[dict], *, allow_decided: bool =
             if idx not in selectable:
                 raise ValueError(f"row #{token} is already decided (re-decide with --reapply)")
             matches = [idx]
-        elif "." in token:
-            name, _, field = token.partition(".")
-            matches = [i for i in selectable
-                       if suggestions[i]['entity'] == name and suggestions[i]["field"] == field]
         else:
+            # an entity or a field by name - a dotted token first as an OWNER
+            # (fl.q0, q1_q2.iswap), else as entity.field split at the LAST dot
+            # (xy2.q1_q2_c.pi_amp)
             matches = [i for i in selectable
                        if token in (suggestions[i]['entity'], suggestions[i]["field"])]
+            if not matches and "." in token:
+                name, _, field = token.rpartition(".")
+                matches = [i for i in selectable
+                           if suggestions[i]['entity'] == name
+                           and suggestions[i]["field"] == field]
         if not matches:
             raise ValueError(f"nothing {'selectable' if allow_decided else 'pending'} matches {token!r}")
         chosen += [i for i in matches if i not in chosen]

@@ -89,7 +89,7 @@ def lab(tmp_path_factory):
 
     # A finished campaign with aggregate suggestions: the q0 FACT is accepted
     # (the setup page gets a campaign-credited value; q0 deliberately, so q1's
-    # run-credit assertions stay untouched), the q0_xy knob stays PENDING
+    # run-credit assertions stay untouched), the xy_q0.q0 knob stays PENDING
     # (badge + filter stay exercisable). statistics.png is written by the CLI
     # layer, not run_campaign — a placeholder keeps matplotlib out of here.
     from scqo import CampaignPlan
@@ -227,16 +227,16 @@ def test_port1_trend_is_scoped_to_its_setup(lab):
     """Port 1: the same parameter name in ANOTHER setup shows that setup's
     changes only — an unmeasured context reads as empty, never as a neighbor's."""
     c = lab["client"]
-    main = c.get("/trends", params={"device": "devV", "entity": "q0_ro",
+    main = c.get("/trends", params={"device": "devV", "entity": "fl.q0",
                                     "field": "readout_freq_hz",
                                     "cooldown": "cdV", "setup": "sim_main"}).text
     assert "Latest 50 changes" in main
     assert lab["res"]["run_id"] in main and lab["res2"]["run_id"] in main
     assert lab["old"]["run_id"] not in main        # cdU's change stays in cdU
-    alt = c.get("/trends", params={"device": "devV", "entity": "q0_ro",
+    alt = c.get("/trends", params={"device": "devV", "entity": "fl.q0",
                                    "field": "readout_freq_hz",
                                    "cooldown": "cdV", "setup": "sim_alt"}).text
-    assert "No recorded changes" in alt            # sim_alt never wrote q0_ro
+    assert "No recorded changes" in alt            # sim_alt never wrote fl.q0
 
 
 def test_port2_trend_crosses_cooldowns_with_context(lab):
@@ -298,7 +298,7 @@ def test_setup_page_current_and_previous_run_links(lab):
     the ONE-BEFORE run — here readout_freq_hz was set by res then res2."""
     page = lab["client"].get("/setup/devV/cdV/sim_main").text
     row = next(r for r in page.split("<tr")
-               if ">readout_freq_hz</a>" in r and "q0_ro" in r)
+               if ">readout_freq_hz</a>" in r and "fl.q0" in r)
     assert f"/run/{lab['res2']['run_id']}" in row  # source = current run
     assert f"/run/{lab['res']['run_id']}" in row   # previous = the run before
     # and no 200-row history tables anymore
@@ -316,7 +316,7 @@ def test_setup_page_physical_rows_and_manual_marker(lab):
 
 def test_setup_page_param_names_link_scoped_trends(lab):
     page = lab["client"].get("/setup/devV/cdV/sim_main").text
-    assert ("/trends?device=devV&entity=q0_ro&field=readout_freq_hz"
+    assert ("/trends?device=devV&entity=fl.q0&field=readout_freq_hz"
             "&cooldown=cdV&setup=sim_main") in page
 
 
@@ -345,7 +345,7 @@ def test_setup_page_operator_on_trend_table(lab):
     import getpass
 
     page = lab["client"].get("/trends", params={
-        "device": "devV", "entity": "q0_ro", "field": "readout_freq_hz",
+        "device": "devV", "entity": "fl.q0", "field": "readout_freq_hz",
         "cooldown": "cdV", "setup": "sim_main"}).text
     assert "<th>operator</th>" in page
     assert getpass.getuser() in page  # this test process's login, stamped on the runs
@@ -356,12 +356,12 @@ def test_setup_page_flags_external_change(lab):
     externally changed and credit NO run. (chipZ so devV fixtures stay pristine.)"""
     state_path = Path(lab["root"]) / "chipZ" / "cdZ" / "z_main" / "scqo" / "scqo_state.json"
     data = json.loads(state_path.read_text(encoding="utf-8"))
-    data["values"]["q0_ro"]["readout_freq_hz"] = 9.9e9  # another tool wrote the state
+    data["values"]["fl"]["q0"]["readout_freq_hz"] = 9.9e9  # another tool wrote the state
     state_path.write_text(json.dumps(data), encoding="utf-8")
 
     page = lab["client"].get("/setup/chipZ/cdZ/z_main").text
     tampered = next(r for r in page.split("<tr")
-                    if ">readout_freq_hz</a>" in r and "q0_ro" in r)
+                    if ">readout_freq_hz</a>" in r and "fl.q0" in r)
     source_cell = tampered.split("<td")[5]         # the source column
     assert "externally changed" in source_cell
     assert "/run/" not in source_cell              # never a false credit
@@ -494,13 +494,13 @@ def test_viewer_never_creates_history_databases(tmp_path):
     scqo_dir = _scqo_dir(tmp_path, "devN", "cd1", "main")
     scqo_dir.mkdir(parents=True)
     (scqo_dir / "scqo_state.json").write_text(
-        '{"schema": 3, "values": {"q0_ro": {"readout_freq_hz": 5.9e9}}}',
+        '{"schema": 4, "values": {"fl": {"q0": {"readout_freq_hz": 5.9e9}}}}',
         encoding="utf-8")
     c = TestClient(create_app(tmp_path))
     for url in ("/device?device=devN", "/setup/devN/cd1/main",
                 "/trends?device=devN",
                 "/trends?device=devN&entity=q0&field=t1_s",
-                "/trends?device=devN&entity=q0_ro&field=readout_freq_hz"
+                "/trends?device=devN&entity=fl.q0&field=readout_freq_hz"
                 "&cooldown=cd1&setup=main"):
         assert c.get(url).status_code == 200
     assert list(tmp_path.rglob(HISTORY_FILE)) == []
@@ -598,7 +598,7 @@ def test_runs_page_live_column(lab):
     superseded run carries no live line; a pending run keeps its pending line."""
     page = lab["client"].get("/").text
     live_row = _row_chunk(page, lab["res2"]["run_id"])
-    assert "live:" in live_row and "readout_freq_hz (q0_ro)" in live_row
+    assert "live:" in live_row and "readout_freq_hz (fl.q0)" in live_row
     superseded_row = _row_chunk(page, lab["res"]["run_id"])
     assert "live:" not in superseded_row and "4/4 applied" in superseded_row
     pending_row = _row_chunk(page, lab["pend"]["run_id"])
@@ -672,7 +672,7 @@ def test_campaigns_page_lists_filters_and_badges(lab):
     assert lab["running_id"] in running_only and cid not in running_only
 
     pending_only = c.get("/campaigns", params={"pending": "1"}).text
-    assert cid in pending_only            # the q0_xy knob is still pending
+    assert cid in pending_only            # the xy_q0.q0 knob is still pending
     assert lab["running_id"] not in pending_only
 
     assert cid not in c.get("/campaigns", params={"device": "chipZ"}).text
@@ -804,7 +804,7 @@ def test_setup_export_html_flags_external_change(lab):
     state_path = (Path(lab["root"]) / "chipZ" / "cdZ" / "z_main" / "scqo"
                   / "scqo_state.json")
     data = json.loads(state_path.read_text(encoding="utf-8"))
-    data["values"]["q0_ro"]["readout_freq_hz"] = 9.9e9
+    data["values"]["fl"]["q0"]["readout_freq_hz"] = 9.9e9
     state_path.write_text(json.dumps(data), encoding="utf-8")
 
     page = lab["client"].get("/setup/chipZ/cdZ/z_main/export.html").text
@@ -924,3 +924,51 @@ def test_run_page_shows_the_setup_snapshot_and_serves_its_files(tmp_path):
         res2 = drifting.run("resonator_spectroscopy", {"targets": ["q0"]}, update="none")
     page2 = c.get(f"/run/{res2['run_id']}").text
     assert "drifted" in page2 and "wiring.json" in page2
+
+
+#: demo_device()'s roster as a components.toml, for the 3.x-name translation.
+_DEMO_COMPONENTS = """schema = 3
+[modes.q0]
+kind = "transmon"
+[modes.q1]
+kind = "transmon"
+[composites.q0_q1]
+kind       = "qubit_pair"
+high       = "q1"
+low        = "q0"
+operations = ["iswap"]
+[lines.fl]
+readout = ["q0", "q1"]
+[lines.xy_q0]
+drive = ["q0"]
+[lines.xy_q1]
+drive = ["q1"]
+"""
+
+
+def test_run_page_reads_a_3x_run_through_the_name_map(tmp_path):
+    """A pre-4.0.0 run keeps the 3.x names its suggestions were captured
+    with (run data is immutable); the on-device column still resolves them,
+    through the device's roster (scqo.v3_names)."""
+    (tmp_path / "devW").mkdir()
+    (tmp_path / "devW" / "components.toml").write_text(_DEMO_COMPONENTS,
+                                                       encoding="utf-8")
+    (tmp_path / "devW" / "cooldowns.toml").write_text(
+        '[cdW]\nstart = 2026-07-01\n[cdW.setup.main]\nbackend = "simulated"\n',
+        encoding="utf-8")
+    sess = _session(tmp_path, "devW", cid="cdW", setup="main")
+    run = sess.run("resonator_spectroscopy", {"targets": ["q0"]}, update="apply")
+    record_path = Path(sess.load_run(run["run_id"])["path"]) / "record.json"
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    renamed = 0
+    for s in record["suggestions"]:
+        if s["entity"] == "fl.q0":  # what 3.x called q0_ro
+            s["entity"] = "q0_ro"
+            renamed += 1
+    assert renamed
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    page = TestClient(create_app(tmp_path)).get(f"/run/{run['run_id']}").text
+    accepted = [s for s in record["suggestions"] if s["status"] == "accepted"]
+    assert "q0_ro" in page
+    # every accepted value is still the device's - the renamed one included
+    assert page.count("LIVE on device") == len(accepted)

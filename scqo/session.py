@@ -17,8 +17,11 @@ manual notebook and an LLM tool-use loop::
     sess.history()                        # every recorded change
 
 Addressing is the QUBIT-CLOSURE sugar (:meth:`Roster.resolve_field`):
-``q0.pi_amp`` routes to ``q0_xy``, ``q0.readout_freq_hz`` to ``q0_ro``,
-``q0.f_dress0_hz`` to ``q0_res`` — explicit entity names always work. Suggestions
+``q0.pi_amp`` routes to q0's designed drive channel (``xy_q0.q0`` on the demo
+device), ``q0.readout_freq_hz`` to its readout channel (``fl.q0``),
+``q0.idle_flux`` to its flux LINE (``z_q0``), ``q0.f_dress0_hz`` to ``q0_res`` —
+explicit entity names always work, and a borrowed channel only by its full
+name (``xy_q0.q0_q1_c.pi_amp``). Suggestions
 carry the field's ROLE; applying routes facts to the physical store and
 knobs/monitors through the recording device (vendor-push-first).
 """
@@ -33,7 +36,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from .datastore import BACKEND_CONFIG_SUBDIR, SCQO_SUBDIR, DataStore
 from .design import Design
-from .device import CompositeView, RecordingDevice
+from .device import OperationView, RecordingDevice
 from .estimate_inputs import embed_run, is_embedded
 from .roster import Roster
 from .stores import (
@@ -43,6 +46,8 @@ from .stores import (
     Store,
     _current_operator,
     _now,
+    is_waveform,
+    nest_values,
     physical_store,
     state_store,
 )
@@ -1053,7 +1058,15 @@ class Session:
         carried (derived from wiring for modes, declared for composites).
         A ``flux_component`` Parameter must name an entity with a default
         flux channel — kind-agnostic, so qubit z-lines and coupler z-lines
-        gate identically."""
+        gate identically.
+
+        Two Parameters stand in for a missing designed operation the same way
+        (``docs/coupler-transmon-plan.md``): ``drive_line`` for ``rx`` - the
+        channel ``<line>.<target>`` must exist and the backend must REALIZE it
+        (a borrowed channel only once the vendor config adopted it) - and
+        ``readout_member`` for ``readout`` - the target must be the coupler of
+        a pair the member belongs to. All read BY NAME: this module never
+        imports the experiments package."""
         from .result import Outcome
 
         targets = list(getattr(exp.params, "targets", []))
@@ -1070,6 +1083,12 @@ class Session:
                 problems.append(
                     f"flux_component {flux_component!r}: has no flux "
                     f"channel (nothing to sweep)")
+        drive_line = getattr(exp.params, "drive_line", None)
+        if drive_line is not None:
+            want_ops -= {"rx"}  # the named line's channel drives instead
+        readout_member = getattr(exp.params, "readout_member", None)
+        if readout_member is not None:
+            want_ops -= {"readout"}  # the member's readout reads instead
         for t in targets:
             if t not in self.roster:
                 problems.append(
@@ -1081,6 +1100,10 @@ class Session:
                 problems.append(f"{t}: is kind {e.kind!r}, {cls.name} "
                                 f"targets {sorted(want_kinds)}")
                 continue
+            if drive_line is not None:
+                problems += self._drive_line_problems(t, drive_line)
+            if readout_member is not None:
+                problems += self._readout_member_problems(t, readout_member)
             try:
                 have_ops = set(self.roster.operations(t))
             except Exception:
@@ -1089,7 +1112,8 @@ class Session:
             if missing:
                 problems.append(
                     f"{t}: lacks operation(s) {sorted(missing)} "
-                    f"(carried: {sorted(have_ops) or 'none'})")
+                    f"(carried: {sorted(have_ops) or 'none'})"
+                    + self._reach_hint(cls, t, missing))
         problems += cls.validate_targets(self.roster, targets)
         if not problems:
             return None
@@ -1097,6 +1121,74 @@ class Session:
             outcomes={t: Outcome.FAILED for t in targets},
             error="target validation refused the run before any hardware: "
                   + "; ".join(problems))
+
+    def _drive_line_problems(self, target: str, line: str) -> list[str]:
+        """``drive_line``: the channel ``<line>.<target>`` must be a drive
+        channel of the roster, and the backend must realize it - its vendor
+        device model answers for it, the same door ``components()`` walks. Its
+        KeyError names the missing step (QM: ``scqo-qm adopt-channel``)."""
+        from .entities import Channel
+
+        name = f"{line}.{target}"
+        e = self.roster.entities.get(name)
+        if not (isinstance(e, Channel) and "drive" in e.kinds):
+            if line not in self.roster.lines():
+                return [f"{target}: drive_line={line!r} is not a line of this "
+                        f"roster ({', '.join(sorted(self.roster.lines()))})"]
+            reach = sorted(c.line for c in self.roster.entities.values()
+                           if isinstance(c, Channel) and "drive" in c.kinds
+                           and c.target == (target,))
+            return [f"{target}: drive_line={line!r} has no drive channel to "
+                    f"{target!r} (lines that drive it: {reach or 'none'})"]
+        try:
+            self.backend.device.component(name)
+        except KeyError as err:
+            return [f"{target}: drive_line={line!r}: "
+                    f"{err.args[0] if err.args else err}"]
+        return []
+
+    def _readout_member_problems(self, target: str, member: str) -> list[str]:
+        """``readout_member``: the target must be the coupler of a pair the
+        member belongs to (high or low), and the member must carry the ``rx``
+        and ``readout`` the map plays on it."""
+        pairs = self.roster.pairs_of_coupler(target)
+        if not pairs:
+            return [f"{target}: readout_member={member!r} reads a pair's COUPLER "
+                    f"through a member, and {target!r} is the coupler of no pair"]
+        members = sorted({m for p in pairs
+                          for role in ("high", "low")
+                          for m in self.roster.entities[p].roles.get(role, ())})
+        if member not in members:
+            return [f"{target}: readout_member={member!r} is not a member of "
+                    f"{target!r}'s pair(s) {list(pairs)} (members: {members})"]
+        missing = {"rx", "readout"} - set(self.roster.operations(member))
+        if missing:
+            return [f"{target}: readout_member={member!r} lacks operation(s) "
+                    f"{sorted(missing)} (the map drives and reads it)"]
+        return []
+
+    def _reach_hint(self, cls, target: str, missing: set[str]) -> str:
+        """For a mode missing ``rx``/``readout`` on an experiment that can
+        reach it another way: the fields to set and the values that exist."""
+        from .entities import Channel
+
+        fields = getattr(cls.Parameters, "model_fields", {})
+        hints: list[str] = []
+        if "rx" in missing and "drive_line" in fields:
+            lines = sorted(c.line for c in self.roster.entities.values()
+                           if isinstance(c, Channel) and "drive" in c.kinds
+                           and c.target == (target,))
+            if lines:
+                hints.append(f"drive it through a line (drive_line="
+                             f"{'|'.join(lines)})")
+        if "readout" in missing and "readout_member" in fields:
+            members = sorted({m for p in self.roster.pairs_of_coupler(target)
+                              for role in ("high", "low")
+                              for m in self.roster.entities[p].roles.get(role, ())})
+            if members:
+                hints.append(f"read it through a member (readout_member="
+                             f"{'|'.join(members)})")
+        return f" - {' and '.join(hints)}" if hints else ""
 
     @staticmethod
     def _failure(cls, exp, err):
@@ -1135,7 +1227,7 @@ class Session:
         """One knob/monitor write through the recording device (push-first
         for knobs; record-only for monitors)."""
         view = self.device.component(entity)
-        if isinstance(view, CompositeView):
+        if isinstance(view, OperationView):
             view.write_knob(field, value)
         else:
             setattr(view, field, value)
@@ -1613,13 +1705,17 @@ class Session:
         out = []
         resolved: dict[tuple[str, str], str] = {}
         for key, value in assignments.items():
-            name, _, field = key.partition(".")
+            # The field is after the LAST dot: an entity name may carry one
+            # (xy2.q1_q2_c.pi_amp, q1_q2.iswap.coupler_flux).
+            name, _, field = key.rpartition(".")
             if not name or not field:
                 raise ValueError(
                     f"assignment key {key!r} must be 'entity.field' "
-                    f"(e.g. q1.pi_amp, q1_res.f_dress0_hz)")
+                    f"(e.g. q1.pi_amp, xy2.q1_q2_c.pi_amp, z1.idle_flux, "
+                    f"q1_res.f_dress0_hz)")
             try:
-                entity, spec = self.roster.resolve_field(name, field)
+                entity, spec = self.roster.resolve_field(
+                    name, field, valued=self._holds_value)
             except Exception as err:
                 raise ValueError(str(err)) from None
             prior = resolved.get((entity, field))
@@ -1638,6 +1734,12 @@ class Session:
             self._validate_batch(out)
         return out
 
+    def _holds_value(self, entity: str, field: str) -> bool:
+        """Whether either store already holds ``entity.field`` - how a refusal
+        that lists the routes to a mode puts the ones in use first."""
+        return (self.state.get(entity, field) is not None
+                or self.physical.get(entity, field) is not None)
+
     def _batch_reader(self, overlay: dict):
         def current(entity: str, field: str):
             if field in overlay.get(entity, {}):
@@ -1654,7 +1756,7 @@ class Session:
         overlay: dict[str, dict[str, Any]] = {}
         current = self._batch_reader(overlay)
         for entity, field, spec, value in items:
-            if (spec.shape == "float[]" and field.endswith("_waveform")
+            if (spec.shape == "float[]" and is_waveform(field)
                     and current(entity, f"{field}_dt_s") is None):
                 raise ValueError(
                     f"{entity}.{field}: set {field}_dt_s first (in the same "
@@ -1715,7 +1817,8 @@ class Session:
         ``backend_config/``, every OTHER regular file of the setup's backend_config
         folder verbatim (Qblox's att_limits.json / mixer_cal.json ride along), and
         this context's two scqo value files under ``scqo/`` in their on-disk shape
-        (``{"schema": 3, "values": ...}``, so a restore can drop them in as-is).
+        (``{"schema": 4, "values": <nested>}``, so a restore can drop them in
+        as-is).
         {} when there is no vendor config or anything fails."""
         if not vendor:
             return {}
@@ -1732,7 +1835,8 @@ class Session:
                             files[f"{BACKEND_CONFIG_SUBDIR}/{p.name}"] = p.read_bytes()
             for name, values in ((STATE_FILE, self.state.values()),
                                  (PHYSICAL_FILE, self.physical.values())):
-                text = json.dumps({"schema": STATE_SCHEMA, "values": values},
+                text = json.dumps({"schema": STATE_SCHEMA,
+                                   "values": nest_values(values)},
                                   indent=2, allow_nan=False) + "\n"
                 files[f"{SCQO_SUBDIR}/{name}"] = text.encode("utf-8")
             return files
@@ -1821,8 +1925,9 @@ class Session:
 
     def qubit_state(self, name: str) -> dict:
         """The per-qubit ASSEMBLED view: the mode's facts plus every closure
-        member (default channels, attached resonator) — grouping is derived
-        at read time from refs, never declared."""
+        member (:meth:`Roster.closure` - default channels, the flux line they
+        ride, the attached resonator) — grouping is derived at read time from
+        the wiring and refs, never declared."""
         e = self.roster.entities.get(name)
         if e is None:
             raise KeyError(f"unknown entity {name!r}")
@@ -1837,12 +1942,7 @@ class Session:
         out: dict[str, dict] = {}
         physical = self.physical.values()
         state = self.device.snapshot()
-        members = [name]
-        members += [c.name for c in self.roster.channels_of(name)
-                    if self.roster.defaults.get((name, c.kind)) == c.name]
-        members += [m.name for m in self.roster.modes().values()
-                    if m.refs.get("qubit") == name]
-        for member in members:
+        for member, _role in self.roster.closure(name):
             merged = {**physical.get(member, {}), **state.get(member, {})}
             if merged:
                 out[member] = merged

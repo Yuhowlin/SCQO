@@ -180,7 +180,7 @@ class QubitRamsey(Experiment):
         for qubit, fit in self.result.fit.items():
             if self.result.outcomes[qubit] is Outcome.SUCCESSFUL:
                 # Knob first as documentation of intent; under the entity
-                # split, apply atomicity is per-ENTITY now (q0_xy vs q0), so
+                # split, apply atomicity is per-ENTITY now (xy_q0.q0 vs q0), so
                 # a vendor rejection of the drive frequency no longer skips
                 # the mode facts — they are vendor-free and land regardless.
                 self.device.channel(qubit, "drive").drive_freq_hz = (

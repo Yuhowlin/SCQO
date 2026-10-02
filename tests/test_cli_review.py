@@ -133,3 +133,45 @@ def test_session_release_degrades_instead_of_failing(session, monkeypatch):
     monkeypatch.setattr(session.backend, "release_instruments",
                         lambda: ["cluster0"], raising=False)
     assert session.release_instruments() == ["cluster0"]
+
+
+# ------------------------------------------------------------ the selection
+
+#: 4.0.0 owners carry dots: a channel <line>.<target>, an operation <pair>.<op>.
+PICK = [
+    {"entity": "fl.q0", "field": "readout_freq_hz", "status": "pending"},
+    {"entity": "q0_res", "field": "f_dress0_hz", "status": "pending"},
+    {"entity": "xy2.q1_q2_c", "field": "pi_amp", "status": "pending"},
+    {"entity": "q1_q2.iswap", "field": "coupler_flux", "status": "accepted"},
+]
+
+
+def test_a_dotted_owner_is_selected_by_its_name():
+    """``fl.q0`` names the channel - it must never be split into entity ``fl``
+    and field ``q0`` (nothing would match)."""
+    from scqo.cli._review import parse_selection
+
+    assert parse_selection("fl.q0", PICK) == [0]
+    assert parse_selection("xy2.q1_q2_c", PICK) == [2]
+
+
+def test_owner_dot_field_splits_at_the_last_dot():
+    from scqo.cli._review import parse_selection
+
+    assert parse_selection("xy2.q1_q2_c.pi_amp", PICK) == [2]
+    assert parse_selection("fl.q0.readout_freq_hz, 2", PICK) == [0, 1]
+    assert parse_selection("f_dress0_hz", PICK) == [1]           # a bare field
+
+
+def test_decided_rows_need_reapply_and_nonsense_is_refused():
+    from scqo.cli._review import parse_selection
+
+    assert parse_selection("a", PICK) == [0, 1, 2]
+    assert parse_selection("", PICK) == []
+    with pytest.raises(ValueError, match="nothing pending matches"):
+        parse_selection("q1_q2.iswap", PICK)                     # accepted already
+    assert parse_selection("q1_q2.iswap", PICK, allow_decided=True) == [3]
+    with pytest.raises(ValueError, match="already decided"):
+        parse_selection("4", PICK)
+    with pytest.raises(ValueError, match="nothing pending matches"):
+        parse_selection("fl.q9", PICK)

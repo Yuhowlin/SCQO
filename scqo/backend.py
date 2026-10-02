@@ -124,21 +124,45 @@ class Backend(ABC):
         return {}
 
     def field_bindings(self) -> dict[str, dict[str, VendorBinding]]:
-        """This backend's declared field -> vendor-parameter catalog, PER CATEGORY.
+        """This backend's declared field -> vendor-parameter catalog, PER CHANNEL
+        KIND.
 
-        ``{category: {field: VendorBinding}}`` — pure metadata
-        (:mod:`scqo.fieldmap`): where each pushed field lives on the vendor
-        config, in what unit, converted how — as a DESCRIPTION; the executable
-        conversion is the driver's component view setter. Rendered by
-        ``scqo state --fields``; driver tests pin, per category,
-        ``bindings | unrealized == pushed_fields(category)``. Default ``{}``.
+        ``{kind: {field: VendorBinding}}`` over the kind's channel fields AND
+        the line fields it puts on its wire (``flux`` binds the line's
+        ``idle_flux`` too; field names are unique per kind, so the level is the
+        catalog's to say) — pure metadata (:mod:`scqo.fieldmap`): where each
+        pushed field lives on the vendor config, in what unit, converted how —
+        as a DESCRIPTION; the executable conversion is the driver's view
+        setter. Rendered by ``scqo state --fields``; driver tests pin, per kind,
+        ``bindings | unrealized == pushed fields (channel + line)``. Default
+        ``{}``.
         """
         return {}
 
     def unrealized(self) -> dict[str, dict[str, "Unrealized"]]:
-        """Pushed neutral fields THIS backend cannot realize, per category
+        """Pushed neutral fields THIS backend cannot realize, per channel kind
         (:class:`scqo.fieldmap.Unrealized`) — declared, never silent. Default ``{}``.
         """
+        return {}
+
+    def operation_bindings(self) -> dict[str, VendorBinding]:
+        """The composite-operation twin of :meth:`field_bindings`:
+        ``{field: VendorBinding}`` over ``scqo.catalog.OPERATION_FIELDS`` (one
+        catalog for every declared operation ``<composite>.<op>``). Default
+        ``{}`` = this backend realizes no gate knobs."""
+        return {}
+
+    def operation_unrealized(self) -> dict[str, "Unrealized"]:
+        """OPERATION_FIELDS this backend declares it cannot realize. Default
+        ``{}``."""
+        return {}
+
+    def line_ports(self) -> dict[str, str]:
+        """``{line: port label}`` - where each roster LINE leaves the instrument
+        (``"con1/6/3"``), read from the vendor config: display only (``scqo
+        state`` prints it beside every channel and line), never an address -
+        the roster's line names are the backend-independent key. Default
+        ``{}``; never raise."""
         return {}
 
     def vendor_only(self) -> dict[str, VendorOnly]:

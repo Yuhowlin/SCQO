@@ -5,14 +5,18 @@ EXPANDED name set is frozen. Afterwards every load must produce a SUPERSET
 by signature — (entity class, name, kind, target(s) for channels) — so
 post-cut evolution is always an append:
 
-* appending a rider to a frozen line MINTS a new name (legal);
+* appending a rider to a frozen line MINTS a new name (legal), or - when
+  the line already carries that target - adds the function to its channel
+  (``xyz2.q2`` gains ``flux``: kinds grow, the name stays; legal);
 * declaring a new mode/composite/line/channel (legal);
 * declaring a new operation on a frozen composite (legal — operations are
   not part of the signature);
-* moving a rider to another line, re-mediating a readout (legal — line and
-  via are wiring, not identity; the doctor's vendor witness covers them);
+* re-mediating a readout (legal — via is wiring, not identity; the doctor's
+  vendor witness covers it);
 * REMOVING a name, or changing its kind or targets (REFUSED — store keys,
-  history rows, and trends key on those).
+  history rows, and trends key on those). Since 4.0.0 a channel's name is
+  its address ``<line>.<target>``, so moving a rider to another line is a
+  removal too (``fl1.q3`` disappears, ``fl2.q3`` appears) and is refused.
 
 Retirement is ``retired = true`` in the roster, never deletion: the name
 keeps resolving, so its stored values and history stay readable.
@@ -102,6 +106,16 @@ def load(device_dir: str | Path) -> dict[str, list] | None:
     return entities
 
 
+def _grew(frozen: list, now: list) -> bool:
+    """A channel that gained a FUNCTION on its wire since the cut - same name
+    and target(s), kinds a strict superset (``flux = ["q2"]`` appended to the
+    drive line ``xyz2``, whose channel ``xyz2.q2`` now carries both): an
+    append, since every frozen field keeps resolving on the same owner."""
+    return (len(frozen) == len(now) == 4 and frozen[0] == now[0] == "Channel"
+            and frozen[1] == now[1] and frozen[3] == now[3]
+            and set(frozen[2]) < set(now[2]))
+
+
 def verify(roster: Roster, device_dir: str | Path) -> list[Drift]:
     """Check the roster against the lock: [] when the device is unfrozen or
     the current expansion is a superset by signature."""
@@ -119,7 +133,7 @@ def verify(roster: Roster, device_dir: str | Path) -> list[Drift]:
                 "frozen name is gone from the expanded roster — its stored "
                 "values and history would stop resolving; restore it (mark "
                 "it retired = true instead of deleting)"))
-        elif now != sig:
+        elif now != sig and not _grew(sig, now):
             drift.append(Drift(
                 name, "changed",
                 f"frozen identity {sig} != current {now} — kind and "
@@ -133,4 +147,9 @@ def additions(roster: Roster, device_dir: str | Path) -> list[str]:
     frozen = load(device_dir)
     if frozen is None:
         return []
-    return sorted(set(roster.signatures()) - set(frozen))
+    current = {name: _canonical(sig)
+               for name, sig in roster.signatures().items()}
+    grown = [f"{name} (+{', '.join(sorted(set(now[2]) - set(frozen[name][2])))})"
+             for name, now in current.items()
+             if name in frozen and _grew(frozen[name], now)]
+    return sorted(set(current) - set(frozen)) + sorted(grown)

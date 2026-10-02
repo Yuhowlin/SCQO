@@ -111,7 +111,7 @@ class Experiment(ABC):
         """The sweep anchor for one knob: the STANDING value if set, else the
         DESIGN fallback via the field's ``design_source`` hop. ``name`` takes
         the qubit-closure sugar (``anchor("q1", "readout_freq_hz")`` reads
-        q1_ro). A design-seeded anchor tags the run
+        q1's readout channel, ``anchor("q1", "idle_flux")`` its flux line). A design-seeded anchor tags the run
         ``"seeded:<entity>.<field>"``. Raises when neither exists — a clear
         bring-up instruction beats a sweep around garbage."""
         roster = self.device.roster

@@ -1,6 +1,8 @@
 """Per-context history.sqlite contracts (scqo.changes) — the change-history
 TRUTH file: append-only rows, indexed reads, read-side never creates,
-folder-copy mergeability, and survival of index.sqlite version bumps."""
+folder-copy mergeability, survival of index.sqlite version bumps, and the
+version gate (v2 rows carry the 4.0.0 owner names; a 3.x v1 file is refused
+on write until converted)."""
 
 import json
 import shutil
@@ -10,6 +12,7 @@ import pytest
 
 from scqo import parse_components, physical_store, state_store
 from scqo.changes import (
+    CHANGES_SCHEMA_VERSION,
     HISTORY_FILE,
     ChangeDB,
     ChangeRecord,
@@ -41,12 +44,12 @@ def _db(tmp_path) -> ChangeDB:
 def test_rows_round_trip_including_cooldown_stamp_and_waveforms(tmp_path):
     db = _db(tmp_path)
     rows = [
-        _rec("2026-08-11T10:00:00+08:00", "q1_xy", "pi_amp", 0.209,
+        _rec("2026-08-11T10:00:00+08:00", "xy1.q1", "pi_amp", 0.209,
              kind="drive", experiment="qubit_power_rabi", run_id="r1",
              operator="shiau", setup="qm_a", cooldown="cd1"),
-        _rec("2026-08-11T10:00:01+08:00", "q1_q2", "iswap_waveform",
-             [0.0, 0.4, 0.0], old=[0.0, 0.2, 0.0], setup="qm_a",
-             cooldown="cd1", coupled_to="iswap_amp"),
+        _rec("2026-08-11T10:00:01+08:00", "q1_q2.iswap", "waveform",
+             [0.0, 0.4, 0.0], old=[0.0, 0.2, 0.0], kind="operation",
+             setup="qm_a", cooldown="cd1", coupled_to="amp"),
     ]
     with db.transaction() as con:
         ChangeDB.insert(con, rows, store="state")
@@ -54,7 +57,8 @@ def test_rows_round_trip_including_cooldown_stamp_and_waveforms(tmp_path):
     assert [r["new"] for r in got] == [0.209, [0.0, 0.4, 0.0]]
     assert got[0]["old"] is None and got[1]["old"] == [0.0, 0.2, 0.0]
     assert got[0]["cooldown"] == "cd1" and got[0]["setup"] == "qm_a"
-    assert got[1]["coupled_to"] == "iswap_amp"
+    assert got[1]["entity"] == "q1_q2.iswap" and got[1]["kind"] == "operation"
+    assert got[1]["coupled_to"] == "amp"
     # rehydration inverts the insert exactly ('' -> None, seq/store drop)
     back = record_from_row(got[0])
     assert back == rows[0]
@@ -75,18 +79,18 @@ def test_record_from_row_maps_empty_context_stamps_to_none(tmp_path):
 def test_latest_wins_by_timestamp_then_insertion_order(tmp_path):
     db = _db(tmp_path)
     with db.transaction() as con:
-        ChangeDB.insert(con, [_rec("t2", "q1_xy", "pi_amp", 0.222)],
+        ChangeDB.insert(con, [_rec("t2", "xy1.q1", "pi_amp", 0.222)],
                         store="state")
     with db.transaction() as con:  # same timestamp, later insertion
-        ChangeDB.insert(con, [_rec("t2", "q1_xy", "pi_amp", 0.333)],
+        ChangeDB.insert(con, [_rec("t2", "xy1.q1", "pi_amp", 0.333)],
                         store="state")
     with db.transaction() as con:  # older timestamp, latest insertion
-        ChangeDB.insert(con, [_rec("t1", "q1_xy", "pi_amp", 0.111)],
+        ChangeDB.insert(con, [_rec("t1", "xy1.q1", "pi_amp", 0.111)],
                         store="state")
         latest = ChangeDB.latest_new(con, store="state",
-                                     keys=[("q1_xy", "pi_amp")])
-    assert latest == {("q1_xy", "pi_amp"): 0.333}
-    series = db.param_series("q1_xy", "pi_amp")
+                                     keys=[("xy1.q1", "pi_amp")])
+    assert latest == {("xy1.q1", "pi_amp"): 0.333}
+    series = db.param_series("xy1.q1", "pi_amp")
     assert [r["new"] for r in series] == [0.333, 0.222, 0.111]  # newest first
     asc = db.context_history("state")
     assert [r["new"] for r in asc] == [0.111, 0.222, 0.333]
@@ -95,11 +99,11 @@ def test_latest_wins_by_timestamp_then_insertion_order(tmp_path):
 def test_latest_new_sees_own_uncommitted_rows(tmp_path):
     db = _db(tmp_path)
     with db.transaction() as con:
-        ChangeDB.insert(con, [_rec("t1", "q1_xy", "pi_amp", 0.1)],
+        ChangeDB.insert(con, [_rec("t1", "xy1.q1", "pi_amp", 0.1)],
                         store="state")
         assert ChangeDB.latest_new(con, store="state",
-                                   keys=[("q1_xy", "pi_amp")]) == {
-            ("q1_xy", "pi_amp"): 0.1}
+                                   keys=[("xy1.q1", "pi_amp")]) == {
+            ("xy1.q1", "pi_amp"): 0.1}
 
 
 # ----------------------------------------------------------------- queries
@@ -108,11 +112,11 @@ def test_context_history_entity_filter_and_last_n_limit(tmp_path):
     db = _db(tmp_path)
     with db.transaction() as con:
         ChangeDB.insert(con, [
-            _rec("t1", "q1_xy", "pi_amp", 0.1),
-            _rec("t2", "q2_xy", "pi_amp", 0.2),
-            _rec("t3", "q1_xy", "pi_amp", 0.3),
+            _rec("t1", "xy1.q1", "pi_amp", 0.1),
+            _rec("t2", "xyz2.q2", "pi_amp", 0.2),
+            _rec("t3", "xy1.q1", "pi_amp", 0.3),
         ], store="state")
-    only_q1 = db.context_history("state", entity="q1_xy")
+    only_q1 = db.context_history("state", entity="xy1.q1")
     assert [r["new"] for r in only_q1] == [0.1, 0.3]
     last_two = db.context_history("state", limit=2)
     assert [r["new"] for r in last_two] == [0.2, 0.3]  # last N, ascending
@@ -121,11 +125,11 @@ def test_context_history_entity_filter_and_last_n_limit(tmp_path):
 def test_param_series_limit_and_store_filter(tmp_path):
     db = _db(tmp_path)
     with db.transaction() as con:
-        ChangeDB.insert(con, [_rec(f"t{i}", "q1_xy", "pi_amp", i / 10)
+        ChangeDB.insert(con, [_rec(f"t{i}", "xy1.q1", "pi_amp", i / 10)
                               for i in range(1, 8)], store="state")
         ChangeDB.insert(con, [_rec("t9", "q1", "t1_s", 3e-5)],
                         store="physical")
-    assert len(db.param_series("q1_xy", "pi_amp", limit=3)) == 3
+    assert len(db.param_series("xy1.q1", "pi_amp", limit=3)) == 3
     # store=None reaches both stores; explicit store narrows
     assert db.param_series("q1", "t1_s")[0]["new"] == 3e-5
     assert db.param_series("q1", "t1_s", store="state") == []
@@ -135,17 +139,17 @@ def test_latest_two_single_double_and_campaign_only_records(tmp_path):
     db = _db(tmp_path)
     with db.transaction() as con:
         ChangeDB.insert(con, [
-            _rec("t1", "q1_xy", "pi_amp", 0.1, run_id="r1"),
-            _rec("t2", "q1_xy", "pi_amp", 0.2, old=0.1,
+            _rec("t1", "xy1.q1", "pi_amp", 0.1, run_id="r1"),
+            _rec("t2", "xy1.q1", "pi_amp", 0.2, old=0.1,
                  campaign_id="c1"),                      # campaign accept
-            _rec("t3", "q1_xy", "drag_beta", -1.0, run_id="r2"),
+            _rec("t3", "xy1.q1", "drag_beta", -1.0, run_id="r2"),
         ], store="state")
     pairs = db.latest_two("state")
-    latest, prev = pairs[("q1_xy", "pi_amp")]
+    latest, prev = pairs[("xy1.q1", "pi_amp")]
     assert latest["new"] == 0.2 and latest["campaign_id"] == "c1"
     assert latest["run_id"] is None
     assert prev["new"] == 0.1 and prev["run_id"] == "r1"
-    single, none = pairs[("q1_xy", "drag_beta")]
+    single, none = pairs[("xy1.q1", "drag_beta")]
     assert single["new"] == -1.0 and none is None
 
 
@@ -157,14 +161,14 @@ def test_context_facts_and_fact_series_are_physical_only(tmp_path):
             _rec("t2", "q1", "t1_s", 3.1e-5, old=3.0e-5),
             _rec("t3", "q1_res", "f_dress0_hz", 5.9e9),
         ], store="physical")
-        ChangeDB.insert(con, [_rec("t4", "q1_xy", "pi_amp", 0.2)],
+        ChangeDB.insert(con, [_rec("t4", "xy1.q1", "pi_amp", 0.2)],
                         store="state")
     facts = db.context_facts()
     assert {(r["entity"], r["field"]): r["new"] for r in facts} == {
         ("q1", "t1_s"): 3.1e-5, ("q1_res", "f_dress0_hz"): 5.9e9}
     series = db.fact_series("q1", "t1_s")
     assert [r["new"] for r in series] == [3.0e-5, 3.1e-5]
-    assert db.fact_series("q1_xy", "pi_amp") == []       # knob: not a fact
+    assert db.fact_series("xy1.q1", "pi_amp") == []       # knob: not a fact
 
 
 # ------------------------------------------------- cross-context aggregation
@@ -194,7 +198,7 @@ def test_both_stores_share_one_context_db_no_sidecars(tmp_path, roster):
     physical = physical_store(tmp_path, roster, setup="qm_a", cooldown="cd1")
     state = state_store(tmp_path, roster, setup="qm_a", cooldown="cd1")
     physical.record("q1", "t1_s", 3e-5)
-    state.record("q1_xy", "pi_amp", 0.209)
+    state.record("xy1.q1", "pi_amp", 0.209)
     physical.save()
     state.save()
     assert (tmp_path / HISTORY_FILE).is_file()
@@ -213,34 +217,34 @@ def test_two_sessions_no_lost_rows_latest_timestamp_wins(
     monkeypatch.setattr(stores_mod, "_now", lambda: next(clock))
     a = state_store(tmp_path, roster)
     b = state_store(tmp_path, roster)
-    a.record("q1_xy", "pi_amp", 0.111)                   # t1
-    b.record("q1_xy", "pi_amp", 0.222)                   # t2
-    b.record("q2_xy", "pi_amp", 0.333)                   # t3
+    a.record("xy1.q1", "pi_amp", 0.111)                   # t1
+    b.record("xy1.q1", "pi_amp", 0.222)                   # t2
+    b.record("xyz2.q2", "pi_amp", 0.333)                   # t3
     b.save()
     a.save()                                             # saves LAST, older
     fresh = state_store(tmp_path, roster)
-    assert fresh.get("q1_xy", "pi_amp") == 0.222         # newest record wins
-    assert fresh.get("q2_xy", "pi_amp") == 0.333
+    assert fresh.get("xy1.q1", "pi_amp") == 0.222         # newest record wins
+    assert fresh.get("xyz2.q2", "pi_amp") == 0.333
     assert len(fresh.history()) == 3                     # nothing lost
 
 
 def test_history_pushdown_filters(tmp_path, roster):
     state = state_store(tmp_path, roster)
-    state.record("q1_xy", "pi_amp", 0.1)
-    state.record("q2_xy", "pi_amp", 0.2)
-    state.record("q1_xy", "pi_amp", 0.3)
+    state.record("xy1.q1", "pi_amp", 0.1)
+    state.record("xyz2.q2", "pi_amp", 0.2)
+    state.record("xy1.q1", "pi_amp", 0.3)
     state.save()
     again = state_store(tmp_path, roster)
-    assert [r.new for r in again.history(entity="q1_xy")] == [0.1, 0.3]
+    assert [r.new for r in again.history(entity="xy1.q1")] == [0.1, 0.3]
     assert [r.new for r in again.history(limit=1)] == [0.3]
     # unsaved buffer rows are visible too
-    again.record("q1_xy", "drag_beta", -1.0)
+    again.record("xy1.q1", "drag_beta", -1.0)
     assert again.history()[-1].new == -1.0
 
 
 def test_in_memory_store_keeps_history_in_buffer_only(roster):
     state = state_store(None, roster)
-    state.record("q1_xy", "pi_amp", 0.209)
+    state.record("xy1.q1", "pi_amp", 0.209)
     state.save()                                         # no-op, no file
     assert [r.new for r in state.history()] == [0.209]
 
@@ -288,7 +292,7 @@ def test_folder_copy_merges_two_data_roots(tmp_path, roster):
 def test_read_side_never_creates_the_file(tmp_path):
     db = ChangeDB(tmp_path / "scqo" / HISTORY_FILE)
     assert db.context_history("state") == []
-    assert db.param_series("q1_xy", "pi_amp") == []
+    assert db.param_series("xy1.q1", "pi_amp") == []
     assert db.latest_two("state") == {}
     assert db.context_facts() == []
     assert db.fact_series("q1", "t1_s") == []
@@ -298,7 +302,7 @@ def test_read_side_never_creates_the_file(tmp_path):
 def test_version_gate_refuses_newer_on_write_still_reads(tmp_path):
     db = _db(tmp_path)
     with db.transaction() as con:
-        ChangeDB.insert(con, [_rec("t1", "q1_xy", "pi_amp", 0.2)],
+        ChangeDB.insert(con, [_rec("t1", "xy1.q1", "pi_amp", 0.2)],
                         store="state")
     con = sqlite3.connect(tmp_path / HISTORY_FILE)
     con.execute("UPDATE meta SET value = '99' "
@@ -311,11 +315,50 @@ def test_version_gate_refuses_newer_on_write_still_reads(tmp_path):
     assert db.context_history("state")[0]["new"] == 0.2  # reads degrade fine
 
 
+def _stamp(tmp_path) -> str:
+    con = sqlite3.connect(tmp_path / HISTORY_FILE)
+    try:
+        return con.execute("SELECT value FROM meta WHERE key = "
+                           "'changes_schema_version'").fetchone()[0]
+    finally:
+        con.close()
+
+
+def test_a_new_database_is_stamped_v2(tmp_path):
+    """v2 = the 4.0.0 owner names (xy1.q1, z1, q1_q2.iswap) in ``entity``."""
+    with _db(tmp_path).transaction():
+        pass
+    assert CHANGES_SCHEMA_VERSION == 2
+    assert _stamp(tmp_path) == "2"
+
+
+def test_a_3x_history_is_refused_on_write_until_converted(tmp_path):
+    """A v1 file names channels the 3.x way (q1_xy): appending 4.0.0 rows
+    would mix two vocabularies in one TRUTH file, so the write is refused
+    with the one-time converter's name - the file is never dropped, rebuilt
+    or touched, and it still reads."""
+    db = _db(tmp_path)
+    with db.transaction() as con:
+        ChangeDB.insert(con, [_rec("t1", "q1_xy", "pi_amp", 0.2)],
+                        store="state")
+    con = sqlite3.connect(tmp_path / HISTORY_FILE)
+    con.execute("UPDATE meta SET value = '1' "
+                "WHERE key = 'changes_schema_version'")
+    con.commit()
+    con.close()
+    with pytest.raises(ChangesError, match=r"convert_store_v4\.py"):
+        with db.transaction() as con:
+            ChangeDB.insert(con, [_rec("t2", "xy1.q1", "pi_amp", 0.3)],
+                            store="state")
+    assert _stamp(tmp_path) == "1"
+    assert [r["new"] for r in db.context_history("state")] == [0.2]
+
+
 def test_vetoed_transaction_commits_nothing(tmp_path):
     db = _db(tmp_path)
     with pytest.raises(RuntimeError, match="veto"):
         with db.transaction() as con:
-            ChangeDB.insert(con, [_rec("t1", "q1_xy", "pi_amp", 0.2)],
+            ChangeDB.insert(con, [_rec("t1", "xy1.q1", "pi_amp", 0.2)],
                             store="state")
             raise RuntimeError("veto")
     assert db.context_history("state") == []
@@ -329,7 +372,7 @@ def test_history_db_survives_index_schema_bump(tmp_path, roster, monkeypatch):
 
     ctx = tmp_path / "chip" / "cd1" / "qm_main" / "scqo"
     state = state_store(ctx, roster, setup="qm_main", cooldown="cd1")
-    state.record("q1_xy", "pi_amp", 0.209)
+    state.record("xy1.q1", "pi_amp", 0.209)
     state.save()
     DataStore(tmp_path)                                  # index at version N
     monkeypatch.setattr(datastore_mod, "SCHEMA_VERSION",
@@ -343,7 +386,7 @@ def test_old_and_new_json_encode_losslessly(tmp_path):
     db = _db(tmp_path)
     wave = [0.0, 0.4000000000000001, -0.2]
     with db.transaction() as con:
-        ChangeDB.insert(con, [_rec("t1", "q1_z", "distortion_amp", wave,
+        ChangeDB.insert(con, [_rec("t1", "z1", "distortion_amp", wave,
                                    old=[0.1])], store="physical")
     raw = sqlite3.connect(tmp_path / HISTORY_FILE).execute(
         "SELECT old, new FROM changes").fetchone()

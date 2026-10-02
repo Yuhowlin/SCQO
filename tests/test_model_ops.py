@@ -10,7 +10,7 @@ from scqo.checks import FAIL, OK, WARN, all_checks, roster_checks
 from scqo.checks import design_checks, lock_checks, vendor_checks
 from scqo.checks import capability_checks, wiring_checks
 from scqo.device import ComponentInfo
-from scqo.lock import LOCK_FILE, LockError, freeze, verify
+from scqo.lock import LOCK_FILE, LockError, additions, freeze, verify
 from scqo.report import (
     design_rows,
     expansion_rows,
@@ -54,9 +54,12 @@ def test_freeze_writes_the_expanded_signature_set(roster, tmp_path):
     path = freeze(roster, tmp_path, note="production cut")
     data = json.loads(path.read_text())
     assert data["schema"] == 1 and data["note"] == "production cut"
-    assert "q1_ro" in data["entities"] and "q1_res" in data["entities"]
-    assert data["entities"]["q1_ro"] == ["Channel", "q1_ro", "readout",
-                                         ["q1"]]
+    assert "fl1.q1" in data["entities"] and "q1_res" in data["entities"]
+    assert data["entities"]["fl1.q1"] == ["Channel", "fl1.q1", ["readout"],
+                                          ["q1"]]
+    # declared on their composite / declared by nobody: never frozen
+    assert "q1_q2.iswap" not in data["entities"]
+    assert "xy1.q1_q2_c" not in data["entities"]
 
 
 def test_freeze_happens_once(roster, tmp_path):
@@ -78,7 +81,27 @@ def test_appends_are_legal_after_the_cut(roster, tmp_path):
     assert verify(grown, tmp_path) == []
     checks = lock_checks(grown, tmp_path)
     assert all(c.status == OK for c in checks)
-    assert any("q1_q2_c_xy" in c.message for c in checks)
+    # the route that was borrowed is now designed wiring: an append
+    assert any("xy1.q1_q2_c" in c.message for c in checks)
+
+
+def test_a_function_added_to_a_frozen_channel_is_an_append(roster, tmp_path):
+    """One (line, target) is one channel since 4.0.0, so a rider for a target
+    the line already carries GROWS that channel's kinds: every frozen field
+    keeps resolving on the same owner - an append. Shrinking them is not."""
+    freeze(roster, tmp_path)
+    grown_text = EXAMPLE.replace('[lines.zc12]\nflux = ["q1_q2_c"]',
+                                 '[lines.zc12]\nflux = ["q1_q2_c"]\n'
+                                 'drive = ["q1_q2_c"]')
+    grown = parse_components(grown_text)
+    assert set(grown.entities["zc12.q1_q2_c"].kinds) == {"drive", "flux"}
+    assert verify(grown, tmp_path) == []
+    assert "zc12.q1_q2_c (+drive)" in additions(grown, tmp_path)
+
+    (tmp_path / LOCK_FILE).unlink()
+    freeze(grown, tmp_path)
+    drift = verify(roster, tmp_path)  # the drive function removed again
+    assert [(d.name, d.problem) for d in drift] == [("zc12.q1_q2_c", "changed")]
 
 
 def test_removing_a_frozen_name_is_refused(roster, tmp_path):
@@ -87,7 +110,8 @@ def test_removing_a_frozen_name_is_refused(roster, tmp_path):
                                               ""))
     drift = verify(shrunk, tmp_path)
     # deleting the line takes its minted channel with it — both are frozen
-    assert [d.name for d in drift] == ["q3_xy", "xy3"]
+    # (the routes it lent were never frozen, so they cannot drift)
+    assert [d.name for d in drift] == ["xy3", "xy3.q3"]
     assert {d.problem for d in drift} == {"missing"}
     assert "retired = true" in drift[0].detail
     assert lock_checks(shrunk, tmp_path)[0].status == FAIL
@@ -104,15 +128,31 @@ def test_retiring_keeps_the_name_resolving(roster, tmp_path):
 
 def test_changing_a_frozen_identity_is_refused(roster, tmp_path):
     freeze(roster, tmp_path)
+    # 4.0.0 stores by line: the line is part of a channel's ADDRESS, so a
+    # rider moved to another line is another channel and the frozen one goes
+    # missing (its stored values and history would stop resolving)
     moved = parse_components(EXAMPLE.replace('readout = ["q1", "q2", "q3"]',
                                              'readout = ["q1", "q2"]')
                              + '\n[lines.fl2]\nreadout = ["q3"]\n')
-    assert verify(moved, tmp_path) == []          # line is wiring, not identity
+    drift = verify(moved, tmp_path)
+    assert [(d.name, d.problem) for d in drift] == [("fl1.q3", "missing")]
     rekinded = parse_components(EXAMPLE.replace(
         '[modes.q3]\nkind = "transmon"',
         '[modes.q3]\nkind = "fluxonium"'))
     drift = verify(rekinded, tmp_path)
     assert [d.problem for d in drift] == ["changed"]
+
+
+def test_remediating_a_readout_stays_legal_after_the_cut(tmp_path):
+    """The mediator is wiring, not identity: a readout re-routed through
+    another resonator keeps its address and its signature."""
+    hatch = EXAMPLE + ('\n[channels.c_ro]\nkind = "readout"\n'
+                       'target = "q1_q2_c"\nline = "fl1"\nvia = "q1_res"\n')
+    freeze(parse_components(hatch), tmp_path)
+    remediated = parse_components(hatch.replace('via = "q1_res"',
+                                                'via = "q2_res"'))
+    assert remediated.entities["fl1.q1_q2_c"].via == "q2_res"
+    assert verify(remediated, tmp_path) == []
 
 
 def test_corrupt_lock_fails_loudly(roster, tmp_path):
@@ -154,23 +194,37 @@ def test_empty_datasheet_warns(roster):
 
 def test_vendor_witness_names_both_gaps(session):
     roster = session.roster
-    inventory = {"q0_xy": ComponentInfo(kind="drive", target=("q0",)),
-                 "ghost_xy": ComponentInfo(kind="drive", target=("q0",))}
+    inventory = {"xy_q0.q0": ComponentInfo(kind="drive", target=("q0",)),
+                 "xy_ghost.q0": ComponentInfo(kind="drive", target=("q0",))}
     checks = vendor_checks(roster, inventory)
     messages = " ".join(c.message for c in checks)
-    assert "q0_ro" in messages          # roster entity not realized
-    assert "ghost_xy" in messages       # vendor entity not in the roster
+    assert "'fl.q0'" in messages        # roster entity not realized
+    assert "xy_ghost.q0" in messages    # vendor entity not in the roster
     assert vendor_checks(roster, None)[0].status == WARN
 
 
+def test_vendor_witness_demands_designed_wiring_only(session):
+    """What the instrument must realize is the DESIGNED wiring. A borrowed
+    route exists only once the vendor adopts it, so its absence is no gap
+    (docs/store-by-line-plan.md section 2.2); a composite has no knob left to
+    realize (its knobs live on its operations)."""
+    roster = session.roster
+    inventory = {name: ComponentInfo(kind=e.kind, target=e.target)
+                 for name, e in roster.channels().items()}
+    missing = " ".join(c.message for c in vendor_checks(roster, inventory)
+                       if "does not realize" in c.message)
+    assert not [b for b in roster.borrowed_channels() if f"'{b}'" in missing]
+    assert "'q0_q1'" not in missing
+
+
 def test_vendor_kind_disagreement_is_a_failure(session):
-    bad = {"q0_xy": ComponentInfo(kind="readout", target=("q0",))}
+    bad = {"xy_q0.q0": ComponentInfo(kind="readout", target=("q0",))}
     assert any(c.status == FAIL for c in vendor_checks(session.roster, bad))
 
 
 def test_capability_witness_catches_a_live_z_on_a_fixed_qubit():
     r = parse_components(EXAMPLE)          # q3 is a fixed transmon
-    inventory = {"q3_z": ComponentInfo(kind="flux", target=("q3",))}
+    inventory = {"z3.q3": ComponentInfo(kind="flux", target=("q3",))}
     checks = capability_checks(r, inventory)
     assert checks and checks[0].status == FAIL
     assert "fixed-frequency qubit with a live z element" in checks[0].message
@@ -181,7 +235,8 @@ def test_wiring_witness_reads_the_port_annotation(roster):
              "z1": {"outputs": ["out3"]}, "xyz2": {"outputs": ["out4"]},
              "xy3": {"outputs": ["out5"]}, "zc12": {"outputs": ["out6"]}}
     warn = [c for c in wiring_checks(roster, ports) if c.status == WARN]
-    # xyz2 carries drive AND flux on one declared output
+    # xyz2 carries drive AND flux (one channel, xyz2.q2, of two kinds) on
+    # one declared output
     assert any("combined wire" in c.message for c in warn)
     ports["xyz2"] = {"outputs": ["mw1", "lf1"]}
     ports["fl1"] = {"outputs": ["o1", "o2"]}   # multiplexed but 2 outputs
@@ -206,26 +261,43 @@ def test_expansion_rows_show_minted_provenance(roster):
     rows = {r["entity"]: r for r in expansion_rows(roster)}
     assert rows["q1_res"]["origin"].startswith("[lines.fl1] readout[0]")
     assert rows["q1"]["origin"] == "declared"
-    assert rows["q1_ro"]["via"] == "q1_res"
+    assert rows["fl1.q1"]["origin"].startswith("[lines.fl1] readout[0]")
+    assert rows["fl1.q1"]["via"] == "q1_res"
     assert set(rows["q1"]["operations"]) == {"rx", "readout", "flux_bias"}
-    assert rows["fl1"]["carries"] == ["q1_ro", "q2_ro", "q3_ro"]
+    assert rows["fl1"]["carries"] == ["fl1.q1", "fl1.q2", "fl1.q3"]
+    # the undeclared routes are summarized on the line that lends them
+    assert rows["xy1"]["lends"] == ["q1_q2_c", "q2", "q3"]
+    assert "xy1.q2" not in rows
+    listed = {r["entity"]: r for r in expansion_rows(roster, borrowed=True)}
+    assert listed["xy1.q2"]["origin"] == "borrowed"
 
 
 def test_field_rows_carry_routing_and_seed_story(roster):
     rows = {(r["entity"], r["field"]): r for r in field_rows(roster)}
-    ro = rows[("q1_ro", "readout_freq_hz")]
+    ro = rows[("fl1.q1", "readout_freq_hz")]
     assert ro["store"] == "scqo_state.json" and ro["pushed"] is True
     assert ro["seed"] == "q1_res.f_dress0_hz"
     # the drive seed lists BOTH candidate facts (kind decides which applies)
-    assert rows[("q1_xy", "drive_freq_hz")]["seed"] == (
+    assert rows[("xy1.q1", "drive_freq_hz")]["seed"] == (
         "q1.f_01_hz | q1.f_q_max_hz")
-    assert rows[("q1_xy", "pi_amp")]["seed"] is None
+    assert rows[("xy1.q1", "pi_amp")]["seed"] is None
     fact = rows[("q1_res", "f_dress0_hz")]
     assert fact["store"] == "physical.json" and fact["pushed"] is False
-    flux = rows[("q1_z", "idle_flux")]
+    flux = rows[("z1", "idle_flux")]               # the LINE's knob
     assert flux["unit"] == "source-native" and flux["portable"] is False
-    op = rows[("q1_q2", "iswap_coupler_flux")]
-    assert op["why"] == "operation 'iswap'"
+    assert flux["store"] == "scqo_state.json" and flux["pushed"] is True
+    transfer = rows[("z1.q1", "flux_per_phi0")]    # the channel's fact
+    assert transfer["store"] == "physical.json" and transfer["pushed"] is False
+    op = rows[("q1_q2.iswap", "coupler_flux")]
+    assert op["why"] == "operation 'iswap' of 'q1_q2'"
+    # borrowed routes share one field set: left out unless asked for
+    assert ("xy1.q1_q2_c", "pi_amp") not in rows
+    listed = {(r["entity"], r["field"]): r
+              for r in field_rows(roster, borrowed=True)}
+    assert listed[("xy1.q1_q2_c", "pi_amp")]["why"] == "borrowed drive channel"
+    # ...and a route seeds from ITS target, the coupler
+    assert listed[("xy1.q1_q2_c", "drive_freq_hz")]["seed"] == (
+        "q1_q2_c.f_01_hz | q1_q2_c.f_q_max_hz")
 
 
 def test_state_rows_merge_both_stores_with_sources(session):
@@ -234,9 +306,10 @@ def test_state_rows_merge_both_stores_with_sources(session):
     rows = {(r["entity"], r["field"]): r
             for r in state_rows(session.roster, session.device_state(),
                                 session.physical_state(), sources=sources)}
-    assert rows[("q0_xy", "pi_amp")]["store"] == "scqo_state.json"
-    assert rows[("q0_xy", "pi_amp")]["source"]["status"] == "manual"
+    assert rows[("xy_q0.q0", "pi_amp")]["store"] == "scqo_state.json"
+    assert rows[("xy_q0.q0", "pi_amp")]["source"]["status"] == "manual"
     assert rows[("q0_res", "f_dress0_hz")]["store"] == "physical.json"
+    assert rows[("z_q0", "idle_flux")]["kind"] == "line"
 
 
 def test_state_rows_surface_orphaned_store_entities(session):
@@ -249,8 +322,12 @@ def test_qubit_rows_tag_the_closure_role(session):
     rows = qubit_rows(session.roster, "q0", session.device_state(),
                       session.physical_state())
     by_member = {r["member"] for r in rows}
-    assert {"drive channel", "resonator"} <= by_member
-    assert not any(r["entity"].startswith("q1") for r in rows)
+    # the bias lives on q0's own flux line, so the line joins the closure
+    assert {"drive channel", "readout channel", "flux line",
+            "resonator"} <= by_member
+    # nothing of q1's closure (or the pair's) leaks in
+    assert {r["entity"] for r in rows} <= {
+        "q0", "xy_q0.q0", "fl.q0", "z_q0.q0", "z_q0", "q0_res"}
 
 
 def test_design_rows_are_the_comparison_column(session):

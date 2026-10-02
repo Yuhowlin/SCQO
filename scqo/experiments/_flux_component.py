@@ -20,9 +20,10 @@ class FluxComponentParameters(Parameters):
 
     flux_component: str | None = Field(
         None,
-        description="Roster entity whose flux channel is swept INSTEAD of "
-        "each target's own z-line — any entity with a default flux channel "
-        "(a qubit, a tracked coupler mode like q1_q2_c). None = each target "
+        description="Roster entity whose flux LINE is swept INSTEAD of "
+        "each target's own — any entity with a default flux channel (a "
+        "qubit, a tracked coupler mode like q1_q2_c); the sweep rides that "
+        "line's idle_flux. None = each target "
         "fluxes itself. With a foreign source the run is RECORD-ONLY (fits "
         "saved, zero suggestions): the fitted quantities then describe "
         "crosstalk or a coupler-induced shift, not the target's own flux "

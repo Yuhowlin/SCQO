@@ -24,7 +24,7 @@ def _lab(tmp_path, device: str | None = "chipT") -> str:
 
 
 #: the greenfield roster: one transmon mode, a readout rider (mints q0_res +
-#: q0_ro) and a drive rider (mints q0_xy) — operations are DERIVED from wiring.
+#: fl.q0) and a drive rider (declares xy0.q0) — operations are DERIVED from wiring.
 _COMPONENTS = """\
 schema = 3
 [modes.q0]
@@ -60,7 +60,7 @@ def test_no_device_falls_back_to_demo(tmp_path):
     assert sess.setup_name == ""  # demo fallback has no setup era
     assert sess.datastore is None  # demo fallback persists nothing
     assert "q0" in sess.roster.entities  # the built-in demo roster
-    assert "q0_xy" in sess.device_state()  # ... realized, with seeded knobs
+    assert "xy_q0.q0" in sess.device_state()  # ... realized, with seeded knobs
 
 
 def test_device_without_registry_names_the_fix(tmp_path):

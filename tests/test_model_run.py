@@ -44,9 +44,9 @@ def test_run_suggest_accept_roundtrip(session):
     # choice and the wait derived from the linewidth are channel KNOBS (pushed),
     # the linewidth and dip position are resonator FACTS (never pushed).
     assert proposed == {
-        ("q0_ro", "readout_freq_hz", "knob"), ("q0_ro", "readout_depletion_s", "knob"),
+        ("fl.q0", "readout_freq_hz", "knob"), ("fl.q0", "readout_depletion_s", "knob"),
         ("q0_res", "f_dress0_hz", "fact"), ("q0_res", "kappa_tot_hz", "fact"),
-        ("q1_ro", "readout_freq_hz", "knob"), ("q1_ro", "readout_depletion_s", "knob"),
+        ("fl.q1", "readout_freq_hz", "knob"), ("fl.q1", "readout_depletion_s", "knob"),
         ("q1_res", "f_dress0_hz", "fact"), ("q1_res", "kappa_tot_hz", "fact"),
     }
     # nothing applied yet
@@ -54,7 +54,7 @@ def test_run_suggest_accept_roundtrip(session):
     summary = session.accept(out["run_id"])
     assert not summary["errors"] and summary["pending_left"] == 0
     assert session.physical_state()["q0_res"]["kappa_tot_hz"] > 0
-    fitted = session.device_state()["q0_ro"]["readout_freq_hz"]
+    fitted = session.device_state()["fl.q0"]["readout_freq_hz"]
     assert abs(fitted - 5.95e9) < 5e6                 # near the design f_r
     assert session.history()[-1]["run_id"] == out["run_id"]
 
@@ -64,7 +64,7 @@ def test_run_apply_mode_is_immediate(session):
                       update="apply")
     assert out.get("error") is None
     assert session.physical_state()["q0_res"]["f_dress0_hz"] == pytest.approx(
-        session.device_state()["q0_ro"]["readout_freq_hz"])
+        session.device_state()["fl.q0"]["readout_freq_hz"])
     record = session.load_run(out["run_id"])["record"]
     assert record["updated_device"] is True
 
@@ -113,7 +113,7 @@ def test_design_seeded_anchor_tags_the_run(tmp_path):
     roster = demo_components()
     design = demo_design(roster)
     state = demo_vendor_state(roster, design)
-    del state["q0_ro"]["readout_freq_hz"]             # fresh chip: no standing
+    del state["fl.q0"]["readout_freq_hz"]             # fresh chip: no standing
     vendor = InMemoryDevice(roster, state)
     session = Session(SimulatedBackend(vendor), roster, design=design,
                       scqo_dir=tmp_path / "scqo", data_root=tmp_path / "d",

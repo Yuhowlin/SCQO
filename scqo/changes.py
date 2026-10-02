@@ -51,7 +51,14 @@ HISTORY_FILE = "history.sqlite"
 #: Version of THIS database's schema — independent of the run index's
 #: ``datastore.SCHEMA_VERSION``. A higher stamp on disk refuses loudly on
 #: write (the file is truth; never drop-and-rebuild) and degrades on read.
-CHANGES_SCHEMA_VERSION = 1
+#: v2 (4.0.0, docs/store-by-line-plan.md): ``entity`` holds the 4.0.0 entity
+#: names - a line (``z1``), a channel (``xy1.q1``), an operation
+#: (``q1_q2.iswap``) as well as modes and composites. A v1 file still carries
+#: the 3.x channel names (``q1_xy``) and is refused on write until the
+#: one-time conversion (``scripts/convert_store_v4.py``) re-keys it.
+CHANGES_SCHEMA_VERSION = 2
+#: The 3.x history schema the conversion upgrades from.
+V3_CHANGES_SCHEMA_VERSION = 1
 
 _STORES = ("physical", "state")
 
@@ -206,7 +213,13 @@ class ChangeDB:
                 f"v{found} > v{CHANGES_SCHEMA_VERSION}) — upgrade this "
                 f"machine; the file is change-history TRUTH and is never "
                 f"dropped or rebuilt")
-        # found < current: in-place upgrade hook (nothing to do at v1).
+        if found < CHANGES_SCHEMA_VERSION:
+            raise ChangesError(
+                f"{self._path} is a 3.x change history (schema v{found}) whose "
+                f"rows name channels the 3.x way (q1_xy) - convert the data root "
+                f"once with `python scripts/convert_store_v4.py <data_root> "
+                f"--apply` from the 4.0.0 SCQO checkout; the file is "
+                f"change-history TRUTH and is never dropped or rebuilt")
 
     @staticmethod
     def insert(db: sqlite3.Connection, records: Sequence[ChangeRecord], *,

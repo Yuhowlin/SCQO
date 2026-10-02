@@ -12,9 +12,20 @@ import json
 import os
 import shutil
 import sys
+from collections.abc import Collection
+from pathlib import Path
 
 from ._backends import build_session, default_targets, ensure_demo_experiments
 from ._review import format_table, review_interactively
+
+try:  # the repo-wide pattern: stdlib tomllib on 3.11+, tomli backport below
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python 3.10
+    import tomli as tomllib  # type: ignore[no-redef]
+
+#: A --params value ending in one of these is a FILE path, never inline JSON, so a
+#: missing file is reported as missing instead of failing to parse as JSON.
+_PARAMS_FILE_SUFFIXES = (".json", ".toml")
 
 
 def _parse_value(text: str):
@@ -23,6 +34,63 @@ def _parse_value(text: str):
         return json.loads(text)
     except json.JSONDecodeError:
         return text
+
+
+def _load_params(text: str, experiment_names: Collection[str]) -> dict:
+    """Parse a --params value into the parameter dict it names.
+
+    A file is read by its extension: ``.toml`` as TOML, anything else as JSON (a
+    run folder's parameters.json is the usual one). Both are read as
+    ``utf-8-sig``, because Windows PowerShell 5.1 writes UTF-8 with a BOM. A
+    leading ``~`` is expanded here, since PowerShell does not expand it for a
+    native command, and a relative path is resolved against the current
+    directory. A value ending in ``.json``/``.toml`` that is not a file is
+    refused as missing, naming the absolute path it was looked for at; any
+    other value is inline JSON.
+
+    The parameters sit at the top level. A top-level table named after an
+    experiment is the parameters.toml layout and is refused with that hint:
+    the Parameters model would reject it too, but only as an unexplained extra
+    key. TOML has no null, so a TOML file cannot reset a knob that
+    parameters.toml sets back to None; ``--set KEY=null`` does.
+    """
+    path = Path(os.path.expanduser(text))
+    if os.path.isfile(path):
+        raw = path.read_text(encoding="utf-8-sig")
+        if path.suffix.lower() == ".toml":
+            try:
+                loaded = tomllib.loads(raw)
+            except tomllib.TOMLDecodeError as err:
+                raise SystemExit(f"--params: invalid TOML in {path.resolve()}: {err}") from None
+        else:
+            try:
+                loaded = json.loads(raw)
+            except json.JSONDecodeError as err:
+                raise SystemExit(f"--params: invalid JSON in {path.resolve()}: {err}") from None
+    elif text.lower().endswith(_PARAMS_FILE_SUFFIXES):
+        raise SystemExit(f"--params file not found: {path.resolve()}\n"
+                         f"(a relative path is resolved against the current directory, "
+                         f"{Path.cwd()})")
+    else:
+        try:
+            loaded = json.loads(text)
+        except json.JSONDecodeError as err:
+            msg = f"--params expects a JSON file path or inline JSON, got: {text!r} ({err})"
+            if "=" in text and not text.lstrip().startswith("{"):
+                msg += f"\nDid you mean:  --set {text}"
+            else:
+                msg += '\nExamples:  --params my_params.json   or   --params "{""num_points"": 201}"'
+            raise SystemExit(msg) from None
+    if not isinstance(loaded, dict):
+        raise SystemExit(f"--params must be a JSON object {{...}}, got {type(loaded).__name__}")
+    tables = sorted(key for key, value in loaded.items()
+                    if isinstance(value, dict) and key in experiment_names)
+    if tables:
+        raise SystemExit(
+            f"--params takes the parameters themselves at the top level, not "
+            f"per-experiment tables (that is the parameters.toml layout); move the keys "
+            f"of {', '.join(tables)} to the top level")
+    return loaded
 
 
 def _check_preview_flags(args, name: str | None) -> None:
@@ -243,7 +311,9 @@ def run_experiment_cli(
                         help="filter the no-name catalog listing to experiments "
                              "carrying this capability (repeatable = AND; "
                              "'none' = experiments with no capabilities)")
-    parser.add_argument("--params", help="parameters as a JSON file path or an inline JSON string")
+    parser.add_argument("--params",
+                        help="parameters from a file (.toml is read as TOML, anything else "
+                             "as JSON; keys at the top level) or an inline JSON string")
     parser.add_argument("--targets", nargs="+",
                         help="components to measure (default: every qubit-like mode in the roster)")
     parser.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
@@ -317,22 +387,7 @@ def run_experiment_cli(
 
     params: dict = {}
     if args.params:
-        try:
-            if os.path.isfile(args.params):
-                with open(args.params, encoding="utf-8") as f:
-                    loaded = json.load(f)
-            else:
-                loaded = json.loads(args.params)
-            if not isinstance(loaded, dict):
-                raise SystemExit(f"--params must be a JSON object {{...}}, got {type(loaded).__name__}")
-            params.update(loaded)
-        except json.JSONDecodeError as err:
-            msg = f"--params expects a JSON file path or inline JSON, got: {args.params!r} ({err})"
-            if "=" in args.params and not args.params.lstrip().startswith("{"):
-                msg += f"\nDid you mean:  --set {args.params}"
-            else:
-                msg += '\nExamples:  --params my_params.json   or   --params "{""num_points"": 201}"'
-            raise SystemExit(msg)
+        params.update(_load_params(args.params, {e["name"] for e in sess.catalog()}))
     if args.targets:
         params["targets"] = args.targets
     for item in args.set:

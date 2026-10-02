@@ -40,15 +40,16 @@ def _lab_body(tmp_path: Path, device: str = "simdev") -> str:
 
 
 # The device's roster in the greenfield schema: one transmon mode on a
-# multiplexed feedline + its own drive wire. The readout rider mints q0_ro
-# (and the q0_res resonator mode); the drive rider mints q0_xy.
+# multiplexed feedline + its own drive wire. The readout rider declares the
+# channel fl.q0 (and mints the q0_res resonator mode); the drive rider
+# xy_q0.q0.
 _COMPONENTS = """\
 schema = 3
 [modes.q0]
 kind = "transmon"
 [lines.fl]
 readout = ["q0"]
-[lines.q0_xyl]
+[lines.xy_q0]
 drive = ["q0"]
 """
 

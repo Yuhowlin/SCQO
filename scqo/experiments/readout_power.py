@@ -21,8 +21,8 @@ from ._capabilities.amplitude import (
     ABS_AMP_COORD,
     ABS_AMP_LABEL,
     AMP_AXIS,
-    MAX_AMP_FACTOR_DESC,
-    MIN_AMP_FACTOR_DESC,
+    END_AMP_FACTOR_DESC,
+    START_AMP_FACTOR_DESC,
     NUM_AMP_POINTS_DESC,
     AmplitudeSweepParameters,
     amp_anchor,
@@ -42,8 +42,9 @@ class ReadoutPowerParameters(TargetSelection, QubitResetParameters,
                              ReadoutModeParameters, AmplitudeSweepParameters):
     """Inputs for fidelity-vs-readout-amplitude optimization."""
 
-    min_amp_factor: float = Field(0.4, gt=0.0, description=MIN_AMP_FACTOR_DESC)
-    max_amp_factor: float = Field(1.8, gt=0.0, lt=2.0, description=MAX_AMP_FACTOR_DESC)
+    # gt=0 on BOTH edges (either may be the lower): a zero readout measures nothing
+    start_amp_factor: float = Field(0.4, gt=0.0, lt=2.0, description=START_AMP_FACTOR_DESC)
+    end_amp_factor: float = Field(1.8, gt=0.0, lt=2.0, description=END_AMP_FACTOR_DESC)
     # one Gaussian-mixture fit per point, so this is the cost driver
     num_amp_points: int = Field(16, gt=2, description=NUM_AMP_POINTS_DESC)
     num_shots: int = Field(

@@ -90,32 +90,47 @@ def parse_design(text: str, roster: Roster, *,
     for entity, table in data.items():
         if entity == "schema":
             continue
-        where = f"{source} [{entity}]"
-        _require(isinstance(table, dict), f"{where}: expected a table")
-        _require(entity in roster,
-                 f"{where}: unknown entity — design keys must name entities "
-                 f"of the EXPANDED roster (derived names like q1_res are "
-                 f"fine)")
-        legal = roster.fields_of(entity, design=True)
-        fields: dict[str, float] = {}
-        for field, value in table.items():
-            if field not in legal:
-                raise DesignError(_design_illegal(roster, entity, field,
-                                                  legal, where))
-            _require(isinstance(value, (int, float))
-                     and not isinstance(value, bool),
-                     f"{where}.{field}: expected a number, got {value!r}")
-            try:
-                value = float(value)
-            except OverflowError:  # arbitrary-precision TOML int beyond float
-                raise DesignError(
-                    f"{where}.{field}: refusing non-finite {value!r}"
-                    ) from None
-            _require(math.isfinite(value),
-                     f"{where}.{field}: refusing non-finite {value!r}")
-            fields[field] = value
-        values[entity] = fields
+        _require(isinstance(table, dict),
+                 f"{source} [{entity}]: expected a table")
+        _parse_entity(entity, table, roster, source, values)
     return Design(values)
+
+
+def _parse_entity(entity: str, table: dict, roster: Roster, source: str,
+                  values: dict[str, dict[str, float]]) -> None:
+    """One entity table. A dotted TOML header (``[fl1.q1]``) arrives as a
+    table inside its first name's table - the same nesting as the store
+    files - and is judged as the entity ``fl1.q1`` it spells."""
+    where = f"{source} [{entity}]"
+    _require(entity in roster,
+             f"{where}: unknown entity — design keys must name entities "
+             f"of the EXPANDED roster (derived names like q1_res are "
+             f"fine)")
+    legal = roster.fields_of(entity, design=True)
+    fields: dict[str, float] = {}
+    for field, value in table.items():
+        if isinstance(value, dict):
+            _parse_entity(f"{entity}.{field}", value, roster, source, values)
+            continue
+        if field not in legal:
+            raise DesignError(_design_illegal(roster, entity, field,
+                                              legal, where))
+        _require(isinstance(value, (int, float))
+                 and not isinstance(value, bool),
+                 f"{where}.{field}: expected a number, got {value!r}")
+        try:
+            value = float(value)
+        except OverflowError:  # arbitrary-precision TOML int beyond float
+            raise DesignError(
+                f"{where}.{field}: refusing non-finite {value!r}"
+                ) from None
+        _require(math.isfinite(value),
+                 f"{where}.{field}: refusing non-finite {value!r}")
+        fields[field] = value
+    # a table that only carries sub-tables (the ``fl1`` of ``[fl1.q1]``)
+    # declares nothing of its own
+    if not table or any(not isinstance(v, dict) for v in table.values()):
+        values[entity] = fields
 
 
 def _design_illegal(roster: Roster, entity: str, field: str,

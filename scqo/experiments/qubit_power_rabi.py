@@ -5,6 +5,16 @@ byte-for-byte; what moved is the device surface: ``pi_amp`` keeps its name
 but now lives on the target's DRIVE CHANNEL
 (``self.device.channel(t, "drive").pi_amp``), read in ``estimate()`` and
 written in ``update()``.
+
+The target may also be a mode with no designed drive or readout of its own - a
+tunable coupler (``docs/coupler-transmon-plan.md``): ``drive_line`` plays the
+pulse through a named line's (borrowed) channel, whose ``pi_amp`` is then the
+one read and calibrated, and ``readout_member`` reads the coupler through a
+pair member (selective pi plus the member's x180, then its readout). The model
+does not change: the member's population is an offset, scaled copy of the
+coupler's, and the cosine fit has a free amplitude and offset. The pi pulse the
+fit finds is the borrowed channel's own property, so it is written back as
+usual - unlike a foreign flux source, which is record-only.
 """
 
 from __future__ import annotations
@@ -20,14 +30,16 @@ from ._capabilities.amplitude import (
     ABS_AMP_COORD,
     ABS_AMP_LABEL,
     AMP_AXIS,
-    MAX_AMP_FACTOR_DESC,
-    MIN_AMP_FACTOR_DESC,
+    END_AMP_FACTOR_DESC,
+    START_AMP_FACTOR_DESC,
     NUM_AMP_POINTS_DESC,
     AmplitudeSweepParameters,
     amp_anchor,
     amp_sweep,
     attach_absolute_amp,
 )
+from ._capabilities.drive_line import DriveLineParameters, drive_view
+from ._capabilities.mapped_readout import MappedReadoutParameters, mapped_population
 from ._capabilities.qubit_reset import QubitResetParameters
 from ._capabilities.state_readout import (
     POPULATION_ALT,
@@ -44,14 +56,16 @@ from . import register
 
 
 class QubitPowerRabiParameters(TargetSelection, AveragingParameters, StateReadoutParameters,
-                               QubitResetParameters, AmplitudeSweepParameters):
+                               QubitResetParameters, AmplitudeSweepParameters,
+                               DriveLineParameters, MappedReadoutParameters):
     """Inputs for power Rabi."""
 
-    # a full Rabi arch from zero, so the first extremum IS the pi pulse. The top
-    # stops below 2.0: QUA's dynamic amplitude_scale is fixed-point on (-2, 2),
-    # so a sweep that INCLUDES 2.0 emits an unrepresentable last point.
-    min_amp_factor: float = Field(0.0, ge=0.0, description=MIN_AMP_FACTOR_DESC)
-    max_amp_factor: float = Field(1.9, gt=0.0, lt=2.0, description=MAX_AMP_FACTOR_DESC)
+    # a full Rabi arch from zero, so the first extremum above zero IS the pi
+    # pulse (scqat measures from the LOWEST amplitude, whichever way the sweep
+    # ran). 1.9, not 2.0: QUA's dynamic amplitude_scale is fixed-point on
+    # (-2, 2), so a sweep that INCLUDES 2.0 emits an unrepresentable point.
+    start_amp_factor: float = Field(0.0, ge=0.0, lt=2.0, description=START_AMP_FACTOR_DESC)
+    end_amp_factor: float = Field(1.9, ge=0.0, lt=2.0, description=END_AMP_FACTOR_DESC)
     num_amp_points: int = Field(101, gt=1, description=NUM_AMP_POINTS_DESC)
 
 
@@ -73,7 +87,9 @@ class QubitPowerRabi(Experiment):
         "oscillation to recalibrate the drive channel's pi_amp. use_state_discrimination "
         "returns the FPGA-discriminated averaged state instead of I/Q (needs a calibrated "
         "discriminator: run single_shot_readout and accept its readout_rotation_rad / "
-        "readout_threshold suggestions first)."
+        "readout_threshold suggestions first). A tunable coupler is a target too: "
+        "drive_line names the line whose (borrowed) channel drives it, and whose "
+        "pi_amp is calibrated; readout_member reads it through a pair member."
     )
     Parameters: ClassVar[type] = QubitPowerRabiParameters
     Result: ClassVar[type] = QubitPowerRabiResult
@@ -100,12 +116,15 @@ class QubitPowerRabi(Experiment):
         targets = self.params.targets
         rng = np.random.default_rng(stable_seed("qubit_power_rabi", *targets))
         use_state = self.params.use_state_discrimination
+        mapped = self.params.readout_member is not None
         i_data = np.empty((len(targets), factor.size))
         q_data = np.empty_like(i_data)
         state = np.empty_like(i_data)
         for k in range(len(targets)):
             factor_pi = rng.uniform(0.85, 1.15)  # miscalibration to recover (1.0 == perfect)
             population = 0.5 - 0.5 * np.cos(np.pi * factor / factor_pi)
+            if mapped:  # the member's population: an offset, scaled copy
+                population = mapped_population(population)
             if use_state:
                 state[k] = population_row(population, rng)
             else:
@@ -151,7 +170,7 @@ class QubitPowerRabi(Experiment):
             return
         for qubit, fit in self.result.fit.items():
             if self.result.outcomes[qubit] is Outcome.SUCCESSFUL:
-                self.device.channel(qubit, "drive").pi_amp = fit["pi_amp"]
+                drive_view(self, qubit).pi_amp = fit["pi_amp"]
 
     def probe(self):  # pragma: no cover - driver half
         raise NotImplementedError("a driver backend supplies probe()")

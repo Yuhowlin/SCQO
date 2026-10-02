@@ -1,6 +1,8 @@
-"""Schema-3 store contracts (scqo.stores) — docs/greenfield-schema.md
-sections 1, 6, 10: one shape, two role sets, fresh-start archiving, array
-relations enforced at write time."""
+"""Schema-4 store contracts (scqo.stores) — docs/greenfield-schema.md
+sections 1, 6, 10 with the 4.0.0 store-by-line addressing
+(docs/store-by-line-plan.md): one shape, two role sets, files nested by owner
+and a flat store in memory, fresh-start archiving of pre-greenfield files, a
+3.x file refused by name, array relations enforced at write time."""
 
 import json
 
@@ -31,21 +33,31 @@ def stores(tmp_path, roster):
 def test_role_routes_to_exactly_one_store(stores):
     physical, state = stores
     physical.record("q1_res", "f_dress0_hz", 5.9359e9)      # fact -> physical
-    state.record("q1_xy", "drive_freq_hz", 5.136e9)    # knob -> state
-    state.record("q1_ro", "fidelity_g", 0.96)          # monitor -> state
+    state.record("xy1.q1", "drive_freq_hz", 5.136e9)   # knob -> state
+    state.record("fl1.q1", "fidelity_g", 0.96)         # monitor -> state
     with pytest.raises(StoreError, match="belongs in physical.json"):
         state.record("q1_res", "f_dress0_hz", 5.9e9)
     with pytest.raises(StoreError, match="belongs in scqo_state.json"):
-        physical.record("q1_xy", "drive_freq_hz", 5.1e9)
+        physical.record("xy1.q1", "drive_freq_hz", 5.1e9)
 
 
-def test_flux_channel_spans_both_stores(stores):
+def test_flux_line_spans_both_stores_its_channel_holds_the_transfer(stores):
+    """4.0.0 splits the old flux channel: the LINE owns the one bias of the
+    wire (a knob) and its taps (facts), so it spans both stores; the channel
+    <line>.<target> owns the per-target transfer function (facts)."""
     physical, state = stores
-    physical.record("q1_z", "flux_offset", 0.0134)
-    physical.record("q1_z", "flux_per_phi0", 0.969)
-    state.record("q1_z", "idle_flux", 0.118)
-    assert physical.get("q1_z", "flux_offset") == 0.0134
-    assert state.get("q1_z", "idle_flux") == 0.118
+    physical.record("z1.q1", "flux_offset", 0.0134)
+    physical.record("z1.q1", "flux_per_phi0", 0.969)
+    state.record("z1", "idle_flux", 0.118)
+    physical.record("z1", "distortion_tau_s", [6.0e-7])
+    assert physical.get("z1.q1", "flux_offset") == 0.0134
+    assert state.get("z1", "idle_flux") == 0.118
+    assert physical.get("z1", "distortion_tau_s") == [6.0e-7]
+    # neither half carries the other's fields any more
+    with pytest.raises(Exception, match="unknown field"):
+        state.record("z1.q1", "idle_flux", 0.1)
+    with pytest.raises(Exception, match="unknown field"):
+        physical.record("z1", "flux_per_phi0", 0.9)
 
 
 def test_design_only_fields_never_reach_a_store(tmp_path):
@@ -60,11 +72,11 @@ def test_design_only_fields_never_reach_a_store(tmp_path):
 def test_shape_validation_scalars_and_arrays(stores):
     physical, state = stores
     with pytest.raises(StoreError, match="float\\[\\]"):
-        physical.record("q1_z", "distortion_amp", 0.2)   # scalar in array
+        physical.record("z1", "distortion_amp", 0.2)     # scalar in array
     with pytest.raises(StoreError, match="expected a number"):
         physical.record("q1", "f_01_hz", [5.1e9])        # array in scalar
     with pytest.raises(StoreError, match="non-empty list"):
-        physical.record("q1_z", "distortion_tau_s", [])
+        physical.record("z1", "distortion_tau_s", [])
     with pytest.raises(StoreError, match="non-finite"):
         physical.record("q1", "f_01_hz", float("nan"))
     with pytest.raises(StoreError, match="expected a number"):
@@ -76,75 +88,122 @@ def test_paired_arrays_enforced_at_save_not_per_write(stores):
     per-write — a redone fit legally changes both partners' length within
     one batch, so individual writes may transiently diverge."""
     physical, _ = stores
-    physical.record("q1_z", "distortion_tau_s", [6.0e-7, 8.0e-8])
-    physical.record("q1_z", "distortion_amp", [0.02])   # transient: allowed
+    physical.record("z1", "distortion_tau_s", [6.0e-7, 8.0e-8])
+    physical.record("z1", "distortion_amp", [0.02])     # transient: allowed
     with pytest.raises(StoreError, match="unequal paired lengths"):
         physical.save()                                  # the save refuses
-    physical.record("q1_z", "distortion_amp", [0.02, -0.01])
+    physical.record("z1", "distortion_amp", [0.02, -0.01])
     physical.save()                                      # consistent: lands
 
 
 def test_waveform_requires_its_time_base_first(stores):
+    """An operation's plain ``waveform`` is a waveform too (is_waveform)."""
     _, state = stores
-    with pytest.raises(StoreError, match="iswap_waveform_dt_s first"):
-        state.record("q1_q2", "iswap_waveform", [0.0, 0.4, 0.0])
-    state.record("q1_q2", "iswap_waveform_dt_s", 5.0e-10)
-    state.record("q1_q2", "iswap_waveform", [0.0, 0.4, 0.0])
-    assert state.get("q1_q2", "iswap_waveform") == [0.0, 0.4, 0.0]
+    with pytest.raises(StoreError, match="set waveform_dt_s first"):
+        state.record("q1_q2.iswap", "waveform", [0.0, 0.4, 0.0])
+    state.record("q1_q2.iswap", "waveform_dt_s", 5.0e-10)
+    state.record("q1_q2.iswap", "waveform", [0.0, 0.4, 0.0])
+    assert state.get("q1_q2.iswap", "waveform") == [0.0, 0.4, 0.0]
 
 
 def test_get_returns_copies_none_until_written(stores):
     physical, _ = stores
     assert physical.get("q1", "f_01_hz") is None
-    physical.record("q1_z", "distortion_tau_s", [1e-6])
-    physical.get("q1_z", "distortion_tau_s").append(0.0)   # caller mutation
-    assert physical.get("q1_z", "distortion_tau_s") == [1e-6]
+    physical.record("z1", "distortion_tau_s", [1e-6])
+    physical.get("z1", "distortion_tau_s").append(0.0)     # caller mutation
+    assert physical.get("z1", "distortion_tau_s") == [1e-6]
 
 
 # ---------------------------------------------------------------- history
 
 def test_history_rows_are_self_describing(stores):
     _, state = stores
-    state.record("q1_q2", "iswap_coupler_flux", 0.081, experiment="pair_zz",
+    state.record("q1_q2.iswap", "coupler_flux", 0.081, experiment="pair_zz",
                  run_id="r1")
-    state.record("q1_q2", "iswap_coupler_flux", 0.083)
+    state.record("q1_q2.iswap", "coupler_flux", 0.083)
     rows = state.history()
-    assert rows[0].kind == "qubit_pair" and rows[0].setup == "qm_a"
+    assert rows[0].entity == "q1_q2.iswap" and rows[0].field == "coupler_flux"
+    assert rows[0].kind == "operation" and rows[0].setup == "qm_a"
     assert rows[0].old is None and rows[0].new == 0.081
     assert rows[1].old == 0.081 and rows[1].new == 0.083
     assert rows[0].experiment == "pair_zz" and rows[0].run_id == "r1"
+    # a line records kind "line", a channel its channel kind
+    state.record("z1", "idle_flux", 0.118)
+    state.record("xy1.q1", "pi_amp", 0.209)
+    assert [r.kind for r in state.history()[2:]] == ["line", "drive"]
 
 
 def test_array_values_round_trip_history_and_file(tmp_path, roster):
     physical = physical_store(tmp_path, roster)
-    physical.record("q1_z", "distortion_tau_s", [6e-7, 8e-8])
+    physical.record("z1", "distortion_tau_s", [6e-7, 8e-8])
     physical.save()
     again = physical_store(tmp_path, roster)
-    assert again.get("q1_z", "distortion_tau_s") == [6e-7, 8e-8]
+    assert again.get("z1", "distortion_tau_s") == [6e-7, 8e-8]
     assert again.history()[0].new == [6e-7, 8e-8]
 
 
 # ------------------------------------------------------------ save / merge
 
 def test_values_file_shape_is_the_doc_shape(tmp_path, roster):
+    """The file nests each owner under its first name - a line holds its own
+    fields beside its channels, a composite its facts beside its operations -
+    while the store in memory stays flat, keyed by the dotted owner."""
     state = state_store(tmp_path, roster)
-    state.record("q1_xy", "drive_freq_hz", 5.136e9)
+    state.record("xy1.q1", "drive_freq_hz", 5.136e9)
+    state.record("z1", "idle_flux", 0.118)
+    state.record("q1_q2.iswap", "coupler_flux", 0.081)
     state.save()
     data = json.loads((tmp_path / "scqo_state.json").read_text())
-    assert data == {"schema": 3,
-                    "values": {"q1_xy": {"drive_freq_hz": 5.136e9}}}
+    assert data == {"schema": 4, "values": {
+        "xy1": {"q1": {"drive_freq_hz": 5.136e9}},
+        "z1": {"idle_flux": 0.118},
+        "q1_q2": {"iswap": {"coupler_flux": 0.081}}}}
+    assert state.values() == {"xy1.q1": {"drive_freq_hz": 5.136e9},
+                              "z1": {"idle_flux": 0.118},
+                              "q1_q2.iswap": {"coupler_flux": 0.081}}
+
+    physical = physical_store(tmp_path, roster)
+    physical.record("z1", "distortion_amp", [0.02])
+    physical.record("z1", "distortion_tau_s", [6.0e-7])
+    physical.record("z1.q1", "flux_per_phi0", 0.969)
+    physical.record("q1_q2", "zz_hz", -3.0e4)
+    physical.save()
+    data = json.loads((tmp_path / "physical.json").read_text())
+    assert data == {"schema": 4, "values": {
+        "z1": {"distortion_amp": [0.02], "distortion_tau_s": [6.0e-7],
+               "q1": {"flux_per_phi0": 0.969}},
+        "q1_q2": {"zz_hz": -3.0e4}}}
+
+
+def test_nested_file_round_trips_to_the_flat_store(tmp_path, roster):
+    state = state_store(tmp_path, roster)
+    physical = physical_store(tmp_path, roster)
+    state.record("xy1.q1", "pi_amp", 0.209)
+    state.record("xyz2.q2", "pi_amp", 0.214)
+    state.record("xy1.q1_q2_c", "pi_amp", 0.12)          # a borrowed route
+    state.record("z1", "idle_flux", 0.118)
+    state.record("q1_q2.iswap", "coupler_flux", 0.081)
+    physical.record("z1", "distortion_tau_s", [6.0e-7])
+    physical.record("z1.q1", "flux_offset", 0.0134)
+    physical.record("q1", "t1_s", 3.0e-5)
+    state.save()
+    physical.save()
+    for store, again in ((state, state_store(tmp_path, roster)),
+                         (physical, physical_store(tmp_path, roster))):
+        assert again.values() == store.values()
+    assert state_store(tmp_path, roster).get("xy1.q1_q2_c", "pi_amp") == 0.12
 
 
 def test_two_sessions_cannot_erase_each_other(tmp_path, roster):
     a = state_store(tmp_path, roster)
     b = state_store(tmp_path, roster)
-    a.record("q1_xy", "pi_amp", 0.209)
-    b.record("q2_xy", "pi_amp", 0.214)
+    a.record("xy1.q1", "pi_amp", 0.209)
+    b.record("xyz2.q2", "pi_amp", 0.214)
     a.save()
     b.save()
     fresh = state_store(tmp_path, roster)
-    assert fresh.get("q1_xy", "pi_amp") == 0.209
-    assert fresh.get("q2_xy", "pi_amp") == 0.214
+    assert fresh.get("xy1.q1", "pi_amp") == 0.209
+    assert fresh.get("xyz2.q2", "pi_amp") == 0.214
     assert len(fresh.history()) == 2
 
 
@@ -160,7 +219,7 @@ def _write_v2(tmp_path):
 def test_pre_v3_files_are_archived_aside_never_read(tmp_path, roster):
     _write_v2(tmp_path)
     state = state_store(tmp_path, roster)
-    assert state.get("q1_xy", "drive_freq_hz") is None
+    assert state.get("xy1.q1", "drive_freq_hz") is None
     assert state.history() == ()
     assert (tmp_path / "scqo_state.json.v2.bak").is_file()
     assert (tmp_path / "scqo_state.history.jsonl.v2.bak").is_file()
@@ -170,11 +229,40 @@ def test_pre_v3_files_are_archived_aside_never_read(tmp_path, roster):
 def test_fresh_start_applies_at_the_save_site_too(tmp_path, roster):
     state = state_store(tmp_path, roster)      # nothing on disk yet
     _write_v2(tmp_path)                        # v2 lands AFTER our load
-    state.record("q1_xy", "drive_freq_hz", 5.136e9)
+    state.record("xy1.q1", "drive_freq_hz", 5.136e9)
     state.save()
     assert (tmp_path / "scqo_state.json.v2.bak").is_file()
     data = json.loads((tmp_path / "scqo_state.json").read_text())
-    assert data["schema"] == 3 and "config" not in data
+    assert data["schema"] == 4 and "config" not in data
+
+
+_V3_FILE = json.dumps({"schema": 3, "values": {
+    "q1_xy": {"pi_amp": 0.209}, "q1_z": {"idle_flux": 0.118}}})
+
+
+def test_a_3x_store_is_refused_by_name_never_archived(tmp_path, roster):
+    """A schema-3 file holds values keyed the 3.x way (q1_xy) - facts among
+    them that cannot be regenerated - so 4.0.0 neither reads nor archives it:
+    it refuses, names the one-time converter, and leaves the file alone."""
+    for name, make in (("scqo_state.json", state_store),
+                       ("physical.json", physical_store)):
+        (tmp_path / name).write_text(_V3_FILE)
+        with pytest.raises(StoreError, match=r"convert_store_v4\.py"):
+            make(tmp_path, roster)
+        assert (tmp_path / name).read_text() == _V3_FILE
+        assert not (tmp_path / f"{name}.v2.bak").exists()
+
+
+def test_a_3x_store_appearing_after_load_refuses_the_save(tmp_path, roster):
+    from scqo.changes import HISTORY_FILE, ChangeDB
+    state = state_store(tmp_path, roster)      # nothing on disk yet
+    (tmp_path / "scqo_state.json").write_text(_V3_FILE)  # lands AFTER load
+    state.record("xy1.q1", "pi_amp", 0.3)
+    with pytest.raises(StoreError, match=r"convert_store_v4\.py"):
+        state.save()
+    assert (tmp_path / "scqo_state.json").read_text() == _V3_FILE
+    # refused under the lock, before the history transaction: zero rows
+    assert ChangeDB(tmp_path / HISTORY_FILE).context_history("state") == []
 
 
 def test_unknown_entity_and_field_use_roster_errors(stores):
@@ -190,24 +278,24 @@ def test_unknown_entity_and_field_use_roster_errors(stores):
 def test_values_only_reset_preserves_history(tmp_path, roster):
     """Deleting the values file (a documented reset) must never cost rows."""
     state = state_store(tmp_path, roster)
-    state.record("q1_xy", "pi_amp", 0.209)
-    state.record("q1_xy", "drag_beta", -1.0)
+    state.record("xy1.q1", "pi_amp", 0.209)
+    state.record("xy1.q1", "drag_beta", -1.0)
     state.save()
     (tmp_path / "scqo_state.json").unlink()
     again = state_store(tmp_path, roster)
-    again.record("q2_xy", "pi_amp", 0.214)
+    again.record("xyz2.q2", "pi_amp", 0.214)
     again.save()
     fresh = state_store(tmp_path, roster)
     assert len(fresh.history()) == 3
-    assert fresh.get("q1_xy", "pi_amp") is None      # values were reset...
-    assert fresh.get("q2_xy", "pi_amp") == 0.214     # ...new value persisted
+    assert fresh.get("xy1.q1", "pi_amp") is None     # values were reset...
+    assert fresh.get("xyz2.q2", "pi_amp") == 0.214   # ...new value persisted
 
 
 def test_corrupt_values_file_quarantined_history_survives(tmp_path, roster):
     state = state_store(tmp_path, roster)
-    state.record("q1_xy", "pi_amp", 0.209)
+    state.record("xy1.q1", "pi_amp", 0.209)
     state.save()
-    (tmp_path / "scqo_state.json").write_text('{"schema": 3, "val')  # torn
+    (tmp_path / "scqo_state.json").write_text('{"schema": 4, "val')  # torn
     again = state_store(tmp_path, roster)
     assert len(again.history()) == 1                 # provenance intact (DB)
     assert (tmp_path / "scqo_state.json.corrupt.bak").is_file()
@@ -221,7 +309,7 @@ def test_retired_sidecar_is_ignored_never_read(tmp_path, roster):
         '"old": null, "new": 0.111}\n')              # even a v3-shaped row
     state = state_store(tmp_path, roster)
     assert state.history() == ()                     # fresh start
-    state.record("q1_xy", "pi_amp", 0.209)
+    state.record("xy1.q1", "pi_amp", 0.209)
     state.save()
     assert [r.new for r in state.history()] == [0.209]
     assert (tmp_path / "scqo_state.history.jsonl").is_file()  # untouched
@@ -234,60 +322,83 @@ def test_same_key_latest_timestamp_wins_regardless_of_save_order(
     monkeypatch.setattr(stores_mod, "_now", lambda: next(clock))
     older = state_store(tmp_path, roster)
     newer = state_store(tmp_path, roster)
-    older.record("q1_xy", "pi_amp", 0.111)           # t1
-    newer.record("q1_xy", "pi_amp", 0.222)           # t2 > t1
+    older.record("xy1.q1", "pi_amp", 0.111)          # t1
+    newer.record("xy1.q1", "pi_amp", 0.222)          # t2 > t1
     newer.save()
     older.save()                                     # saves LAST, is OLDER
     fresh = state_store(tmp_path, roster)
-    assert fresh.get("q1_xy", "pi_amp") == 0.222     # newest record wins
+    assert fresh.get("xy1.q1", "pi_amp") == 0.222    # newest record wins
     times = [r.timestamp for r in fresh.history()]
     assert times == sorted(times)                    # file is time-ordered
 
 
 def test_non_dirty_values_are_not_resurrected(tmp_path, roster):
     state = state_store(tmp_path, roster)
-    state.record("q1_xy", "pi_amp", 0.209)
+    state.record("xy1.q1", "pi_amp", 0.209)
     state.save()
     holder = state_store(tmp_path, roster)           # holds pi_amp in memory
     # a deliberate values-only reset by another actor:
     (tmp_path / "scqo_state.json").write_text(
-        '{"schema": 3, "values": {}}\n')
-    holder.record("q2_xy", "pi_amp", 0.214)          # touches a DIFFERENT key
+        '{"schema": 4, "values": {}}\n')
+    holder.record("xyz2.q2", "pi_amp", 0.214)        # touches a DIFFERENT key
     holder.save()
     fresh = state_store(tmp_path, roster)
-    assert fresh.get("q1_xy", "pi_amp") is None      # reset respected
-    assert fresh.get("q2_xy", "pi_amp") == 0.214
+    assert fresh.get("xy1.q1", "pi_amp") is None     # reset respected
+    assert fresh.get("xyz2.q2", "pi_amp") == 0.214
 
 
 def test_merged_paired_arrays_cannot_go_unequal(tmp_path, roster):
     a = physical_store(tmp_path, roster)
     b = physical_store(tmp_path, roster)
-    a.record("q1_z", "distortion_tau_s", [1e-6, 2e-6])
+    a.record("z1", "distortion_tau_s", [1e-6, 2e-6])
     a.save()
-    b.record("q1_z", "distortion_amp", [0.1, 0.2, 0.3])  # valid in B's view
+    b.record("z1", "distortion_amp", [0.1, 0.2, 0.3])    # valid in B's view
     with pytest.raises(StoreError, match="unequal paired lengths"):
         b.save()
     fresh = physical_store(tmp_path, roster)
-    assert fresh.get("q1_z", "distortion_amp") is None   # nothing committed
+    assert fresh.get("z1", "distortion_amp") is None     # nothing committed
     assert len(fresh.history()) == 1                     # veto rolled back
 
 
 def test_hand_mangled_file_values_are_dropped_at_load(tmp_path, roster):
     (tmp_path / "physical.json").write_text(
-        '{"schema": 3, "values": {"q1": {"f_01_hz": Infinity, "t1_s": 2e-5},'
-        ' "q1_z": {"distortion_amp": 0.5}}}')        # NaN token + wrong shape
+        '{"schema": 4, "values": {"q1": {"f_01_hz": Infinity, "t1_s": 2e-5},'
+        ' "z1": {"distortion_amp": 0.5,'             # scalar in float[]
+        ' "q1": {"flux_per_phi0": 0.969, "flux_offset": [0.1]}}}}')
     physical = physical_store(tmp_path, roster)
     assert physical.get("q1", "f_01_hz") is None     # non-finite dropped
     assert physical.get("q1", "t1_s") == 2e-5        # good value kept
-    assert physical.get("q1_z", "distortion_amp") is None  # scalar in float[]
+    assert physical.get("z1", "distortion_amp") is None  # scalar in float[]
+    # the same sanitizing one level down, on the line's channel
+    assert physical.get("z1.q1", "flux_per_phi0") == 0.969
+    assert physical.get("z1.q1", "flux_offset") is None  # array in scalar
+
+
+def test_unknown_owners_and_fields_survive_a_save(tmp_path, roster):
+    """A roster edit never silently deletes stored values: an owner or a
+    field this roster does not know is kept at load and written back at
+    save, nested like any other."""
+    (tmp_path / "scqo_state.json").write_text(json.dumps({
+        "schema": 4, "values": {
+            "xy9": {"q1": {"pi_amp": 0.3}},           # a line gone from it
+            "xy1": {"q1": {"pi_amp": 0.2, "old_knob": 1.0}}}}))
+    state = state_store(tmp_path, roster)
+    assert state.get("xy9.q1", "pi_amp") == 0.3
+    assert state.get("xy1.q1", "old_knob") == 1.0
+    state.record("xyz2.q2", "pi_amp", 0.214)
+    state.save()
+    values = json.loads((tmp_path / "scqo_state.json").read_text())["values"]
+    assert values["xy9"] == {"q1": {"pi_amp": 0.3}}
+    assert values["xy1"] == {"q1": {"pi_amp": 0.2, "old_knob": 1.0}}
+    assert values["xyz2"] == {"q2": {"pi_amp": 0.214}}
 
 
 def test_history_rows_do_not_alias_live_values(stores):
     physical, _ = stores
-    physical.record("q1_z", "distortion_tau_s", [1e-6])
+    physical.record("z1", "distortion_tau_s", [1e-6])
     row = physical.history()[0]
     row.new.append(9.9)                              # a consumer misbehaving
-    assert physical.get("q1_z", "distortion_tau_s") == [1e-6]
+    assert physical.get("z1", "distortion_tau_s") == [1e-6]
 
 
 def test_record_stamps_campaign_id(tmp_path, roster):

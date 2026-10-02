@@ -59,6 +59,23 @@ device surface; the per-qubit summary lives in ``result.fit``. A scqat estimator
 (``qc_unidirectional_trotter``) draws the transport curves and the joint map
 under ``analysis/chain/``, but it only VISUALIZES them and proposes nothing.
 
+IDEAL CURVES beside the measured ones: each step's angle is the ``theta_rad``
+monitor of the operation it plays (``<pair>.<op>``, written by
+``qc_n_stark_amp``), read from the acquisition-time snapshot, and an ``"idle"``
+step is angle 0. The estimator overlays the closed form of a perfect round —
+source ``cos(theta1)^(2N)``, sink as in its docstring — computed, never fitted.
+A step without a usable angle leaves its curve out, and the run says why on
+stderr: the operation is undeclared or has no ``theta_rad`` yet, or
+``swap_coupler_flux`` overrode the coupler amplitude that angle was measured at.
+A run that preps anything but the source draws no ideal at all — the closed form
+starts on the source.
+
+With ``round_duration_ns`` set and the source's and sink's T1 and T2* MEASURED
+(physical facts, from the same snapshot), both theories also carry decay: the
+discrete Trotter model (hollow points) and the cascaded master equation (line),
+with the ideal master equation left as a faint ceiling. The relay's decay is
+left out — it holds the excitation only between the two swaps of a round.
+
 There is deliberately NO transport verdict. A run reports SUCCESSFUL when it
 produced a usable trace for that qubit, and nothing more: the sequence has an
 ``"idle"`` control arm whose chain is broken ON PURPOSE, so any fixed floor on
@@ -85,7 +102,7 @@ from ._capabilities.state_readout import (
 from ._sim import stable_seed
 from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
-from ..experiment import Experiment
+from ..experiment import FACT_MEASURED, Experiment
 from . import register
 
 #: the artifact subfolder the whole-chain analysis writes into. A ROLE word, not
@@ -343,6 +360,14 @@ class QcUnidirectionalTrotterParameters(TargetSelection, AveragingParameters,
         description="Idle gap (ns) inserted between the operations of a round, so each "
                     "flux pulse settles before the next fires. 0 disables; the QM backend "
                     "requires a multiple of 4 ns.")
+    round_duration_ns: float | None = Field(
+        None, gt=0,
+        description="The period of ONE round (ns), an analysis input only: it turns the "
+                    "source's and sink's measured T1 / T2* into per-round decay for the "
+                    "theory curves (discrete Trotter model and master equation). None = "
+                    "draw them without decay. It is the ACTUAL round, longer than the sum "
+                    "of the pulses: 5Q4C's gap-20 round measures 360 ns on the gateway "
+                    "simulator. Nothing on the instrument changes with it.")
 
 
 class QcUnidirectionalTrotterResult(Result):
@@ -350,7 +375,12 @@ class QcUnidirectionalTrotterResult(Result):
     ``p_initial`` / ``p_final`` / ``p_max`` / ``p_min`` and ``n_at_max`` (the
     Trotter-step count where it peaks) — plus the run-wide ``sink_p_max`` and
     ``n_round_count``, repeated on every row so one target's record is readable
-    on its own.
+    on its own. So are the ideal curves' inputs ``theta_first_rad`` /
+    ``theta_second_rad``, the ideal sink's ``ideal_sink_p_max`` /
+    ``ideal_sink_n_at_max`` (NaN where an angle is unknown), and the same peak
+    of the discrete model WITH T1/T2* decay, ``model_sink_p_max`` /
+    ``model_sink_n_at_max`` (NaN unless ``round_duration_ns`` and both ends'
+    measured T1 and T2* are known).
 
     The OUTCOME is ACQUISITION, not physics: SUCCESSFUL means this qubit came
     back with a finite trace. There is no transport threshold — an ``"idle"``
@@ -545,9 +575,76 @@ class QcUnidirectionalTrotter(Experiment):
             rows.append(np.clip(row + rng.normal(0.0, 0.01, n.size), 0.0, 1.0))
         return {"population": (("target", "round_count"), np.stack(rows))}
 
+    def _swap_angles(self, source: str, prep: str) -> dict[str, float]:
+        """``{theta_first_rad, theta_second_rad}`` for the ideal curves — NaN
+        where no angle applies, with the reason printed to stderr once."""
+        import sys
+
+        angles = {"theta_first_rad": float("nan"),
+                  "theta_second_rad": float("nan")}
+        if prep != source:
+            print(f"scqo: no ideal curves - the run preps {prep!r}, and the "
+                  f"closed form starts on the source {source!r}", file=sys.stderr)
+            return angles
+        overridden = getattr(self.params, "swap_coupler_flux", {}) or {}
+        why: list[str] = []
+        for key, (pair, op) in zip(angles, pair_specs(self.params)):
+            if op == IDLE:
+                angles[key] = 0.0
+                continue
+            entity = f"{pair}.{op}"
+            if pair in overridden:
+                why.append(f"{entity}: swap_coupler_flux overrides the coupler "
+                           f"amplitude its theta_rad was measured at")
+                continue
+            if entity not in self.device.roster:
+                why.append(f"{entity} is not declared in the roster")
+                continue
+            theta = self.device.operation(pair, op).read_knob("theta_rad")
+            if theta is None:
+                why.append(f"{entity} has no theta_rad yet (qc_n_stark_amp "
+                           f"proposes it)")
+                continue
+            angles[key] = float(theta)
+        if why:
+            print("scqo: ideal curves incomplete - " + "; ".join(why),
+                  file=sys.stderr)
+        return angles
+
+    def _decay_inputs(self, source: str, sink: str) -> dict[str, float]:
+        """The five decay inputs for the theory curves: ``round_duration_ns``
+        and the source's and sink's MEASURED T1 / T2* (a design value is no
+        measurement of this chip). All NaN unless every one is known; a
+        partial set is named on stderr."""
+        import sys
+
+        keys = {"source_t1_s": (source, "t1_s"),
+                "source_t2_star_s": (source, "t2_star_s"),
+                "sink_t1_s": (sink, "t1_s"),
+                "sink_t2_star_s": (sink, "t2_star_s")}
+        nan = {"round_duration_ns": float("nan"), **{k: float("nan") for k in keys}}
+        values, missing = {}, []
+        for key, (qubit, field) in keys.items():
+            value, tier = self.fact_sourced(qubit, field)
+            if value is None or tier != FACT_MEASURED:
+                missing.append(f"{qubit}.{field}")
+            else:
+                values[key] = float(value)
+        round_ns = self.params.round_duration_ns
+        if round_ns is None:
+            if not missing:
+                print("scqo: T1/T2* are known but round_duration_ns is not set, so "
+                      "the theory curves carry no decay", file=sys.stderr)
+            return nan
+        if missing:
+            print("scqo: theory curves without decay - no measured "
+                  + ", ".join(missing), file=sys.stderr)
+            return nan
+        return {"round_duration_ns": float(round_ns), **values}
+
     def estimate(self) -> QcUnidirectionalTrotterResult:
         assert self.dataset is not None, "run() populates self.dataset before estimate()"
-        source, relay, sink, _prep = chain_roles(self.device.roster, self.params)
+        source, relay, sink, prep = chain_roles(self.device.roster, self.params)
         targets = [str(t) for t in np.atleast_1d(self.dataset["target"].values)]
 
         if "state" in self.dataset.data_vars:
@@ -572,10 +669,12 @@ class QcUnidirectionalTrotter(Experiment):
         )
         from .._scqat import whole_dataset_results
 
+        angles = self._swap_angles(source, prep)
+        decay = self._decay_inputs(source, sink)
         analysis = whole_dataset_results(
             prepared, QcUnidirectionalTrotterEstimator(),
             artifact_dir=self.artifact_dir, label=CHAIN_LABEL,
-            source=source, relay=relay, sink=sink)
+            source=source, relay=relay, sink=sink, **angles, **decay)
 
         per_qubit = analysis.get("per_qubit", {})
         # DATA, not a verdict: the sink's peak is reported on every row and
@@ -587,6 +686,12 @@ class QcUnidirectionalTrotter(Experiment):
             fit = {k: float(v) for k, v in per_qubit.get(name, {}).items()}
             fit["sink_p_max"] = sink_peak
             fit["n_round_count"] = float(analysis.get("n_round_count", 0))
+            # the ideal curves' inputs and the ideal sink peak, repeated on
+            # every row like sink_p_max — the number it is read against
+            for key in ("theta_first_rad", "theta_second_rad",
+                        "ideal_sink_p_max", "ideal_sink_n_at_max",
+                        "model_sink_p_max", "model_sink_n_at_max"):
+                fit[key] = float(analysis.get(key, float("nan")))
             result.fit[name] = fit
             own_ok = bool(np.isfinite(fit.get("p_max", float("nan"))))
             result.outcomes[name] = (Outcome.SUCCESSFUL if own_ok

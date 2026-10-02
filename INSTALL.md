@@ -35,7 +35,7 @@ actually running a measurement.**
 |---|---|---|---|
 | `<parent>\.venv-view` | `(view)` | scqo `[viewer]` + scqat + datasette + pytest — **no instrument libraries** | look at data (the common case): run-viewer, SQL browser, `scqo find`, `scqo tag`. Works identically on an analysis-only laptop/Mac. |
 | `<parent>\.venv-qblox` | `(qblox)` | the view stack + scqo-qblox + `qblox-scheduler==1.0.0b6` (hardware-proven) | measure on the Qblox cluster: `scqo run`, `scqo state` |
-| `<parent>\.venv-qm` | `(.venv-qm)` | pinned QM stack, py3.11 (`scqo-qm\requirements-qm.lock.txt`) + scqo/scqat/scqo-qm editables | measure on a Quantum Machines instrument (OPX1000 or OPX+) or use qualibrate — `qm.bat` activates it for you |
+| `<parent>\.venv-qm` | `(.venv-qm)` | pinned QM stack, py3.11 (`scqo-qm\requirements-qm.lock.txt`) + scqo/scqat/scqo-qm editables | measure on a Quantum Machines instrument (OPX1000 or OPX+) |
 
 All three import scqo/scqat from the same editable checkouts, so they never drift on
 the neutral layer. `uv` creates standard venvs and downloads Python itself if the

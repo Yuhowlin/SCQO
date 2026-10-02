@@ -207,7 +207,8 @@ class ResonatorSpectroscopyPowerAmp(Experiment):
         targets = self.params.targets
         top = float(self.params.max_power_dbm)
         rng = np.random.default_rng(stable_seed("resonator_spectroscopy_power_amp", *targets))
-        width = float(detuning[-1] - detuning[0])
+        # by VALUE: a positional span on a high -> low sweep mirrors the dip
+        width = float(np.ptp(detuning))
         center = float(detuning[0] + detuning[-1]) / 2
         kappa = width / 15
         i_data = np.empty((len(targets), power.size, detuning.size))
@@ -225,15 +226,15 @@ class ResonatorSpectroscopyPowerAmp(Experiment):
             # the high-power PLATEAU has to exist for the bare branch to be
             # measurable at all.
             lamb = 8.0e6  # Lamb shift g^2/Delta, dressed above bare
-            width = 1.0   # dB; saturation is sharp, so a bare PLATEAU is reached
+            knee_db = 1.0   # dB; saturation is sharp, so a bare PLATEAU is reached
             for j, p in enumerate(power):
-                center = dressed - lamb * 0.5 * (1.0 + np.tanh((p - knee_dbm) / width))
+                dip = dressed - lamb * 0.5 * (1.0 + np.tanh((p - knee_dbm) / knee_db))
                 # the dip also washes out as the resonator is driven hard, but
                 # saturating — it must stay fittable on the bare plateau, or the
                 # very points that define f_bare get rejected as outliers
                 walk = max(0.0, p - knee_dbm)
-                depth = 0.8 - 0.3 * 0.5 * (1.0 + np.tanh((p - knee_dbm) / width))
-                magnitude = 1.0 - depth / (1.0 + ((detuning - center) / kappa) ** 2)
+                depth = 0.8 - 0.3 * 0.5 * (1.0 + np.tanh((p - knee_dbm) / knee_db))
+                magnitude = 1.0 - depth / (1.0 + ((detuning - dip) / kappa) ** 2)
                 # like the real instrument, the measured |IQ| scales with the
                 # delivered amplitude — the prefactor relative to the window top
                 amp = 10.0 ** ((p - top) / 20.0)

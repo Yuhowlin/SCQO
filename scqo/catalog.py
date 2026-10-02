@@ -1,23 +1,26 @@
 """Kind catalogs — WHAT kinds of entities exist and WHICH fields each owns.
 
 The greenfield replacement for :mod:`scqo.categories` (docs/greenfield-schema.md
-sections 2, 6, 7). Three kind families share one field machinery:
+sections 2, 6, 7; the 4.0.0 store-by-line cutover is docs/store-by-line-plan.md).
+Four field families share one field machinery:
 
 * **mode kinds** — quantum degrees of freedom (``transmon`` .. ``resonator``);
 * **composite kinds** — named mode groups with joint physics (``qubit_pair``);
-* **channel kinds** — one signal on a line (``drive``/``readout``/``flux``/``pump``).
+* **channel kinds** — one signal on a line (``drive``/``readout``/``flux``/``pump``),
+  each with the fields of its CHANNEL (``<line>.<target>``) and, for flux, the
+  fields of the LINE itself (one DC offset, one delay, one set of distortion taps
+  per wire, however many targets ride it);
+* **operation fields** — a declared composite operation (``q1_q2.iswap``).
 
-The old two-category-slots-per-name routing is gone: every entity has exactly
-ONE kind, and a field's store follows its ROLE — ``fact`` -> physical.json,
-``knob`` -> scqo_state.json (pushed to the vendor, in declaration order),
-``monitor`` -> scqo_state.json (never pushed).
+Every entity has exactly ONE kind, and a field's store follows its ROLE —
+``fact`` -> physical.json, ``knob`` -> scqo_state.json (pushed to the vendor, in
+declaration order), ``monitor`` -> scqo_state.json (never pushed).
 
 The frozen ``DERIVATION`` table is the single (channel kind x target kind)
-authority: it names the derived single-mode operation, the rider suffix, and —
-by the ABSENCE of a row — what is illegal on both birth paths (a flux channel
-targeting a fixed transmon is a load error, not a pruned field). Composite
-operations are never here: they are DECLARED in the roster and carry the
-``OP_KNOBS`` per-operation field family.
+authority: it names the derived single-mode operation and — by the ABSENCE of a
+row — what is illegal (a flux channel targeting a fixed transmon is a load
+error, not a pruned field). Composite operations are never here: they are
+DECLARED in the roster and carry :data:`OPERATION_FIELDS`.
 
 Catalogs are assembled per kind by spreading a base dict and overriding — each
 kind owns its complete field list; there is no shared-facts inheritance tier.
@@ -64,8 +67,8 @@ class FieldSpec:
     #: (fabrication constants like the fluxonium junction count).
     design_only: bool = False
     #: float[] fields are intra-field sequences (waveform samples, filter
-    #: taps) — NEVER entity-aligned positions (per-target values on a
-    #: multi-target channel use the __<target> field grammar instead).
+    #: taps) — NEVER entity-aligned positions (a per-target value lives on
+    #: that target's channel, ``<line>.<target>``).
     shape: Shape = "float"
     #: Name of a same-catalog float[] partner that must stay equal-length
     #: (declared on ONE side of the pair; checked at store write).
@@ -108,8 +111,8 @@ class CompositeKind:
 
     Roles, member typing, and doctor checks belong to the KIND, not the
     section (``qubit_pair``'s high/low design-nominal ordering check does not
-    exist for a cat system). ``operations`` declared in the roster instantiate
-    the :data:`OP_KNOBS` family as full field names on the entity.
+    exist for a cat system). Each operation declared in the roster is an
+    entity of its own, ``<composite>.<op>``, carrying :data:`OPERATION_FIELDS`.
     """
 
     doc: str
@@ -119,13 +122,22 @@ class CompositeKind:
 
 @dataclass(frozen=True)
 class ChannelKind:
-    """Schema of one signal function riding a line."""
+    """Schema of one signal function riding a line.
+
+    ``fields`` belong to the CHANNEL ``<line>.<target>``; ``line_fields`` to the
+    LINE the channel rides - one value per wire however many targets share it
+    (only flux has any: a wire has one DC offset, one output delay and one
+    impulse response). ``designed_only`` names channel fields that are the
+    TARGET's own business and so exist only on its designed channel, never on
+    a borrowed one (the reset wait of a qubit, its parity monitor)."""
 
     doc: str
     fields: dict[str, FieldSpec]
-    #: Suffix the rider expansion appends to the target name (frozen: store
-    #: keys depend on it). None = never rider-derived (pump is explicit-only).
-    rider_suffix: str | None
+    #: True = a ``[lines.*]`` rider list may declare it; False = explicit
+    #: ``[channels.*]`` only (pump).
+    rider: bool = True
+    line_fields: dict[str, FieldSpec] = _field(default_factory=dict)
+    designed_only: frozenset[str] = frozenset()
     #: True = the channel may carry a ``via`` mediator ref (readout only).
     via_ok: bool = False
     #: True = a readout rider also mints the target's ``<t>_res`` resonator
@@ -318,8 +330,9 @@ COMPOSITES: dict[str, CompositeKind] = {
             "is an informational doctor warning only — ordering legitimately "
             "crosses during tuning). Which qubit moves in a gate is a "
             "per-operation vendor fact, never roster topology. A coupler's "
-            "STANDING bias is its own flux channel's idle_flux; per-gate "
-            "operating points live here via the OP_KNOBS family.",
+            "STANDING bias is its own flux LINE's idle_flux; per-gate "
+            "operating points live on each declared operation "
+            "(<pair>.<op>, OPERATION_FIELDS).",
         fields={
             "zz_hz": FieldSpec(
                 "Hz", "Signed residual ZZ at the standing idle point.",
@@ -356,10 +369,11 @@ COMPOSITES: dict[str, CompositeKind] = {
     ),
 }
 
-#: Per-operation knob family on composites: a declared operation <op>
-#: instantiates these as full field names <op>_<suffix> on the entity
-#: (compiled into the legal-field set — full names, never prefix matching).
-OP_KNOBS: dict[str, FieldSpec] = {
+#: The fields of a declared composite operation — the entity
+#: ``<composite>.<op>`` (``q1_q2.iswap.coupler_flux``). Addressed only through
+#: the operation, never by a ``q1.<field>`` shorthand, so these names may repeat
+#: a channel field (``drive_freq_hz``) without breaking default addressing.
+OPERATION_FIELDS: dict[str, FieldSpec] = {
     "coupler_flux": FieldSpec(
         "source-native", "Flux-activated gate operating point on the coupler "
                          "line (source-native unit).",
@@ -381,20 +395,35 @@ OP_KNOBS: dict[str, FieldSpec] = {
     # without its sample period is not physically interpretable — the same
     # ordering discipline as amp-before-power and duration-before-window.
     "waveform_dt_s": FieldSpec(
-        "s", "Sample period of <op>_waveform — mandatory companion so the "
-             "array is physically interpretable without vendor context.",
+        "s", "Sample period of the operation's waveform — mandatory companion "
+             "so the array is physically interpretable without vendor context.",
         role="knob"),
     "waveform": FieldSpec(
         "", "Optimized pulse samples (dimensionless DAC fraction).",
         role="knob", portable=False, shape="float[]"),
+    # A MONITOR, not a knob: the angle is what the gate's knobs (coupler
+    # amplitude, duration) produce, read back from a measurement - and it
+    # moves when the coupler drifts, so it is operating state, not a fact of
+    # the chip in the dark.
+    "theta_rad": FieldSpec(
+        "rad", "Per-application exchange angle of a swap-type operation, read "
+               "off the N-swap oscillation period at the compensating stark "
+               "amplitude (qc_n_stark_amp). Consulted by the chain analysis "
+               "for its ideal curves; never pushed.",
+        role="monitor"),
 }
 
 # ------------------------------------------------------------------ channels
 
 CHANNELS: dict[str, ChannelKind] = {
     "drive": ChannelKind(
-        doc="Charge/microwave drive aimed at one mode.",
-        rider_suffix="_xy",
+        doc="Charge/microwave drive aimed at one mode through one line. A mode "
+            "may be driven through ANY drive line: its designed channel comes "
+            "from the roster, every other one is BORROWED (a coupler through a "
+            "neighbour's line, a qubit through a foreign line) and needs no "
+            "declaration - which line it is, is part of the address "
+            "(xy2.q1_q2_c.pi_amp).",
+        designed_only=frozenset({"thermalization_time_s", "parity_delta_f_hz"}),
         fields={
             "drive_freq_hz": FieldSpec(
                 "Hz", "Drive frequency (operating CHOICE; the fact is the "
@@ -444,7 +473,6 @@ CHANNELS: dict[str, ChannelKind] = {
     "readout": ChannelKind(
         doc="Dispersive (or emission-collection) readout of one target, "
             "possibly frequency-multiplexed with others on the same line.",
-        rider_suffix="_ro",
         via_ok=True,
         mints_resonator=True,
         fields={
@@ -488,9 +516,6 @@ CHANNELS: dict[str, ChannelKind] = {
                     "readout settings.", role="monitor"),
             "fidelity_e": FieldSpec(
                 "", "P(assign e | prepared e).", role="monitor"),
-            "fidelity_f": FieldSpec(
-                "", "P(assign f | prepared f); three-state readout only.",
-                role="monitor"),
             "pos_g_i": FieldSpec("", "|g> blob center, I (acquisition frame).",
                                  role="monitor", portable=False),
             "pos_g_q": FieldSpec("", "|g> blob center, Q.", role="monitor",
@@ -499,49 +524,33 @@ CHANNELS: dict[str, ChannelKind] = {
                                  portable=False),
             "pos_e_q": FieldSpec("", "|e> blob center, Q.", role="monitor",
                                  portable=False),
-            "pos_f_i": FieldSpec("", "|f> blob center, I; three-state readout "
-                                     "only.", role="monitor", portable=False),
-            "pos_f_q": FieldSpec("", "|f> blob center, Q.", role="monitor",
-                                 portable=False),
         },
     ),
     "flux": ChannelKind(
-        doc="Standing flux bias of one target. Facts here are the DAC-plane "
-            "transfer function — per-TARGET (each target on a shared line has "
-            "its own), which is why they key on the channel, not the line.",
-        rider_suffix="_z",
-        fields={
+        doc="Standing flux bias through one line. The bias itself, the output "
+            "delay and the wire's impulse response belong to the LINE (one DC "
+            "offset per wire, however many SQUIDs it reaches); the DAC-plane "
+            "transfer function is per TARGET, on the channel <line>.<target>.",
+        line_fields={
             "idle_flux": FieldSpec(
                 "source-native",
-                "Standing bias set-point in the flux source's native unit "
-                "(volts for an AWG line, amperes for a coil). A coupler's "
-                "decouple point IS this knob on its own flux channel. It is "
-                "also the ORIGIN a '_pulse' flux experiment's swept window is "
+                "Standing bias set-point of this line in the flux source's "
+                "native unit (volts for an AWG line, amperes for a coil). A "
+                "coupler's decouple point IS this knob on its own flux line. It "
+                "is also the ORIGIN a '_pulse' flux experiment's swept window is "
                 "measured from (its probe plays on top of this bias).",
                 role="knob", portable=False),
             "flux_delay_s": FieldSpec(
-                "s", "Output-path delay of this flux line relative to the target's "
-                     "drive line, calibrated by qubit_xyz_delay so a Z pulse and "
-                     "the XY drive it accompanies arrive together. The vendor "
-                     "realization may be PORT-level (shared by everything on that "
-                     "DAC output), so it is per-line, not per-gate; a driver with "
-                     "no line-delay knob declares it Unrealized.",
+                "s", "Output-path delay of this flux line relative to its "
+                     "target's drive line, calibrated by qubit_xyz_delay so a Z "
+                     "pulse and the XY drive it accompanies arrive together. "
+                     "The vendor realization may be PORT-level (shared by "
+                     "everything on that DAC output); a driver with no "
+                     "line-delay knob declares it Unrealized.",
                 role="knob", portable=False),
-            "flux_offset": FieldSpec(
-                "source-native", "Sweet-spot offset of the transfer function "
-                                 "flux/Phi0 = (x - flux_offset)/flux_per_phi0, "
-                                 "where x is the ABSOLUTE set-point on the same "
-                                 "plane as idle_flux. An experiment whose sweep "
-                                 "axis is relative to idle_flux re-references "
-                                 "(absolute = idle_flux_at_run + fitted) before "
-                                 "writing here.",
-                role="fact", portable=False),
-            "flux_per_phi0": FieldSpec(
-                "source-native", "Source units per flux quantum on this "
-                                 "channel.", role="fact", portable=False),
             "distortion_amp": FieldSpec(
-                "", "Flux-transient predistortion tap amplitudes (measured "
-                    "cryo-wiring physics, per cooldown).",
+                "", "Flux-transient predistortion tap amplitudes of this line "
+                    "(measured cryo-wiring physics, per cooldown).",
                 role="fact", portable=False, shape="float[]",
                 paired_with="distortion_tau_s"),
             "distortion_tau_s": FieldSpec(
@@ -549,12 +558,28 @@ CHANNELS: dict[str, ChannelKind] = {
                      "distortion_amp).",
                 role="fact", portable=False, shape="float[]"),
         },
+        fields={
+            "flux_offset": FieldSpec(
+                "source-native", "Sweet-spot offset of the transfer function "
+                                 "flux/Phi0 = (x - flux_offset)/flux_per_phi0, "
+                                 "where x is the ABSOLUTE set-point on the same "
+                                 "plane as the line's idle_flux. An experiment "
+                                 "whose sweep axis is relative to idle_flux "
+                                 "re-references (absolute = idle_flux_at_run + "
+                                 "fitted) before writing here.",
+                role="fact", portable=False),
+            "flux_per_phi0": FieldSpec(
+                "source-native", "Source units of this line per flux quantum "
+                                 "in the target's SQUID.",
+                role="fact", portable=False),
+        },
     ),
     "pump": ChannelKind(
         doc="AC tone at a combination frequency activating a parametric "
-            "process. Explicit-only (no rider, no suffix); target may be a "
-            "mode, a composite, or a mode list.",
-        rider_suffix=None,
+            "process. Explicit-only ([channels.<name>], addressed as "
+            "<line>.<name>); target may be a mode, a composite, or a mode "
+            "list.",
+        rider=False,
         any_target=True,
         fields={
             "pump_freq_hz": FieldSpec("Hz", "Pump carrier frequency.",
@@ -601,22 +626,23 @@ def derived_op(channel_kind: str, target_kind: str) -> str | None:
     return DERIVATION[(channel_kind, target_kind)]
 
 
-def op_knob_fields(operation: str) -> dict[str, FieldSpec]:
-    """The full-name knob fields a declared composite operation instantiates
-    (e.g. 'cz' -> {'cz_coupler_flux': ..., 'cz_waveform': ...})."""
-    return {f"{operation}_{suffix}": spec for suffix, spec in OP_KNOBS.items()}
+#: Channel kinds a mode may use through a line that does not carry it by
+#: design (docs/store-by-line-plan.md section 2.2): drive only - a coupler
+#: through a neighbour's line, a qubit through a foreign line. Borrowing flux or
+#: readout waits for a writer.
+BORROWABLE: tuple[str, ...] = ("drive",)
 
 
-#: Every field name the static catalogs claim — the roster loader refuses a
-#: declared operation whose OP_KNOBS instantiation would collide with one
-#: (the cross-catalog uniqueness invariant behind `scqo set q1.<field>` must
-#: hold for roster-minted names too, and the import-time assert below cannot
-#: see those).
-ALL_STATIC_FIELDS: frozenset[str] = frozenset(
-    name
-    for family in (MODES, COMPOSITES, CHANNELS)
-    for spec in family.values()
-    for name in spec.fields)
+#: Every field name any catalog claims. Entity names must not collide with one:
+#: in the nested store files a key under a line or a composite is either one of
+#: its fields or a sub-entity (a channel target, an operation), and the two
+#: vocabularies may never overlap.
+ALL_FIELD_NAMES: frozenset[str] = frozenset(
+    [name for family in (MODES, COMPOSITES) for spec in family.values()
+     for name in spec.fields]
+    + [name for spec in CHANNELS.values()
+       for name in (*spec.fields, *spec.line_fields)]
+    + list(OPERATION_FIELDS))
 
 
 # ------------------------------------------------------------------- lints
@@ -640,6 +666,8 @@ def _validate_fields(owner: str, fields: dict[str, FieldSpec]) -> None:
             assert not (name.endswith(tok) and spec.unit != unit), (
                 f"{owner}.{name}: name token {tok!r} promises unit {unit!r}, "
                 f"got {spec.unit!r}")
+        assert "__" not in name and "." not in name, (
+            f"{owner}.{name}: '__' and '.' never appear in a field name")
         assert not (spec.design_ok and spec.role != "fact"), (
             f"{owner}.{name}: design_ok is a fact-only concept")
         assert not (spec.design_only and not spec.design_ok), (
@@ -651,7 +679,8 @@ def _validate_fields(owner: str, fields: dict[str, FieldSpec]) -> None:
                 f"float[] field")
             assert spec.shape == "float[]", (
                 f"{owner}.{name}: only float[] fields pair")
-        if spec.shape == "float[]" and name.endswith("_waveform"):
+        if spec.shape == "float[]" and (name == "waveform"
+                                        or name.endswith("_waveform")):
             assert f"{name}_dt_s" in fields, (
                 f"{owner}.{name}: a waveform array needs its _dt_s companion")
 
@@ -671,28 +700,40 @@ def _validate_catalog() -> None:
                 f"composites.{kind}.{role}: unknown kind in {rs.allows}")
     for kind, spec in CHANNELS.items():
         _validate_fields(f"channels.{kind}", spec.fields)
+        _validate_fields(f"channels.{kind} (line)", spec.line_fields)
         assert spec.via_ok is (kind == "readout"), (
             f"channels.{kind}: via is a readout-only structural key")
-        assert not (spec.any_target and spec.rider_suffix is not None), (
+        assert not (spec.any_target and spec.rider), (
             f"channels.{kind}: any-target channels are explicit-only")
-    _validate_fields("op_knobs", OP_KNOBS)
+        assert spec.designed_only <= set(spec.fields), (
+            f"channels.{kind}: designed_only names fields the kind lacks")
+        for name, fs in spec.line_fields.items():
+            assert fs.design_source is None, (
+                f"channels.{kind} (line).{name}: a line field has no target "
+                f"to seed from")
+    for kind in BORROWABLE:
+        assert kind in CHANNELS and CHANNELS[kind].rider, (
+            f"BORROWABLE names {kind!r}, which is not a rider channel kind")
+    _validate_fields("operations", OPERATION_FIELDS)
 
     # Facts never carry cross-setup semantics beyond their per-context store;
     # design_source is a channel-knob seeding concept.
     for owner, fields in (
             [(f"modes.{k}", s.fields) for k, s in MODES.items()]
-            + [(f"composites.{k}", s.fields) for k, s in COMPOSITES.items()]):
+            + [(f"composites.{k}", s.fields) for k, s in COMPOSITES.items()]
+            + [("operations", OPERATION_FIELDS)]):
         for name, spec in fields.items():
             assert spec.design_source is None, (
                 f"{owner}.{name}: design_source belongs to channel knobs")
 
     # The addressing invariant behind `scqo set q1.pi_amp`: no field name in
-    # two channel-kind catalogs, and none shared between mode and channel
-    # catalogs (a mode fact and a channel field with one name would make the
-    # qubit-closure resolution ambiguous).
+    # two channel kinds (channel or line level), and none shared between mode
+    # and channel catalogs - the q1.<field> shorthand walks q1, its designed
+    # channels and their lines, and must land on exactly one of them.
+    # OPERATION_FIELDS stay out: an operation is only ever addressed in full.
     seen: dict[str, str] = {}
     for kind, spec in CHANNELS.items():
-        for name in spec.fields:
+        for name in (*spec.fields, *spec.line_fields):
             assert name not in seen, (
                 f"field {name!r} appears in channel kinds {seen[name]} and "
                 f"{kind} — default addressing needs catalog-wide uniqueness")
@@ -703,14 +744,15 @@ def _validate_catalog() -> None:
         f"fields {sorted(overlap)} exist on both a mode and a channel kind")
 
     # The chain-reconcile anchor is unique by construction: at most one
-    # *_power_dbm knob per channel kind, and the op family must never mint
-    # one (a second anchor on one entity would make reconcile attribution
+    # *_power_dbm knob per channel kind, and an operation never carries one
+    # (a second anchor on one entity would make reconcile attribution
     # ambiguous — the RecordingDevice relies on this).
     for kind, spec in CHANNELS.items():
-        anchors = [f for f in spec.fields if f.endswith("_power_dbm")]
+        anchors = [f for f in (*spec.fields, *spec.line_fields)
+                   if f.endswith("_power_dbm")]
         assert len(anchors) <= 1, f"channels.{kind}: two chain anchors {anchors}"
-    assert not any(s.endswith("_power_dbm") for s in OP_KNOBS), (
-        "OP_KNOBS must not mint chain anchors")
+    assert not any(s.endswith("_power_dbm") for s in OPERATION_FIELDS), (
+        "OPERATION_FIELDS must not carry chain anchors")
 
     # Every DERIVATION row must reference declared kinds; pump has no rows.
     for (ch, mk) in DERIVATION:

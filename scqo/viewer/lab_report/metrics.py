@@ -21,9 +21,9 @@ of which change what a reader believes about the chip:
   is not backfilled from the readout channel's ``readout_freq_hz``, which
   ``readout_frequency`` deliberately moves off the |0> dip.
 * **A qubit is a qubit.** Channel and resonator names normalise onto their
-  target (``q1_xy`` -> ``q1``), but a COMPOSITE (``q1_q2``) is a different
-  entity and never folds into its first member — see
-  :func:`scqo.campaign_query.normalize_target_name`.
+  target (``xy1.q1`` -> ``q1``, ``q1_res`` -> ``q1``), but a COMPOSITE
+  (``q1_q2``) is a different entity and never folds into its first member —
+  see :func:`scqo.campaign_query.normalize_target_name`.
 """
 
 from __future__ import annotations
@@ -91,18 +91,36 @@ def qubit_sort_key(name: str):
 def discover_qubits(rows: list[dict]) -> list[str]:
     """The qubit-like targets these rows describe, sorted.
 
-    A row's entity is normalised onto its target, so ``q1``, ``q1_xy`` and
-    ``q1_res`` all name qubit ``q1``. A composite normalises to itself and is
-    NOT a qubit, so ``q1_q2`` contributes nothing here rather than silently
+    A row's entity is normalised onto its target, so ``q1``, ``xy1.q1`` (a
+    channel ``<line>.<target>``) and ``q1_res`` all name qubit ``q1``. A
+    composite normalises to itself and is NOT a qubit, so ``q1_q2`` (and its
+    operation ``q1_q2.iswap``) contributes nothing here rather than silently
     counting as ``q1``. An empty result stays empty: a context with no data
     reports no qubits, never an invented one.
     """
     seen: list[str] = []
     for row in rows:
-        base = normalize_target_name(row.get("entity", ""))
+        entity = row.get("entity", "")
+        base = normalize_target_name(entity.rpartition(".")[2] or entity)
         if base and base not in seen and base.startswith("q") and "_" not in base:
             seen.append(base)
     return sorted(seen, key=qubit_sort_key)
+
+
+def _channel_of(values: dict, q: str, field: str, *,
+                prefer: str | None = None) -> str | None:
+    """The channel ``<line>.<q>`` holding ``field`` in ``values`` (keyed
+    ``(entity, field)``). A qubit with more than one (driven through a
+    borrowed line as well) resolves to the one also holding ``prefer`` - its
+    DESIGNED channel carries the target-owned fields a borrowed one never
+    does - else the first by name."""
+    hits = sorted({e for (e, f) in values if f == field
+                   and e.rpartition(".")[2] == q and "." in e})
+    if prefer is not None:
+        preferred = [e for e in hits if (e, prefer) in values]
+        if preferred:
+            return preferred[0]
+    return hits[0] if hits else None
 
 
 def effective_temperature_mk(n_th: Any, f_q_ghz: float | None,
@@ -155,7 +173,20 @@ def extract_chip_metrics(ctx: dict, store: Any = None, data_root: Path | None = 
 
     per_qubit: dict[str, dict[str, Any]] = {}
     for q in qubits:
-        res, ro, xy, z = f"{q}_res", f"{q}_ro", f"{q}_xy", f"{q}_z"
+        res = f"{q}_res"
+        # The report is roster-free: a qubit's channels are found from the rows
+        # themselves - the entity <line>.<q> holding the field (4.0.0 names).
+        ro = (_channel_of(state, q, "fidelity_g")
+              or _channel_of(state, q, "readout_freq_hz"))
+        xy = _channel_of(state, q, "drive_freq_hz",
+                         prefer="thermalization_time_s")
+        # A line's own fields (the standing bias) name no qubit: the viewer
+        # supplies {qubit: flux line} from the roster; without it, the line of
+        # the qubit's flux channel found by its transfer-function facts.
+        z_channel = (_channel_of(phys, q, "flux_offset")
+                     or _channel_of(phys, q, "flux_per_phi0"))
+        z_line = ((ctx.get("flux_lines") or {}).get(q)
+                  or (z_channel.partition(".")[0] if z_channel else None))
         camp = campaign_stats.get(q, {})
 
         # f_dress0_hz ONLY. readout_freq_hz is the catalog's own counter-example
@@ -174,7 +205,8 @@ def extract_chip_metrics(ctx: dict, store: Any = None, data_root: Path | None = 
         # Tunable = the qubit HAS a flux idle point, by value. Key presence is
         # not evidence: _param_rows emits a row for every observed field, so an
         # unset knob on an existing z channel would otherwise read TRUE.
-        tunable = _num(state.get((z, "idle_flux"))) is not None or f_q_max_ghz is not None
+        tunable = (_num(state.get((z_line, "idle_flux"))) is not None
+                   or f_q_max_ghz is not None)
 
         t1_single_us = _us(phys.get((q, "t1_s")))
         t1_us, t1_err_us, t1_n = _stat_us(_campaign(camp, "t1_s", "t1"))

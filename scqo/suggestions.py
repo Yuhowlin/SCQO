@@ -26,8 +26,8 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from .catalog import FieldSpec
-from .device import CompositeView, EntityView
-from .entities import Composite
+from .device import EntityView, OperationView
+from .entities import Operation
 from .roster import Roster
 from .stores import Store, _current_operator, _now
 
@@ -247,11 +247,11 @@ def _capture_view_class(roster: Roster, name: str) -> type:
         ns["__init__"] = __init__
         ns["__setattr__"] = __setattr__
         base = EntityView
-        # Composites mirror the live surface EXACTLY — same base class (the
-        # isinstance-routing contract), same generic pair, same fact refusal
-        # — so pair update() code is oblivious to capture vs live.
-        if isinstance(e, Composite):
-            base = CompositeView
+        # Operations mirror the live surface EXACTLY — same base class (the
+        # isinstance-routing contract), same generic pair — so gate update()
+        # code is oblivious to capture vs live.
+        if isinstance(e, Operation):
+            base = OperationView
 
             def _knob_or_monitor(self, f):
                 spec = self._parent.roster.spec(self.name, f)
@@ -300,6 +300,23 @@ class SuggestionCapture:
         so update() is oblivious to capture vs live."""
         return self.component(self.roster.default_channel(target, kind))
 
+    def channel_on(self, line: str, target: str) -> EntityView:
+        """``target``'s channel on ``line``, designed or borrowed."""
+        return self.component(f"{line}.{target}")
+
+    def line(self, name: str) -> EntityView:
+        """One line's own fields (``capture.line("z1").idle_flux``)."""
+        return self.component(name)
+
+    def flux_line(self, target: str) -> EntityView:
+        """The line of ``target``'s designed flux channel."""
+        channel = self.roster.default_channel(target, "flux")
+        return self.component(self.roster.entities[channel].line)
+
+    def operation(self, composite: str, op: str) -> EntityView:
+        """One declared operation (``q1_q2.iswap``)."""
+        return self.component(f"{composite}.{op}")
+
     def resonator_of(self, target: str) -> str:
         """Topology passthrough, identical surface to the live device."""
         return self._device.resonator_of(target)
@@ -316,7 +333,7 @@ class SuggestionCapture:
             return self._physical.get(name, field)
         try:
             view = self._device.component(name)
-            if isinstance(view, CompositeView):
+            if isinstance(view, OperationView):
                 return view.read_knob(field)
             return getattr(view, field)
         except KeyError:

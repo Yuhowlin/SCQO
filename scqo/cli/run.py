@@ -3,13 +3,18 @@
     scqo run                                        # no arguments = show the menu
     scqo run resonator_spectroscopy --targets q1 --tag mytest --note "first try"
     scqo run qubit_ramsey --set num_points=201
+    scqo run qubit_ramsey --params my.toml          # parameters from a .toml/.json file
     scqo run resonator_spectroscopy --no-update     # analyze only, no writeback
     scqo run qubit_ramsey --targets q1 --preview    # render the sequence to files;
                                                     #   nothing runs, nothing saved
 
 Works from any directory in the right venv. Parameters: code defaults <
-~/.scqo/parameters.toml < --params/--set; see every knob with ``--help`` after the
-experiment name. ``--preview`` writes the vendor's own view of the sequence
+~/.scqo/parameters.toml < --params < --set; see every knob with ``--help`` after the
+experiment name. ``--params`` takes a file, read as TOML when it ends in ``.toml``
+and as JSON otherwise, with the keys at the top level (a relative path is resolved
+against the current directory), or an inline JSON object.
+
+``--preview`` writes the vendor's own view of the sequence
 (Qblox: interactive pulse diagram + timing table; QM: the generated QUA script
 plus, when the gateway answers, simulated output waveforms) to
 ./scqo_preview/<experiment>_<timestamp>/ and auto-opens it — redirect with

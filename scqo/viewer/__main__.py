@@ -5,7 +5,7 @@ is a machine-level, account-independent service: the launching account's persona
 ``~/.scqo/user.toml`` selection (device/setup) never affects what it serves. State
 files are per SETUP, found via each device's cooldown registry
 (``scqo.datastore.setup_state_path``). Ports:
-8001 qualibrate · 8080 THIS viewer · 8081 datasette (``python -m scqo.browse``).
+8080 THIS viewer · 8081 datasette (``python -m scqo.browse``).
 """
 
 from __future__ import annotations

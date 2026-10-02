@@ -9,7 +9,7 @@ driver stub ``probe()`` was added.
 
 FRAME (``_pulse`` in the name, ``FluxPulseSweepParameters`` in the schema):
 the z bias is a PULSE played during the idle delay and the DAC adds it to the
-standing bias, so the window is measured from the channel's ``idle_flux`` and
+standing bias, so the window is measured from the flux line's ``idle_flux`` and
 0 means "sit at the operating point". A T1 spectrum is therefore read as
 "coherence this far off the parked bias", which is the only reading that makes
 the T1 minimum at 0 meaningful. See :mod:`._capabilities.flux`.
@@ -24,8 +24,8 @@ from pydantic import Field
 
 from ..contract import DatasetContract
 from ._capabilities.flux import (
-    MAX_FLUX_PULSE_DESC,
-    MIN_FLUX_PULSE_DESC,
+    END_FLUX_PULSE_DESC,
+    START_FLUX_PULSE_DESC,
     FluxPulseSweepParameters,
     flux_anchor_v,
     flux_sweep,
@@ -55,8 +55,8 @@ class QubitRelaxationFluxPulseParameters(
     max_wait_ns: float = Field(40000.0, gt=0.0, description="Maximum idle delay.")
     num_wait_points: int = Field(51, gt=1, description="Number of wait time points.")
     # capability defaults narrowed to the coherence window (canonical text constants)
-    min_flux_v: float = Field(-0.08, description=MIN_FLUX_PULSE_DESC)
-    max_flux_v: float = Field(0.08, description=MAX_FLUX_PULSE_DESC)
+    start_flux_v: float = Field(-0.08, description=START_FLUX_PULSE_DESC)
+    end_flux_v: float = Field(0.08, description=END_FLUX_PULSE_DESC)
     prepare_state: int = Field(1, description="State to prepare (0 for g, 1 for e).")
 
 
@@ -76,7 +76,7 @@ class QubitRelaxationFluxPulse(Experiment):
 
     name: ClassVar[str] = "qubit_relaxation_flux_pulse"
     description: ClassVar[str] = (
-        "Sweep a Z PULSE amplitude — RELATIVE to the flux channel's idle_flux, "
+        "Sweep a Z PULSE amplitude — RELATIVE to the flux line's idle_flux, "
         "0 = stay parked — and a wait delay after excitation, fitting T1 decay "
         "at each flux point to map out the T1 spectrum. Record-only: the fits "
         "are saved, nothing is proposed."

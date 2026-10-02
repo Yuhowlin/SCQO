@@ -56,7 +56,7 @@ from ..report import (
     campaign_statistics_rows,
 )
 from ..datastore import SNAPSHOT_MANIFEST_FILE, setup_snapshot_dir
-from ..stores import PHYSICAL_FILE
+from ..stores import PHYSICAL_FILE, flatten_values
 
 
 def create_app(data_root: str | Path) -> FastAPI:
@@ -77,8 +77,41 @@ def create_app(data_root: str | Path) -> FastAPI:
         except (OSError, json.JSONDecodeError):
             return None
 
+    def _flux_lines(device: str) -> dict:
+        """``{mode: its designed flux line}`` from the device's roster, or {}
+        when the roster cannot be read. A line's own fields (a qubit's standing
+        bias, ``z1.idle_flux``) name no qubit, so the per-qubit report needs
+        this map; everything else in the viewer stays roster-free."""
+        try:
+            from ..roster import load_components
+
+            roster = load_components(Path(store.data_root) / device)
+        except Exception:
+            return {}
+        return {target: roster.entities[channel].line
+                for (target, kind), channel in roster.defaults.items()
+                if kind == "flux"}
+
+    def _v3_address(device: str) -> dict:
+        """``(3.x entity, field) -> (entity, field)`` for a device's pre-4.0.0
+        runs (:mod:`scqo.v3_names`, from its roster), or {} when the roster
+        cannot be read. A run record is immutable and keeps the 3.x names its
+        suggestions were captured with; comparing one against the CURRENT
+        values is the one place this viewer translates them."""
+        try:
+            from ..roster import load_components
+            from ..v3_names import v3_address_map
+
+            return v3_address_map(load_components(Path(store.data_root) / device))
+        except Exception:
+            return {}
+
     def _values_of(path: Path) -> dict:
-        return (_read_json(path) or {}).get("values", {})
+        """A values file as the flat {entity: {field: value}} every table here
+        reads: the file nests a channel under its line (``xy2`` -> ``q1_q2_c``)
+        and an operation under its composite, and flattening joins them with a
+        dot (``xy2.q1_q2_c``). Read-only and roster-free."""
+        return flatten_values((_read_json(path) or {}).get("values", {}))
 
     def _scqo_dir(dev: str, cooldown: str, setup: str) -> Path | None:
         """The (device, cooldown, setup) ``scqo/`` folder, or None when the stamps
@@ -277,9 +310,17 @@ def create_app(data_root: str | Path) -> FastAPI:
                              record.get("setup") or "")
         inst_sources, phys_sources = _context_sources(scqo_dir)
         on_device = []
+        v3: dict | None = None  # resolved on the first miss only
         for s in record.get("suggestions", []):
             sources = phys_sources if s.get("role") == "fact" else inst_sources
             src = sources.get(s.get("entity"), {}).get(s.get("field"))
+            if src is None and s.get("status") == "accepted":
+                # a pre-4.0.0 run names the 3.x channel (q1_xy): read the
+                # current value at the address it moved to
+                v3 = _v3_address(record["device"]) if v3 is None else v3
+                moved = v3.get((s.get("entity"), s.get("field")))
+                if moved is not None:
+                    src = sources.get(moved[0], {}).get(moved[1])
             if s.get("status") != "accepted" or src is None:
                 on_device.append(None)
             elif src["status"] == "run" and src["run_id"] == run_id:
@@ -406,7 +447,7 @@ def create_app(data_root: str | Path) -> FastAPI:
         state_data = _read_json(scqo_dir / STATE_FILE)
         authority, snapshot_run = "", None
         if state_data:
-            state_values = state_data.get("values") or {}
+            state_values = flatten_values(state_data.get("values") or {})
             authority = "state"
         elif own_latest:
             state_values = _read_json(_run_dir(own_latest) / "device_after.json") or {}
@@ -427,6 +468,7 @@ def create_app(data_root: str | Path) -> FastAPI:
                 "authority": authority, "snapshot_run": snapshot_run,
                 "latest_run": own_latest,
                 "state_rows": state_rows, "physical_rows": phys_rows,
+                "flux_lines": _flux_lines(device),
                 "state_path": str(scqo_dir / STATE_FILE)}
 
     @app.get("/setup/{device}/{cooldown}/{setup_name}", response_class=HTMLResponse)
@@ -571,7 +613,7 @@ def create_app(data_root: str | Path) -> FastAPI:
             if scqo_dir is None:
                 continue
             state_data = _read_json(scqo_dir / STATE_FILE) or {}
-            merge(state_rows, _param_rows(state_data.get("values") or {},
+            merge(state_rows, _param_rows(flatten_values(state_data.get("values") or {}),
                                           _latest_pairs(scqo_dir, "state"),
                                           INSTRUMENT_FIELD_ORDER))
             merge(phys_rows, _param_rows(_values_of(scqo_dir / PHYSICAL_FILE),
@@ -587,7 +629,8 @@ def create_app(data_root: str | Path) -> FastAPI:
                 "cooldown_error": cooldown_error, "authority": "unified",
                 "snapshot_run": None, "latest_run": None,
                 "state_rows": list(state_rows.values()),
-                "physical_rows": list(phys_rows.values()), "state_path": ""}
+                "physical_rows": list(phys_rows.values()),
+                "flux_lines": _flux_lines(device), "state_path": ""}
 
     # The lab's own characterization report (xlsx dashboard + pptx deck) is a
     # fenced-off subpackage — see scqo/viewer/lab_report/__init__.py for why.

@@ -4,7 +4,7 @@ The daily GUI is ``python -m scqo.viewer`` (port 8080); this serves datasette on
 for ad-hoc SQL, facets and CSV export, shipping canned queries (runs by tag / by
 target / failures / fitted-quantity trend) so nobody has to write JSON1 SQL by hand.
 
-Port convention: 8001 qualibrate / 8080 viewer / 8081 this datasette browser.
+Port convention: 8080 viewer / 8081 this datasette browser.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from .labconfig import load
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--port", type=int, default=8081,
-                        help="lab convention: 8081 (8080 = viewer, 8001 = qualibrate)")
+                        help="lab convention: 8081 (8080 = viewer)")
     parser.add_argument("--host", default="127.0.0.1",
                         help="bind address; 0.0.0.0 serves the lab LAN")
     parser.add_argument("--data-root", help="override the lab config's data_root")

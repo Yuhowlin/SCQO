@@ -57,7 +57,11 @@ from .device import entity_view, resonator_of
 #: Embedding format version. Bump ONLY for a change that makes an older
 #: dataset unreadable by :func:`load_frozen` (e.g. splitting the device
 #: snapshot into per-entity attrs to stay under the HDF5 attribute limit).
-SCHEMA = 1
+SCHEMA = 2
+#: The 3.x embedding: the same attrs, with the 3.x entity names (``q1_xy``).
+#: Still READ - run data is immutable, so a pre-4.0.0 dataset.nc keeps its
+#: old names forever and load_frozen translates them (scqo.v3_names).
+V3_SCHEMA = 1
 
 PREFIX = "scqo_"
 ATTR_SCHEMA = "scqo_schema"
@@ -284,7 +288,7 @@ class FrozenDevice:
     :func:`scqo.device.entity_view` hands out the very same view classes the
     live device uses: knob reads are strict (``KeyError`` when unset, which is
     how ``anchor()`` falls through to the design seed), monitor reads return
-    ``None`` when absent, composites route through ``read_knob``, facts are
+    ``None`` when absent, operations route through ``read_knob``, facts are
     refused with the physical-store pointer — none of it reimplemented here.
     """
 
@@ -311,6 +315,19 @@ class FrozenDevice:
 
     def channel(self, target: str, kind: str):
         return self.component(self.roster.default_channel(target, kind))
+
+    def channel_on(self, line: str, target: str):
+        return self.component(f"{line}.{target}")
+
+    def line(self, name: str):
+        return self.component(name)
+
+    def flux_line(self, target: str):
+        channel = self.roster.default_channel(target, "flux")
+        return self.component(self.roster.entities[channel].line)
+
+    def operation(self, composite: str, op: str):
+        return self.component(f"{composite}.{op}")
 
     def resonator_of(self, target: str) -> str:
         return resonator_of(self.roster, target)
@@ -383,18 +400,26 @@ def load_frozen(dataset, roster) -> FrozenInputs:
             f"acquisition-time snapshot, so estimate() has no inputs "
             f"(a run() override that calls estimate() directly instead of "
             f"Experiment.run_estimate() produces this)")
-    if int(schema) != SCHEMA:
+    if int(schema) not in (SCHEMA, V3_SCHEMA):
         raise MissingEmbeddedInputs(
             f"dataset.nc was embedded with {ATTR_SCHEMA}={int(schema)}, this "
-            f"scqo reads {SCHEMA} — run data is immutable, so the reader "
-            f"names the mismatch rather than guessing")
+            f"scqo reads {V3_SCHEMA} and {SCHEMA} — run data is immutable, so "
+            f"the reader names the mismatch rather than guessing")
 
     reads: list[tuple[str, str, str]] = []
     physical_values = _loads(dataset, ATTR_PHYSICAL, "physical facts")
+    device_values = _loads(dataset, ATTR_DEVICE, "the device snapshot")
+    if int(schema) == V3_SCHEMA:
+        # A pre-4.0.0 run: its snapshot names channels the 3.x way. Re-key it
+        # through the CURRENT roster (whose components.toml still says which
+        # rider produced every old name); what no longer maps is dropped, as a
+        # value the roster no longer has would be.
+        from .v3_names import translate_values
+        device_values = translate_values(device_values or {}, roster)[0]
+        if physical_values is not None:
+            physical_values = translate_values(physical_values, roster)[0]
     return FrozenInputs(
-        device=FrozenDevice(roster, _loads(dataset, ATTR_DEVICE,
-                                           "the device snapshot"),
-                            reads=reads),
+        device=FrozenDevice(roster, device_values, reads=reads),
         # None, not an empty store: `physical is None` is the standalone case
         # (no facts existed), and fact_sourced() skips the measured tier for
         # it — an empty store would silently answer "nothing measured".

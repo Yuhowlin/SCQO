@@ -5,8 +5,8 @@ half is byte-for-byte; what moved is the device surface and the field
 spellings: the flux-transfer facts land on the target's FLUX CHANNEL
 under their new names (``v_offset_v`` -> ``flux_offset``,
 ``v_per_phi0_v`` -> ``flux_per_phi0``), the sweet-spot idle point is
-two channel knobs (``idle_flux`` on the flux channel, ``readout_freq_hz``
-on the readout channel), and the dispersive physics (``f_bare_hz``,
+two knobs (``idle_flux`` on the flux LINE, ``readout_freq_hz`` on the
+readout channel), and the dispersive physics (``f_bare_hz``,
 ``g_hz``) goes on the attached RESONATOR mode.
 
 FRAME (no ``_pulse`` in the name, plain ``FluxSweepParameters``): the probe
@@ -375,8 +375,8 @@ class ResonatorSpectroscopyFluxResult(Result):
     ``assumed`` means f_bare_hz/g_hz are conditional on a placeholder detuning and are
     NOT proposed. ``update()`` proposes the
     physical facts on the qubit's flux channel (flux_offset/flux_per_phi0) and
-    resonator mode (f_bare_hz/g_hz), and two idle-point channel knobs:
-    ``idle_flux`` on the flux channel (= flux_offset; park at the sweet spot) and
+    resonator mode (f_bare_hz/g_hz), and two idle-point knobs:
+    ``idle_flux`` on the flux line (= flux_offset; park at the sweet spot) and
     ``readout_freq_hz`` on the readout channel (= sweet_spot_res_hz; read out at
     the resonator dip there)."""
 
@@ -393,11 +393,14 @@ class ResonatorSpectroscopyFlux(Experiment):
         "its flux dependence with a selectable model (analysis_method='dispersive' or "
         "'sine'); proposes the sweet-spot flux (flux_offset) + flux period "
         "(flux_per_phi0) as physical facts on the qubit's flux channel, and "
-        "sets the idle point at the sweet spot (the flux channel's "
+        "sets the idle point at the sweet spot (the flux line's "
         "idle_flux = flux_offset, the readout channel's readout_freq_hz = "
-        "resonator dip there). This is the BRING-UP seed for idle_flux, found "
-        "without needing a prior idle point; once the qubit answers, "
-        "qubit_spectroscopy_flux_pulse is the authority for that knob. "
+        "resonator dip there). One of three complementary ways to place a qubit "
+        "on its arch: this one needs no prior idle point and no visible qubit, "
+        "and its wide window gives the period, but it sees the qubit only through "
+        "the dispersive model; qubit_spectroscopy_flux_pulse maps the arch on the "
+        "qubit itself and qubit_ramsey_flux_pulse resolves it locally to kHz. "
+        "All three propose idle_flux. "
         "Plus bare f_bare_hz and coupling g_hz on the attached resonator mode "
         "when the dispersive method ran against a MEASURED arch top, auto-sourced "
         "per target from the standing drive_freq_hz, else the fab's "
@@ -424,7 +427,7 @@ class ResonatorSpectroscopyFlux(Experiment):
         detuning = coords["detuning_hz"]
         targets = self.params.targets
         rng = np.random.default_rng(stable_seed("resonator_spectroscopy_flux", *targets))
-        kappa = (detuning[-1] - detuning[0]) / 40
+        kappa = float(np.ptp(detuning)) / 40  # by value: the sweep may run high -> low
         i_data = np.empty((len(targets), flux.size, detuning.size))
         q_data = np.empty_like(i_data)
         for k, q in enumerate(targets):
@@ -559,8 +562,8 @@ class ResonatorSpectroscopyFlux(Experiment):
 
         Sweet-spot flux + flux period are always proposed (robust flux-periodicity,
         produced by every method) as ``flux_offset``/``flux_per_phi0`` on the
-        qubit's flux CHANNEL (PHYSICAL facts). Two pushed channel knobs set the
-        idle point at the sweet spot: the flux channel's ``idle_flux`` =
+        qubit's flux CHANNEL (PHYSICAL facts). Two pushed knobs set the
+        idle point at the sweet spot: the flux line's ``idle_flux`` =
         ``flux_offset`` (park at the upper sweet spot) and the readout channel's
         ``readout_freq_hz`` = ``sweet_spot_res_hz`` (read out at the resonator dip
         there — a later readout_frequency run refines it for fidelity).
@@ -591,15 +594,15 @@ class ResonatorSpectroscopyFlux(Experiment):
             for field in ("flux_offset", "flux_per_phi0"):
                 if field in fit:
                     setattr(flux_view, field, fit[field])
-            # Set up the idle point at the sweet spot — two pushed channel
-            # knobs: park the standing idle flux at the sweet-spot bias
-            # (idle_flux = flux_offset on the flux channel), and read out at the
+            # Set up the idle point at the sweet spot — two pushed knobs:
+            # park the standing idle flux at the sweet-spot bias
+            # (idle_flux = flux_offset, on the qubit's flux LINE), and read out at the
             # resonator dip there (readout_freq_hz = sweet_spot_res_hz on the
             # readout channel). The flux channel exists because an own-flux run
             # requires the flux_bias operation (the target is flux-tunable); a
             # later readout_frequency run refines readout_freq_hz.
             if "flux_offset" in fit:
-                flux_view.idle_flux = fit["flux_offset"]
+                self.device.flux_line(qubit).idle_flux = fit["flux_offset"]
             if "sweet_spot_res_hz" in fit:
                 self.device.channel(qubit, "readout").readout_freq_hz = (
                     fit["sweet_spot_res_hz"])

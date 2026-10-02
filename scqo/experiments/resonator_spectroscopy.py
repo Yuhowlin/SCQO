@@ -110,7 +110,8 @@ class ResonatorSpectroscopy(Experiment):
         targets = self.params.targets
         rng = np.random.default_rng(
             stable_seed("resonator_spectroscopy", *targets))
-        width = float(detuning[-1] - detuning[0])
+        # by VALUE: a positional span on a high -> low sweep mirrors the dip
+        width = float(np.ptp(detuning))
         center = float(detuning[0] + detuning[-1]) / 2
         kappa = width / 15
         i_data = np.empty((len(targets), detuning.size))

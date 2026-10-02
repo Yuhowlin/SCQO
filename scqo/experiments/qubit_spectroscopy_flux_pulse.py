@@ -12,7 +12,7 @@ the volts-to-flux transfer function lands on the target's FLUX CHANNEL as
 
 FRAME (``_pulse`` in the name, ``FluxPulseSweepParameters`` in the schema):
 the flux is a PULSE the DAC adds to the standing bias, so the window is
-measured from the channel's ``idle_flux`` and 0 means "stay parked".
+measured from the flux line's ``idle_flux`` and 0 means "stay parked".
 ``estimate()`` re-references the fitted excursion to an absolute set-point
 before writing ``flux_offset`` — see :mod:`._capabilities.flux`.
 """
@@ -55,7 +55,7 @@ class QubitSpectroscopyFluxPulseParameters(
 ):
     """Inputs for the qubit-frequency-vs-flux map.
 
-    The flux window is RELATIVE to the swept channel's ``idle_flux`` (the probe
+    The flux window is RELATIVE to the swept flux line's ``idle_flux`` (the probe
     plays a z pulse on top of the standing bias), so 0 means "stay parked".
     """
 
@@ -80,7 +80,7 @@ class QubitSpectroscopyFluxPulseResult(Result):
     ``flux_per_phi0``, ``ej_sum_hz`` (+ stderrs). ``update()`` proposes them
     as physical facts: ej_sum_hz/f_q_max_hz on the target mode,
     flux_offset/flux_per_phi0 on the target's flux channel — plus ``idle_flux``
-    on that channel, the one knob.
+    on that channel's LINE, the one knob.
 
     The window is idle-relative, so the sweet spot is reported TWICE, in the
     two frames, exactly as ``qubit_ramsey`` reports old/delta/new for the drive
@@ -102,15 +102,19 @@ class QubitSpectroscopyFluxPulse(Experiment):
         "2D qubit spectroscopy vs PULSED flux (bias applied only during the drive; "
         "readout at idle flux every slice, reduced against one global IQ reference): "
         "finds the 0-1 peak at every flux and fits the transmon arch. The flux "
-        "window is RELATIVE to the channel's idle_flux (0 = stay parked), so a "
+        "window is RELATIVE to the flux line's idle_flux (0 = stay parked), so a "
         "well-tuned qubit maps an arch centred on 0. Proposes sweet spot "
         "(flux_offset, absolute), flux period (flux_per_phi0) on the target's flux "
         "channel and ej_sum_hz/f_q_max_hz on the target mode as physical facts "
-        "(the Phase-3 EJ/EC inference inputs), plus idle_flux on the flux channel "
+        "(the Phase-3 EJ/EC inference inputs), plus idle_flux on the flux line "
         "— accepting it RE-PARKS the qubit at the measured sweet spot, so the next "
-        "map centres at 0. On a flux-tunable qubit this experiment is the "
-        "AUTHORITY for idle_flux (it measures the qubit itself); "
-        "resonator_spectroscopy_flux only seeds it during bring-up. A foreign "
+        "map centres at 0. One of three complementary ways to place a qubit on "
+        "its arch: this one maps the WHOLE arch and works with a short T2*, but "
+        "is linewidth-limited and reads a pulsed excursion ~8-15 % large; "
+        "resonator_spectroscopy_flux reads offset and period through the "
+        "resonator before the qubit is visible; qubit_ramsey_flux_pulse resolves "
+        "the local arch to kHz and uses this one's facts to set up. All three "
+        "propose idle_flux. A foreign "
         "flux_component (another qubit's z, a coupler's z) makes the run a "
         "RECORD-ONLY crosstalk/coupler-shift map — fits saved, zero "
         "suggestions."
@@ -163,7 +167,7 @@ class QubitSpectroscopyFluxPulse(Experiment):
             quan = (flux - sweet) / period
             f01_ghz = np.sqrt(8.0 * ec * ej_sum * np.abs(np.cos(np.pi * quan))) - ec
             centers = f01_ghz * 1e9 - f01_now  # as detuning
-            fwhm = (detuning[-1] - detuning[0]) / 40
+            fwhm = float(np.ptp(detuning)) / 40  # by value: the sweep may run high -> low
             noise = 0.02
             for j in range(flux.size):
                 peak = 1.0 / (1.0 + ((detuning - centers[j]) / (fwhm / 2)) ** 2)
@@ -265,7 +269,7 @@ class QubitSpectroscopyFluxPulse(Experiment):
                     setattr(flux_view, field, fit[field])
             # ... and the operating point itself: park at the measured sweet spot.
             if "flux_offset" in fit:
-                flux_view.idle_flux = fit["flux_offset"]
+                self.device.flux_line(qubit).idle_flux = fit["flux_offset"]
 
     def probe(self):  # pragma: no cover - driver half
         raise NotImplementedError("a driver backend supplies probe()")

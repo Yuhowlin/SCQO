@@ -28,13 +28,14 @@ from scqo.testing import (
 #: zero suggestions is their CORRECT outcome.
 RECORD_ONLY = {"qubit_sqrb", "qubit_tomography", "qubit_echo_flux_pulse",
                "qubit_relaxation_flux_pulse", "pair_swap_chevron", "pair_swap_flux_map",
-               "qc_n_swap_amp", "qc_n_stark_amp", "qc_swap_flux_stark",
+               "qc_n_swap_amp", "qc_swap_flux_stark",
                "qc_unidirectional_trotter",
                "crosstalk_compensated_sqrb",
                "pair_swap_angle", "qc_trotter_compensation",
                "qubit_t1_ade", "qubit_t1_bayesian",
                "broadband_resonator_spectroscopy", "broadband_qubit_spectroscopy",
-               "qubit_parametric_drive_amp", "qubit_parametric_drive_time"}
+               "qubit_parametric_drive_amp", "qubit_parametric_drive_time",
+               "qubit_resonator_stark"}
 
 
 #: the readout reference an accepted single_shot_readout would have left behind.
@@ -86,9 +87,13 @@ TROTTER_DEFAULTS = {"qc_unidirectional_trotter": {
         "first_pair": FIRST_STEP, "second_pair": SECOND_STEP, "reset_qubit": "q1",
         "compensation_target": "q0", "compensation_amps": {"q2": 0.25}}}
 
+#: the swap spectroscopy has no default ramp - its far end comes from the crossing
+#: scan (refused by name without one); 0.14 V is 5Q4C q1_q2's.
+COUPLER_SWAP_DEFAULTS = {"pair_coupler_spectroscopy_swap": {"ramp_v": [0.0, 0.14]}}
+
 #: what the module fixture runs on; _fresh_parity_session keeps the parity-only set.
 OFFLINE_DEFAULTS = {**PARITY_DEFAULTS, **PARAMETRIC_TIME_DEFAULTS,
-                    **TROTTER_DEFAULTS}
+                    **TROTTER_DEFAULTS, **COUPLER_SWAP_DEFAULTS}
 
 
 @pytest.fixture(scope="module")
@@ -102,14 +107,14 @@ def session(tmp_path_factory):
                 device_name="chipT", setup_name="sim",
                 cooldown_id="cd1",
                 parameter_defaults=OFFLINE_DEFAULTS)
-    s.set_values({f"{q}_ro.{field}": value
+    s.set_values({f"fl.{q}.{field}": value
                   for q in CHAIN_QUBITS
                   for field, value in REFERENCE_BLOBS.items()})
     # the parity-switch monitors REFUSE without a governed depletion wait (the
     # shot cadence is their telegraph timebase) and a stored parity splitting
     # (their fixed idle). 250 kHz -> idle = 1 / (2 x 250 kHz) = 2000 ns, on-grid.
-    s.set_values({f"{q}_ro.readout_depletion_s": 1e-6 for q in CHAIN_QUBITS})
-    s.set_values({f"{q}_xy.parity_delta_f_hz": 250e3 for q in CHAIN_QUBITS})
+    s.set_values({f"fl.{q}.readout_depletion_s": 1e-6 for q in CHAIN_QUBITS})
+    s.set_values({f"xy_{q}.{q}.parity_delta_f_hz": 250e3 for q in CHAIN_QUBITS})
     return s
 
 
@@ -245,6 +250,99 @@ def test_parametric_drive_amp_finds_the_seeded_resonance(session):
     assert 0.0 < fit["best_fwhm_hz"] < 0.25 * span
 
 
+def _stark_session(tmp_path, *, depletion=True):
+    """A one-qubit session seeded like the module fixture, with the depletion
+    knob individually controllable (the refusal test needs it absent)."""
+    roster = demo_components(tunable=True)
+    design = demo_design(roster)
+    vendor = InMemoryDevice(roster, demo_vendor_state(roster, design))
+    s = Session(SimulatedBackend(vendor), roster, design=design,
+                scqo_dir=tmp_path / "scqo", data_root=tmp_path / "data",
+                device_name="chipT", setup_name="sim", cooldown_id="cd1")
+    if depletion:
+        s.set_values({"fl.q0.readout_depletion_s": 1e-6})
+    return s
+
+
+def test_resonator_stark_recovers_the_planted_shift(session):
+    """The sim pulls the line down by ``pull * (a / a_max)**2``. The reported shift
+    per amp_prefactor**2 must come back as ``-pull / a_max**2`` — the Stark shift
+    at the calibrated readout_amp — with the zero-photon line where it was planted
+    and no row lost to a width gate (the line broadens with the power by design)."""
+    from scqo.experiments._sim import stable_seed
+
+    out = session.run("qubit_resonator_stark", {"targets": ["q0"]}, update="none")
+    assert out.get("error") is None, out.get("error")
+    assert out["outcomes"]["q0"] == "successful"
+    fit = out["fit"]["q0"]
+
+    p = registry.get("qubit_resonator_stark").Parameters(targets=["q0"])
+    low, high = window_bounds(p.start_drive_detuning_hz, p.end_drive_detuning_hz)
+    width = high - low
+    # redraw what simulate() hid for this seeded target, in its draw order
+    rng = np.random.default_rng(stable_seed("qubit_resonator_stark", "q0"))
+    f0 = high - rng.uniform(0.2, 0.35) * width
+    pull = rng.uniform(0.25, 0.45) * width
+    # the sim's a_max is the window's LARGEST |amplitude|, whichever edge it is
+    a_max = max(abs(p.start_amp_factor), abs(p.end_amp_factor))
+    assert fit["stark_shift_at_readout_hz"] == pytest.approx(
+        -pull / a_max ** 2, rel=0.03)
+    assert fit["zero_photon_detuning_hz"] == pytest.approx(f0, abs=0.3e6)
+    assert fit["zero_photon_freq_hz"] == pytest.approx(
+        fit["old_drive_freq_hz"] + fit["zero_photon_detuning_hz"])
+    assert fit["n_rows_fit"] == p.num_amp_points
+    assert fit["broadening_at_readout_hz"] > 0
+    assert fit["stark_hz_per_amp2"] == pytest.approx(
+        fit["stark_shift_at_readout_hz"] / fit["old_readout_amp"] ** 2)
+    # no chi_hz on this device: no photon number, and a NaN rather than a guess
+    assert math.isnan(fit["n_readout"]) and math.isnan(fit["chi_hz_used"])
+
+
+def test_resonator_stark_converts_to_photons_with_the_stored_chi(tmp_path):
+    """chi_hz = (f_dress0 - f_dress1)/2 > 0 pulls the qubit DOWN by 2*chi per
+    photon, so the sim's downward shift must read as a POSITIVE photon number."""
+    s = _stark_session(tmp_path)
+    s.set_values({"q0_res.chi_hz": 0.5e6})
+    out = s.run("qubit_resonator_stark", {"targets": ["q0"]}, update="none")
+    assert out.get("error") is None, out.get("error")
+    fit = out["fit"]["q0"]
+    assert fit["chi_hz_used"] == pytest.approx(0.5e6)
+    assert fit["n_readout"] == pytest.approx(
+        fit["stark_shift_at_readout_hz"] / (-2 * 0.5e6))
+    assert fit["n_readout"] > 0
+    assert fit["photons_per_amp2"] == pytest.approx(
+        fit["n_readout"] / fit["old_readout_amp"] ** 2)
+
+
+def test_resonator_stark_refuses_an_ungoverned_depletion_before_acquiring(tmp_path):
+    """The Stark photons must be gone before the readout, so a wait nobody governed
+    is refused by name in define_sweep — before the drive-power boundary, before
+    any instrument time — and the per-run override is the named way out."""
+    s = _stark_session(tmp_path, depletion=False)
+    out = s.run("qubit_resonator_stark", {"targets": ["q0"]}, update="none")
+    assert "no governed depletion wait for q0" in str(out.get("error"))
+    ok = s.run("qubit_resonator_stark",
+               {"targets": ["q0"], "readout_depletion_ns": 800.0}, update="none")
+    assert ok.get("error") is None, ok.get("error")
+
+
+def test_resonator_stark_records_the_timing_that_played(session):
+    """dataset.nc carries the resolved windows, so the run folder alone says how
+    long the tone rang up and how long the readout waited."""
+    import xarray as xr
+
+    from scqo.estimate_inputs import acquisition_note
+
+    out = session.run("qubit_resonator_stark", {"targets": ["q0"], "drive_len_ns": 2000.0},
+                      update="none")
+    assert out.get("error") is None, out.get("error")
+    with xr.open_dataset(f"{out['data_path']}/dataset.nc") as ds:
+        windows = acquisition_note(ds, "stark_windows")
+    # the module fixture governs readout_depletion_s = 1 us
+    assert windows == {"ring_up_ns": 1000.0, "drive_len_ns": 2000.0,
+                       "tone_len_ns": 3000.0, "depletion_ns": 1000.0}
+
+
 def _sweep(session, name, **params):
     """define_sweep straight off the experiment, no acquisition."""
     cls = registry.get(name)
@@ -319,12 +417,12 @@ def test_qubit_sqrb_discriminated_end_to_end(session):
 
 def test_qubit_spectroscopy_writes_channel_knob_and_mode_fact(session):
     assert _suggest(session, "qubit_spectroscopy") == {
-        ("q0_xy", "drive_freq_hz"), ("q0", "f_01_hz")}
+        ("xy_q0.q0", "drive_freq_hz"), ("q0", "f_01_hz")}
 
 
 def test_ramsey_writes_drive_freq_fact_twin_and_t2(session):
     assert _suggest(session, "qubit_ramsey") == {
-        ("q0_xy", "drive_freq_hz"), ("q0", "f_01_hz"), ("q0", "t2_star_s")}
+        ("xy_q0.q0", "drive_freq_hz"), ("q0", "f_01_hz"), ("q0", "t2_star_s")}
 
 
 def test_ramsey_moves_the_drive_toward_the_qubit(session):
@@ -365,7 +463,7 @@ def test_drag_writes_the_knob_of_the_target_gate(session, name, gate, knob):
     the x90 branch crashed on QM and leaked KeyError on the strict views)."""
     out = session.run(name, {"targets": ["q0"], "target_gate": gate})
     assert out.get("error") is None, out.get("error")
-    assert {(s["entity"], s["field"]) for s in out["suggestions"]} == {("q0_xy", knob)}
+    assert {(s["entity"], s["field"]) for s in out["suggestions"]} == {("xy_q0.q0", knob)}
 
 
 def test_drag_target_gate_rejects_unnormalized_spellings(session):
@@ -378,10 +476,11 @@ def test_drag_target_gate_rejects_unnormalized_spellings(session):
 
 def test_flux_map_writes_the_sweet_spot_on_the_flux_channel(session):
     """The sweet spot + period always, and the dispersive physics too because the
-    demo qubit HAS a standing drive_freq_hz to anchor f_q_max on."""
+    demo qubit HAS a standing drive_freq_hz to anchor f_q_max on. The transfer
+    function lands on the flux channel, the re-parked bias on the flux LINE."""
     assert _suggest(session, "resonator_spectroscopy_flux") == {
-        ("q0_z", "idle_flux"), ("q0_z", "flux_offset"),
-        ("q0_z", "flux_per_phi0"), ("q0_ro", "readout_freq_hz"),
+        ("z_q0", "idle_flux"), ("z_q0.q0", "flux_offset"),
+        ("z_q0.q0", "flux_per_phi0"), ("fl.q0", "readout_freq_hz"),
         ("q0_res", "f_bare_hz"), ("q0_res", "g_hz"), ("q0_res", "g_coeff")}
 
 
@@ -414,8 +513,8 @@ def test_flux_map_withholds_dispersive_physics_without_an_arch_anchor(tmp_path, 
     assert out.get("error") is None, out.get("error")
     assert out["fit"]["q0"]["f_q_max_source"] == "assumed"
     assert {(sg["entity"], sg["field"]) for sg in out["suggestions"]} == {
-        ("q0_z", "idle_flux"), ("q0_z", "flux_offset"),
-        ("q0_z", "flux_per_phi0"), ("q0_ro", "readout_freq_hz")}
+        ("z_q0", "idle_flux"), ("z_q0.q0", "flux_offset"),
+        ("z_q0.q0", "flux_per_phi0"), ("fl.q0", "readout_freq_hz")}
 
 
 def test_flux_map_f_q_max_falls_back_to_the_fab_resistance(tmp_path, monkeypatch):
@@ -554,8 +653,8 @@ def test_flux_map_projects_a_detuned_park_up_to_the_arch_top(tmp_path):
     f_q_max_plain = plain["fit"]["q0"]["f_q_max_hz"]
 
     # store an arch whose sweet spot is a sixth of a period from the park
-    idle = float(s.device.channel("q0", "flux").idle_flux)
-    s.set_values({"q0_z.flux_offset": idle + 0.1, "q0_z.flux_per_phi0": 0.6})
+    idle = float(s.device.flux_line("q0").idle_flux)
+    s.set_values({"z_q0.q0.flux_offset": idle + 0.1, "z_q0.q0.flux_per_phi0": 0.6})
     detuned = s.run("resonator_spectroscopy_flux", {"targets": ["q0"]}, update="none")
     fit = detuned["fit"]["q0"]
     assert fit["f_q_max_source"] == F_Q_MAX_DRIVE_ARCH
@@ -650,7 +749,7 @@ def test_punchout_writes_the_operating_point_and_both_branches(session, name):
     g_coeff. Both mechanisms (fast amplitude sweep, chain-stepped) are one
     measurement and must agree on what they write."""
     assert _suggest(session, name) == {
-        ("q0_ro", "readout_power_dbm"), ("q0_ro", "readout_freq_hz"),
+        ("fl.q0", "readout_power_dbm"), ("fl.q0", "readout_freq_hz"),
         ("q0_res", "f_bare_hz"), ("q0_res", "f_dress0_hz"),
         ("q0_res", "g_hz"), ("q0_res", "g_coeff")}
 
@@ -801,18 +900,19 @@ def test_fact_helper_precedence(session):
 
 
 def test_pair_zz_writes_coupler_idle_and_pair_fact(session):
+    """The decouple point is the coupler's flux LINE's idle_flux."""
     assert _suggest(session, "pair_zz_coupler", target="q0_q1") == {
-        ("q0_q1_c_z", "idle_flux"), ("q0_q1", "zz_hz")}
+        ("zc_q0_q1", "idle_flux"), ("q0_q1", "zz_hz")}
 
 
 def test_ramsey_cryoscope_writes_the_paired_distortion_taps(session):
-    """The cryoscope proposes ONLY the flux channel's paired distortion facts,
+    """The cryoscope proposes ONLY the flux line's paired distortion facts,
     and the two arrays are proposed with equal length (the paired-array
     invariant the accept batches together)."""
     out = session.run("qubit_ramsey_cryoscope", {"targets": ["q0"]})
     assert out.get("error") is None, out.get("error")
     assert {(s["entity"], s["field"]) for s in out["suggestions"]} == {
-        ("q0_z", "distortion_amp"), ("q0_z", "distortion_tau_s")}
+        ("z_q0", "distortion_amp"), ("z_q0", "distortion_tau_s")}
     after = {s["field"]: s["after"] for s in out["suggestions"]}
     assert len(after["distortion_amp"]) == len(after["distortion_tau_s"]) > 0
 
@@ -834,23 +934,23 @@ def test_ramsey_cryoscope_fit_values_are_physical(session):
 
 
 def test_ramsey_cryoscope_accept_roundtrips_paired_facts(session):
-    """Accepting lands both arrays on the flux channel with equal length —
+    """Accepting lands both arrays on the flux line with equal length —
     exercising the per-entity paired batch apply end to end."""
     out = session.run("qubit_ramsey_cryoscope", {"targets": ["q1"]})
     summary = session.accept(out["run_id"])
     assert not summary["errors"]
-    physical = session.physical_state()["q1_z"]
+    physical = session.physical_state()["z_q1"]
     assert physical["distortion_amp"] is not None
     assert len(physical["distortion_amp"]) == len(physical["distortion_tau_s"]) > 0
 
 
 def test_spectroscopy_cryoscope_writes_the_paired_distortion_taps(session):
-    """The long-time spectroscopy cryoscope proposes the SAME paired flux-channel
+    """The long-time spectroscopy cryoscope proposes the SAME paired flux-line
     distortion facts as the Ramsey one, with equal length."""
     out = session.run("qubit_spectroscopy_cryoscope", {"targets": ["q0"]})
     assert out.get("error") is None, out.get("error")
     assert {(s["entity"], s["field"]) for s in out["suggestions"]} == {
-        ("q0_z", "distortion_amp"), ("q0_z", "distortion_tau_s")}
+        ("z_q0", "distortion_amp"), ("z_q0", "distortion_tau_s")}
     after = {s["field"]: s["after"] for s in out["suggestions"]}
     assert len(after["distortion_amp"]) == len(after["distortion_tau_s"]) > 0
 
@@ -898,12 +998,12 @@ def test_cryoscope_fit_tau_seeds_flow_through_and_validate(session):
 
 
 def test_spectroscopy_cryoscope_accept_roundtrips_paired_facts(session):
-    """Accepting lands both arrays on the flux channel with equal length — the same
+    """Accepting lands both arrays on the flux line with equal length — the same
     paired batch apply the Ramsey cryoscope uses (REPLACE, last-writer-wins)."""
     out = session.run("qubit_spectroscopy_cryoscope", {"targets": ["q1"]})
     summary = session.accept(out["run_id"])
     assert not summary["errors"]
-    physical = session.physical_state()["q1_z"]
+    physical = session.physical_state()["z_q1"]
     assert physical["distortion_amp"] is not None
     assert len(physical["distortion_amp"]) == len(physical["distortion_tau_s"]) > 0
 
@@ -957,10 +1057,10 @@ def test_cryoscope_prints_the_apply_hint_on_writeback(session, capsys, monkeypat
 
 def test_spectroscopy_cryoscope_window_and_drive_len_validation():
     """The detuning window is the drive_detuning capability's explicit
-    [start, end] range (asymmetric allowed, edges in either order, axis always
-    emitted ascending), and the spectroscopy tone's shape parameters carry their
-    own bounds (drive_len_ns on the 4 ns grid at or above 16 ns). define_sweep
-    reads only params, so a stub backend exercises it."""
+    [start, end] traversal (asymmetric allowed, either direction, swept in the
+    order given), and the spectroscopy tone's shape parameters carry their own
+    bounds (drive_len_ns on the 4 ns grid at or above 16 ns). define_sweep reads
+    only params, so a stub backend exercises it."""
     cls = registry.get("qubit_spectroscopy_cryoscope")
 
     # the default window reproduces the old symmetric +/-100 MHz, 101 points
@@ -969,21 +1069,21 @@ def test_spectroscopy_cryoscope_window_and_drive_len_validation():
     assert det[0] == pytest.approx(-100e6) and det[-1] == pytest.approx(100e6)
     assert det.size == 101
 
-    # an asymmetric, one-sided window flows through ascending
+    # an asymmetric, one-sided window flows through as given
     asym = cls(SimpleNamespace(device=None),
                cls.Parameters(targets=["q0"], start_drive_detuning_hz=-70e6,
                               end_drive_detuning_hz=0.0, num_drive_freq_points=71))
     det = asym.define_sweep()["detuning_hz"]
     assert det[0] == pytest.approx(-70e6) and det[-1] == pytest.approx(0.0)
     assert det.size == 71
-    assert np.all(np.diff(det) > 0)  # ascending — peak_fit's gamma bound needs it
+    assert np.all(np.diff(det) > 0)
 
-    # the SAME window written the other way round is the same measurement: the
-    # edges define the window, the axis is normalised ascending either way
+    # the same window written high -> low is swept high -> low (2026-09-26):
+    # the same points, walked the other way, never re-sorted
     rev = cls(SimpleNamespace(device=None),
               cls.Parameters(targets=["q0"], start_drive_detuning_hz=0.0,
                              end_drive_detuning_hz=-70e6, num_drive_freq_points=71))
-    assert rev.define_sweep()["detuning_hz"] == pytest.approx(det)
+    assert rev.define_sweep()["detuning_hz"] == pytest.approx(det[::-1])
 
     # only a zero-width window is refused
     with pytest.raises(ValueError, match="zero-width"):
@@ -1153,7 +1253,8 @@ BROKEN_CHAINS = [
       "swap_coupler_flux": {"q0_q1": 0.04}}, "whose operation is 'idle'"),
     # the channel-existence gates: a resonator mode has neither a z line to
     # play the parametric reset on, nor an xy line for a Stark tone; the tracked
-    # coupler has flux but no drive, so it isolates the second gate alone.
+    # coupler has flux but no DESIGNED drive (its borrowed xy channels are never
+    # a default), so it isolates the second gate alone.
     ({"reset_qubit": "q0_res"}, "no flux channel"),
     ({"compensation_amps": {"q0_q1_c": 0.2}}, "no drive channel"),
 ]
@@ -1195,6 +1296,170 @@ def test_unidirectional_trotter_idle_step_stops_the_transport(session):
     assert _trotter(session, max_rounds=12)["fit"][source]["p_final"] < 0.1
 
 
+def _ideal_sink_peak(rounds, theta_first, theta_second):
+    """The closed-form ideal sink maximum over ``rounds`` — computed here, not
+    imported, so the experiment and this check are two implementations."""
+    c1, c2 = math.cos(theta_first), math.cos(theta_second)
+    best = 0.0
+    for m in rounds:
+        amp = (math.sin(theta_first) * math.sin(theta_second)
+               * sum(c2 ** (m - 1 - j) * c1 ** j for j in range(m)))
+        best = max(best, amp ** 2)
+    return best
+
+
+def test_n_stark_amp_proposes_the_swap_angle_on_its_operation(session):
+    """The period angle is the swap operation's theta_rad MONITOR: proposed on
+    <pair>.<swap_operation>, the value the fit reports, never a knob push."""
+    out = session.run("qc_n_stark_amp",
+                      {"targets": ["q0_q1"], "swap_operation": "iswap"})
+    assert out.get("error") is None, out.get("error")
+    fit = out["fit"]["q0_q1"]
+    assert fit["osc_criteria_agree"] == 1.0 and fit["min_osc_period"] >= 2.0
+    rows = [s for s in out["suggestions"] if s["entity"] == "q0_q1.iswap"]
+    assert [(s["field"], s["role"]) for s in rows] == [("theta_rad", "monitor")]
+    assert rows[0]["after"] == pytest.approx(fit["compensating_theta_rad"])
+
+
+def test_n_stark_amp_proposes_nothing_for_an_undeclared_operation(session, capsys):
+    """An operation the roster does not declare has no entity to hold the angle:
+    the run succeeds, proposes nothing, and says how to declare it."""
+    out = session.run("qc_n_stark_amp",
+                      {"targets": ["q0_q1"], "swap_operation": "partial_swap"})
+    assert out.get("error") is None, out.get("error")
+    assert math.isfinite(out["fit"]["q0_q1"]["compensating_theta_rad"])
+    assert out["suggestions"] == []
+    assert "q0_q1.partial_swap is not declared" in capsys.readouterr().err
+
+
+#: the declared operation both steps play in the ideal-curve tests, and the
+#: angles recorded on it (distinct, so a swapped pair would be caught).
+IDEAL_ANGLES = {"q0_q1": 0.35, "q1_q2": 0.55}
+
+
+def _trotter_on_iswap(session, **params):
+    session.set_values({f"{pair}.iswap.theta_rad": theta
+                        for pair, theta in IDEAL_ANGLES.items()})
+    steps = {"first_pair": _step("q0_q1", "iswap"),
+             "second_pair": _step("q1_q2", "iswap")}
+    return _trotter(session, max_rounds=20, **{**steps, **params})
+
+
+def test_unidirectional_trotter_draws_the_ideal_from_the_operation_angles(session):
+    """Each step's angle is its operation's theta_rad monitor, and the ideal
+    sink peak is the closed form over the run's own round axis."""
+    out = _trotter_on_iswap(session)
+    fit = out["fit"][CHAIN_QUBITS[0]]
+    assert fit["theta_first_rad"] == IDEAL_ANGLES["q0_q1"]
+    assert fit["theta_second_rad"] == IDEAL_ANGLES["q1_q2"]
+    assert fit["ideal_sink_p_max"] == pytest.approx(
+        _ideal_sink_peak(range(21), *IDEAL_ANGLES.values()))
+    figure = next(Path(p) for p in session.load_run(out["run_id"])["figures"]
+                  if Path(p).name == "qc_unidirectional_trotter.png")
+    import xarray as xr
+    with xr.open_dataset(figure.parent
+                         / "qc_unidirectional_trotter_plotdata.nc") as plot:
+        ideal = plot["ideal_population"]
+        assert np.isfinite(ideal.sel(qubit=CHAIN_QUBITS[0]).values).all()
+        assert np.isfinite(ideal.sel(qubit=CHAIN_QUBITS[2]).values).all()
+
+
+def test_unidirectional_trotter_ideal_needs_a_declared_measured_angle(session, capsys):
+    """The default chain plays 'partial_swap', which the demo roster does not
+    declare: no angle, no ideal curve, and stderr says which operation."""
+    fit = _trotter(session, max_rounds=6)["fit"][CHAIN_QUBITS[0]]
+    assert math.isnan(fit["theta_first_rad"]) and math.isnan(fit["ideal_sink_p_max"])
+    assert "q0_q1.partial_swap is not declared" in capsys.readouterr().err
+
+
+def test_unidirectional_trotter_idle_step_is_angle_zero(session):
+    """An idle step plays no swap, so its angle is 0 by definition — no monitor
+    needed — and an idle second step leaves the ideal sink empty."""
+    out = _trotter_on_iswap(session, second_pair=_step("q1_q2", "idle"))
+    fit = out["fit"][CHAIN_QUBITS[0]]
+    assert fit["theta_first_rad"] == IDEAL_ANGLES["q0_q1"]
+    assert fit["theta_second_rad"] == 0.0
+    assert fit["ideal_sink_p_max"] == 0.0
+
+
+def test_unidirectional_trotter_coupler_override_drops_that_angle(session, capsys):
+    """swap_coupler_flux moves the coupler off the amplitude the stored angle
+    was measured at, so that step's angle no longer applies."""
+    out = _trotter_on_iswap(session, swap_coupler_flux={"q1_q2": 0.04})
+    fit = out["fit"][CHAIN_QUBITS[0]]
+    assert fit["theta_first_rad"] == IDEAL_ANGLES["q0_q1"]
+    assert math.isnan(fit["theta_second_rad"])
+    assert math.isnan(fit["ideal_sink_p_max"])
+    assert "q1_q2.iswap: swap_coupler_flux overrides" in capsys.readouterr().err
+
+
+#: measured decay of the chain's two ends, and the round period that converts it.
+CHAIN_DECAY = {"q0.t1_s": 20e-6, "q0.t2_star_s": 9e-6,
+               "q2.t1_s": 25e-6, "q2.t2_star_s": 11e-6}
+
+
+def _chain_session_with_decay(tmp_path, facts):
+    """A fresh chain session carrying T1/T2* FACTS — fresh, because a fact
+    written into the module fixture would leak into every later experiment that
+    reads t1_s (the T1 trackers seed their prior from it)."""
+    roster = demo_components(CHAIN_QUBITS, tunable=True, chain=True)
+    design = demo_design(roster, CHAIN_QUBITS)
+    vendor = InMemoryDevice(roster, demo_vendor_state(roster, design))
+    s = Session(SimulatedBackend(vendor), roster, design=design,
+                scqo_dir=tmp_path / "scqo", data_root=tmp_path / "data",
+                device_name="chipT", setup_name="sim", cooldown_id="cd1",
+                parameter_defaults=OFFLINE_DEFAULTS)
+    s.set_values({f"fl.{q}.{field}": value for q in CHAIN_QUBITS
+                  for field, value in REFERENCE_BLOBS.items()})
+    s.set_values({f"{pair}.iswap.theta_rad": theta
+                  for pair, theta in IDEAL_ANGLES.items()})
+    if facts:
+        s.set_values(facts)
+    return s
+
+
+def _decay_run(session, **params):
+    out = session.run("qc_unidirectional_trotter", {
+        "targets": list(CHAIN_QUBITS), "max_rounds": 20,
+        "first_pair": _step("q0_q1", "iswap"), "second_pair": _step("q1_q2", "iswap"),
+        **params}, update="none")
+    assert out.get("error") is None, out.get("error")
+    return out["fit"][CHAIN_QUBITS[0]]
+
+
+def test_unidirectional_trotter_draws_the_decayed_theory(tmp_path):
+    """With round_duration_ns and both ends' measured T1/T2*, the theory carries
+    decay: the model sink peak sits below the ideal one."""
+    fit = _decay_run(_chain_session_with_decay(tmp_path, CHAIN_DECAY),
+                     round_duration_ns=360)
+    assert math.isfinite(fit["model_sink_p_max"])
+    assert fit["model_sink_p_max"] < fit["ideal_sink_p_max"]
+
+
+def test_unidirectional_trotter_decay_needs_the_round_and_every_fact(tmp_path, capsys):
+    """No round period, or one missing fact: the theory stays ideal, and stderr
+    says which input is missing."""
+    s = _chain_session_with_decay(tmp_path, CHAIN_DECAY)
+    assert math.isnan(_decay_run(s)["model_sink_p_max"])
+    assert "round_duration_ns is not set" in capsys.readouterr().err
+
+    partial = {k: v for k, v in CHAIN_DECAY.items() if k != "q2.t2_star_s"}
+    s = _chain_session_with_decay(tmp_path / "partial", partial)
+    fit = _decay_run(s, round_duration_ns=360)
+    assert math.isnan(fit["model_sink_p_max"])
+    assert math.isfinite(fit["ideal_sink_p_max"])
+    assert "no measured q2.t2_star_s" in capsys.readouterr().err
+
+
+def test_unidirectional_trotter_no_ideal_when_not_prepping_the_source(session, capsys):
+    """The closed form starts with the excitation on the source; a run that
+    preps another qubit gets no ideal curve at all."""
+    out = _trotter_on_iswap(session, prep_qubit=CHAIN_QUBITS[2])
+    fit = out["fit"][CHAIN_QUBITS[0]]
+    assert math.isnan(fit["theta_first_rad"]) and math.isnan(fit["theta_second_rad"])
+    assert "the closed form starts on the source" in capsys.readouterr().err
+
+
 READOUT_SWEEPS = [
     ("readout_power", "readout_amp", {"num_amp_points": 5}),
     ("readout_frequency", "readout_freq_hz", {"num_readout_freq_points": 5}),
@@ -1233,7 +1498,7 @@ def test_readout_sweeps_average_mode_optimizes_separation_not_fidelity(
     assert math.isnan(fit["best_fidelity"])
     assert math.isfinite(fit["best_separation"]) and fit["best_separation"] > 0
     # the knob is still proposed — the sweep answered its question
-    assert ("q0_ro", knob) in {(s["entity"], s["field"]) for s in out["suggestions"]}
+    assert ("fl.q0", knob) in {(s["entity"], s["field"]) for s in out["suggestions"]}
 
 
 @pytest.mark.parametrize("name,knob,params", READOUT_SWEEPS)
@@ -1245,7 +1510,7 @@ def test_readout_sweeps_shot_mode_still_reports_a_fidelity(session, name, knob, 
     fit = out["fit"]["q0"]
     assert math.isfinite(fit["best_fidelity"]) and fit["best_fidelity"] > 0.5
     assert math.isfinite(fit["best_separation"])
-    assert ("q0_ro", knob) in {(s["entity"], s["field"]) for s in out["suggestions"]}
+    assert ("fl.q0", knob) in {(s["entity"], s["field"]) for s in out["suggestions"]}
 
 
 def test_single_shot_proposes_monitors_never_the_aggregate(session):
@@ -1254,9 +1519,9 @@ def test_single_shot_proposes_monitors_never_the_aggregate(session):
     discriminating backend overrides update(), exactly like the old module.
     The deleted readout_fidelity aggregate must never reappear."""
     proposed = _suggest(session, "single_shot_readout")
-    assert {("q0_ro", "pos_g_i"), ("q0_ro", "pos_g_q"),
-            ("q0_ro", "pos_e_i"), ("q0_ro", "pos_e_q"),
-            ("q0_ro", "fidelity_g"), ("q0_ro", "fidelity_e")} == proposed
+    assert {("fl.q0", "pos_g_i"), ("fl.q0", "pos_g_q"),
+            ("fl.q0", "pos_e_i"), ("fl.q0", "pos_e_q"),
+            ("fl.q0", "fidelity_g"), ("fl.q0", "fidelity_e")} == proposed
     assert not any(f == "readout_fidelity" for _, f in proposed)
 
 
@@ -1304,58 +1569,158 @@ def test_single_shot_populations_are_nan_when_the_blobs_degenerate(session, monk
     assert out["outcomes"]["q0"] == "failed"  # NaN fidelity fails the gate
 
 
-def test_gef_proposes_three_state_monitors(session):
-    """Three blob centers and three per-state fidelities, all on the readout
-    channel. No discriminator knob: a scalar threshold on one rotated quadrature
-    cannot separate three blobs, so single_shot_readout keeps that job."""
-    proposed = _suggest(session, "single_shot_readout_gef")
-    assert {("q0_ro", f"pos_{letter}_{axis}")
-            for letter in ("g", "e", "f") for axis in ("i", "q")} | {
-        ("q0_ro", "fidelity_g"), ("q0_ro", "fidelity_e"), ("q0_ro", "fidelity_f")
-    } == proposed
-    assert not any(f.startswith("readout_") for _, f in proposed)
+# ----------------------------------------------------- readout_time_of_flight
+
+def test_time_of_flight_proposes_nothing_because_the_field_is_vendor_only(session):
+    """The one experiment whose answer has no neutral home on EITHER backend.
+    Both fieldmaps say so (`time_of_flight` / `readout_acq_delay` are VendorOnly
+    and their docs name this measurement as what writes them), so proposing
+    anything would hand the loop a field it cannot push."""
+    assert _suggest(session, "readout_time_of_flight") == set()
 
 
-def test_gef_reports_the_full_confusion_matrix_counted_and_fitted(session):
-    """Six off-diagonals, each counted and fitted — the same two-quantity rule the
-    two-state run follows, one matrix bigger. The fit only removes overlap, never
-    adds any, so no fitted weight can exceed its count."""
-    out = session.run("single_shot_readout_gef", {"targets": ["q0"]}, update="none")
+def test_time_of_flight_recovers_the_arrival_in_the_declared_frame(session):
+    """The answer is window origin + arrival, and the frame travels WITH the
+    data - the estimator must not re-derive it from a device whose delay this
+    very experiment asks the operator to change."""
+    out = session.run("readout_time_of_flight",
+                      {"targets": ["q0"], "readout_len_ns": 1000}, update="none")
     fit = out["fit"]["q0"]
-    for prep in ("g", "e", "f"):
-        for assigned in ("g", "e", "f"):
-            if prep == assigned:
-                continue
-            counted, fitted = f"p_{assigned}_given_{prep}", f"pop_{assigned}_prep_{prep}"
-            assert math.isfinite(fit[counted]), counted
-            assert 0.0 <= fit[counted] <= 1.0, counted
-            assert math.isfinite(fit[fitted]), fitted
-            assert fit[fitted] <= fit[counted] + 1e-9, fitted
-    assert 0.5 < fit["readout_fidelity"] <= 1.0
+
     assert out["outcomes"]["q0"] == "successful"
+    assert math.isfinite(fit["arrival_ns"])
+    assert fit["time_of_flight_ns"] % fit["grid_ns"] == 0
+    # the simulated backend declares no readout_delay_context, so the origin is
+    # the neutral floor of 0 and the answer IS the arrival, rounded to the grid
+    assert fit["window_start_ns"] == 0.0
+    assert fit["time_of_flight_ns"] == pytest.approx(fit["arrival_ns"],
+                                                     abs=fit["grid_ns"])
+    assert fit["arrival_unresolved"] == 0.0 and fit["arrival_at_edge"] == 0.0
 
 
-def test_gef_confusion_is_nan_when_the_blobs_degenerate(session, monkeypatch):
-    """A collapsed fit must yield NaN and a failed outcome, not an IndexError —
-    the three-state twin of the two-state degenerate case."""
-    import scqo.experiments.single_shot_readout_gef as module
+def test_time_of_flight_takes_the_window_floor_from_the_backend(session, monkeypatch):
+    """window_start_ns=0 means 'as early as THIS instrument allows', so the
+    floor is the backend's to state - and it lands in the answer, not just in
+    the axis."""
+    monkeypatch.setattr(session.backend, "readout_delay_context",
+                        lambda target: {"field": "time_of_flight",
+                                        "floor_ns": 28.0, "grid_ns": 4.0,
+                                        "full_scale_v": 0.5,
+                                        "current_ns": 300.0},
+                        raising=False)
+    fit = session.run("readout_time_of_flight",
+                      {"targets": ["q0"], "readout_len_ns": 1000},
+                      update="none")["fit"]["q0"]
 
-    real = module.per_qubit_results
+    assert fit["window_start_ns"] == 28.0
+    assert fit["time_of_flight_ns"] == pytest.approx(28.0 + fit["arrival_ns"],
+                                                     abs=fit["grid_ns"])
+    assert fit["old_delay_ns"] == 300.0
+    assert fit["delta_ns"] == pytest.approx(fit["time_of_flight_ns"] - 300.0)
+    assert fit["adc_saturated"] == 0.0          # a declared full scale = checked
 
-    def one_blob(*args, **kwargs):
-        out = real(*args, **kwargs)
-        for results in out.values():  # collapse to a single center
-            results["direct_counts"] = np.ones((3, 1))
-            results["gaussian_norms"] = np.ones((3, 1))
-        return out
 
-    monkeypatch.setattr(module, "per_qubit_results", one_blob)
-    out = session.run("single_shot_readout_gef", {"targets": ["q0"]}, update="none")
-    fit = out["fit"]["q0"]
-    assert out.get("error") is None
-    assert all(math.isnan(fit[k]) for k in
-               ("p_e_given_g", "p_f_given_g", "pop_e_prep_g", "mean_f_i"))
-    assert out["outcomes"]["q0"] == "failed"
+def test_a_window_origin_below_the_floor_is_refused_in_define_sweep(session,
+                                                                    monkeypatch):
+    """A stated origin is a promise. Raising it silently would hand back a
+    number measured in a frame the operator did not ask for - and the usual
+    reason to state one is reproducing an old run.
+
+    Asserted on define_sweep, not through session.run: the refusal's value is
+    that it lands BEFORE any instrument time, and run() would in any case fold
+    the ValueError into a FAILED result rather than re-raising it."""
+    monkeypatch.setattr(session.backend, "readout_delay_context",
+                        lambda target: {"field": "time_of_flight",
+                                        "floor_ns": 28.0},
+                        raising=False)
+    with pytest.raises(ValueError, match="below this backend's acquisition floor"):
+        _sweep(session, "readout_time_of_flight", window_start_ns=8.0)
+
+    # ...and 0 is not "below the floor", it is "you pick"
+    axes = _sweep(session, "readout_time_of_flight", window_start_ns=0.0,
+                  readout_len_ns=200.0)
+    assert axes["readout_time_ns"].size == 200
+
+
+def test_time_of_flight_hint_reads_the_field_from_the_vendor_inventory():
+    """SCQO must not learn either vendor's spelling. The backend says WHICH
+    field; the path, the unit and the edit line come from the same VendorOnly
+    inventory `scqo state --fields` renders, and the value is converted into
+    that field's declared unit."""
+    from scqo.experiments._tof_hint import apply_hint_lines
+    from scqo.fieldmap import VendorOnly
+
+    qm_like = SimpleNamespace(
+        readout_delay_context=lambda t: {"field": "time_of_flight"},
+        vendor_only=lambda: {"time_of_flight": VendorOnly(
+            path="q.resonator.time_of_flight", unit="ns", kind="vendor",
+            doc="...", edit="edit state.json")})
+    text = "\n".join(apply_hint_lines("readout_time_of_flight", qm_like,
+                                      {"q0": 236.0}))
+    assert "q.resonator.time_of_flight = 236 ns" in text
+    assert "edit state.json" in text
+
+    qblox_like = SimpleNamespace(
+        readout_delay_context=lambda t: {"field": "readout_acq_delay"},
+        vendor_only=lambda: {"readout_acq_delay": VendorOnly(
+            path="element.measure.acq_delay", unit="s", kind="vendor",
+            doc="...")})
+    seconds = "\n".join(apply_hint_lines("readout_time_of_flight", qblox_like,
+                                         {"q0": 236.0}))
+    # the SAME measurement, in the unit that field declares
+    assert "element.measure.acq_delay = 2.36e-07 s" in seconds
+
+
+def test_time_of_flight_hint_degrades_without_taking_the_run_down():
+    """A hint may never break a measurement: no hook, an unknown unit and a
+    RAISING hook each become a line."""
+    from scqo.experiments._tof_hint import apply_hint_lines
+    from scqo.fieldmap import VendorOnly
+
+    bare = "\n".join(apply_hint_lines("readout_time_of_flight",
+                                      SimpleNamespace(), {"q0": 236.0}))
+    assert "declares no readout_delay_context" in bare
+    assert "236 ns by hand" in bare
+
+    def boom(target):
+        raise RuntimeError("no state loaded")
+
+    broken = apply_hint_lines("readout_time_of_flight",
+                              SimpleNamespace(readout_delay_context=boom),
+                              {"q0": 236.0})
+    assert any("RuntimeError: no state loaded" in line for line in broken)
+
+    odd = SimpleNamespace(
+        readout_delay_context=lambda t: {"field": "f"},
+        vendor_only=lambda: {"f": VendorOnly(path="p", unit="furlongs",
+                                             kind="vendor", doc="...")})
+    text = "\n".join(apply_hint_lines("readout_time_of_flight", odd,
+                                      {"q0": 236.0}))
+    assert "not convertible here" in text and "236 ns" in text
+
+    # nothing measured -> nothing printed
+    assert apply_hint_lines("readout_time_of_flight", SimpleNamespace(), {}) == []
+
+
+def test_time_of_flight_prints_the_hint_on_writeback(session, capsys, monkeypatch):
+    """On STDERR (stdout stays parseable JSON), only for targets that SUCCEEDED."""
+    from scqo.fieldmap import VendorOnly
+
+    monkeypatch.setattr(session.backend, "readout_delay_context",
+                        lambda target: {"field": "time_of_flight",
+                                        "floor_ns": 28.0, "current_ns": 300.0},
+                        raising=False)
+    monkeypatch.setattr(session.backend, "vendor_only",
+                        lambda: {"time_of_flight": VendorOnly(
+                            path="q.resonator.time_of_flight", unit="ns",
+                            kind="vendor", doc="...")},
+                        raising=False)
+    session.run("readout_time_of_flight", {"targets": ["q0"]})
+    captured = capsys.readouterr()
+
+    assert "the measured delay is VENDOR-ONLY" in captured.err
+    assert "q.resonator.time_of_flight = " in captured.err
+    assert captured.err.count("q0:") == 1
 
 
 def test_thermal_population_writes_the_mode_fact(session):
@@ -1408,10 +1773,11 @@ def test_arch_fit_writes_mode_facts_and_transfer_function(session):
     proposed = _suggest(session, "qubit_spectroscopy_flux_pulse")
     assert ("q0", "ej_sum_hz") in proposed
     assert ("q0", "f_q_max_hz") in proposed
-    assert ("q0_z", "flux_offset") in proposed
+    assert ("z_q0.q0", "flux_offset") in proposed
     # ... and the operating point: without this the fit is bookkeeping only and
     # accepting it can never re-centre the next map (the bug this frame work fixed).
-    assert ("q0_z", "idle_flux") in proposed
+    # It is the flux LINE's knob, the transfer function its channel's fact.
+    assert ("z_q0", "idle_flux") in proposed
 
 
 def test_arch_fit_re_references_its_relative_window_to_absolute(session):
@@ -1427,7 +1793,7 @@ def test_arch_fit_re_references_its_relative_window_to_absolute(session):
     would pass against the very bug it guards.
     """
     parked = 0.11
-    session.set_values({"q0_z.idle_flux": parked})
+    session.set_values({"z_q0.idle_flux": parked})
     out = session.run("qubit_spectroscopy_flux_pulse", {"targets": ["q0"]})
     assert out.get("error") is None, out.get("error")
     fit = out["fit"]["q0"]
@@ -1439,8 +1805,8 @@ def test_arch_fit_re_references_its_relative_window_to_absolute(session):
 
     # the fact and the knob are one number on one plane
     proposals = {(s["entity"], s["field"]): s["after"] for s in out["suggestions"]}
-    assert proposals[("q0_z", "idle_flux")] == pytest.approx(fit["flux_offset"])
-    assert proposals[("q0_z", "flux_offset")] == pytest.approx(fit["flux_offset"])
+    assert proposals[("z_q0", "idle_flux")] == pytest.approx(fit["flux_offset"])
+    assert proposals[("z_q0.q0", "flux_offset")] == pytest.approx(fit["flux_offset"])
 
 
 def test_pair_zz_refused_on_a_coupler_less_pair(tmp_path):
@@ -1470,7 +1836,7 @@ def test_accept_roundtrip_on_the_pair(session):
     out = session.run("pair_zz_coupler", {"targets": ["q0_q1"]})
     summary = session.accept(out["run_id"])
     assert not summary["errors"]
-    assert session.device_state()["q0_q1_c_z"]["idle_flux"] is not None
+    assert session.device_state()["zc_q0_q1"]["idle_flux"] is not None
     assert session.physical_state()["q0_q1"]["zz_hz"] is not None
 
 
@@ -1487,12 +1853,12 @@ def _fresh_parity_session(tmp_path, *, splitting=True, depletion=True):
                 scqo_dir=tmp_path / "scqo", data_root=tmp_path / "data",
                 device_name="chipT", setup_name="sim", cooldown_id="cd1",
                 parameter_defaults=PARITY_DEFAULTS)
-    s.set_values({f"q0_ro.{field}": value
+    s.set_values({f"fl.q0.{field}": value
                   for field, value in REFERENCE_BLOBS.items()})
     if depletion:
-        s.set_values({"q0_ro.readout_depletion_s": 1e-6})
+        s.set_values({"fl.q0.readout_depletion_s": 1e-6})
     if splitting:
-        s.set_values({"q0_xy.parity_delta_f_hz": 250e3})
+        s.set_values({"xy_q0.q0.parity_delta_f_hz": 250e3})
     return s
 
 
@@ -1507,8 +1873,8 @@ def test_ramsey_beat_proposes_the_parity_splitting(session):
         "max_idle_time_ns": 10000, "num_points": 201})
     assert out.get("error") is None, out.get("error")
     proposed = {(s["entity"], s["field"]) for s in out["suggestions"]}
-    assert proposed == {("q0_xy", "drive_freq_hz"), ("q0", "f_01_hz"),
-                        ("q0", "t2_star_s"), ("q0_xy", "parity_delta_f_hz")}
+    assert proposed == {("xy_q0.q0", "drive_freq_hz"), ("q0", "f_01_hz"),
+                        ("q0", "t2_star_s"), ("xy_q0.q0", "parity_delta_f_hz")}
     # replay the sim's draws (err, t2_star, then delta on the beat branch)
     rng = np.random.default_rng(stable_seed("qubit_ramsey", "q0"))
     rng.uniform(-0.2, 0.2)
@@ -1976,6 +2342,13 @@ def test_trotter_compensation_finds_an_optimum_inside_the_window(session):
     assert 0.0 < fit["best_compensation_amp"] < 1.0
     assert fit["contrast"] > 2.0
     assert fit["best_sink_p_max"] > fit["worst_sink_p_max"]
+    # the ridge reading, the value fed back: resolved, inside the window, on the
+    # same peak as the brightest pixel, with a real spread
+    assert fit["compensation_unresolved"] == 0.0
+    assert 0.0 < fit["best_compensation_amp_refined"] < 1.0
+    assert abs(fit["best_compensation_amp_refined"] - fit["best_compensation_amp"]) < 0.1
+    assert np.isfinite(fit["best_compensation_amp_err"])
+    assert fit["best_compensation_amp_err"] >= 0.0
 
 
 def test_trotter_compensation_n_at_max_reads_the_phase_condition(session):
@@ -1994,6 +2367,8 @@ def test_trotter_compensation_reports_the_curve_at_the_optimum(session):
     assert fit["q2"]["p_max"] == pytest.approx(fit["q2"]["best_sink_p_max"])
     # every row carries the run-wide optimum, so one target reads on its own
     assert fit["q1"]["best_compensation_amp"] == fit["q2"]["best_compensation_amp"]
+    assert (fit["q1"]["best_compensation_amp_refined"]
+            == fit["q2"]["best_compensation_amp_refined"])
 
 
 def test_trotter_compensation_is_record_only(session):
@@ -2158,8 +2533,8 @@ def test_resonator_spectroscopy_dip_branch_dress0_is_the_default(session):
     out = session.run("resonator_spectroscopy", {"targets": ["q0"]})
     assert out.get("error") is None, out.get("error")
     assert [(s["entity"], s["field"]) for s in out["suggestions"]] == [
-        ("q0_ro", "readout_freq_hz"), ("q0_res", "f_dress0_hz"),
-        ("q0_res", "kappa_tot_hz"), ("q0_ro", "readout_depletion_s")]
+        ("fl.q0", "readout_freq_hz"), ("q0_res", "f_dress0_hz"),
+        ("q0_res", "kappa_tot_hz"), ("fl.q0", "readout_depletion_s")]
     assert out["fit"]["q0"]["dip_branch"] == "dress0"
 
 
@@ -2187,7 +2562,7 @@ def test_resonator_spectroscopy_branches_never_write_both_frequencies(session):
     declares, only that one frequency reaches the resonator."""
     phys_before = session.physical_state().get("q0_res", {})
     dress0_before = phys_before.get("f_dress0_hz")
-    tone_before = session.device_state()["q0_ro"]["readout_freq_hz"]
+    tone_before = session.device_state()["fl.q0"]["readout_freq_hz"]
     out = session.run("resonator_spectroscopy",
                       {"targets": ["q0"], "dip_branch": "bare"}, update="apply")
     assert out.get("error") is None, out.get("error")
@@ -2196,4 +2571,338 @@ def test_resonator_spectroscopy_branches_never_write_both_frequencies(session):
     # a delta, not an absence -- the session fixture is module-scoped
     assert res.get("f_dress0_hz") == dress0_before
     # the standing tone is left exactly where it was
-    assert session.device_state()["q0_ro"]["readout_freq_hz"] == tone_before
+    assert session.device_state()["fl.q0"]["readout_freq_hz"] == tone_before
+
+
+def test_qc_swap_flux_stark_lifts_the_ridge_read_into_the_fit(session):
+    """The compensation ridge, not the map's argmax, is this experiment's answer.
+
+    Every RIDGE_KEY must be present and a float even when a gate is shut, because
+    `Result.fit` is a flat scalar surface and a missing key reads as a schema
+    change rather than as a closed gate. With the prior supplied, the simulated
+    map sits at N*theta = pi/4 (SIM_SWAP_FRACTION), so both gates open and the
+    refined angle must come back near the injected one.
+    """
+    from scqo.experiments.qc_swap_flux_stark import RIDGE_KEYS, SIM_SWAP_FRACTION
+
+    n_swaps = 4
+    theta = SIM_SWAP_FRACTION * math.pi / n_swaps
+    out = session.run("qc_swap_flux_stark",
+                      {"targets": ["q0_q1"], "swap_count": n_swaps,
+                       "swap_angle_rad": theta}, update="none")
+    assert out.get("error") is None, out.get("error")
+    fit = out["fit"]["q0_q1"]
+    for key in RIDGE_KEYS:
+        assert key in fit, key
+        assert isinstance(fit[key], float), key
+    assert fit["ridge_ok"] == 1.0 and fit["branch_ok"] == 1.0
+    assert fit["n_ridge_rows"] > 4
+    # the simulated window is sized to hold the whole arch (SIM_EDGE_DETUNING),
+    # so its fitted centre must be ACCEPTED, with an error to go with it
+    assert fit["resonance_at_edge"] == 0.0
+    assert fit["resonance_unresolved"] == 0.0
+    assert fit["compensation_in_gap"] == 0.0
+    assert math.isfinite(fit["resonance_flux_amp_v"])
+    assert 0.0 < fit["resonance_flux_err_v"] < math.inf
+    assert math.isfinite(fit["compensating_stark_amp"])
+    assert math.isfinite(fit["compensating_stark_err"])
+    assert fit["swap_angle_rad_prior"] == pytest.approx(theta)
+    assert fit["swap_angle_rad_refined"] == pytest.approx(theta, rel=0.25)
+    assert fit["swap_angle_consistent"] == 1.0
+
+
+def test_qc_swap_flux_stark_without_a_prior_keeps_both_gates_shut(session):
+    """No prior means no branch selector — every gated number is NaN, the rows
+    are still measured, and the run is still SUCCESSFUL."""
+    out = session.run("qc_swap_flux_stark",
+                      {"targets": ["q0_q1"], "swap_count": 4}, update="none")
+    fit = out["fit"]["q0_q1"]
+    assert fit["ridge_ok"] == 0.0 and fit["branch_ok"] == 0.0
+    assert math.isnan(fit["compensating_stark_amp"])
+    assert math.isnan(fit["swap_angle_rad_refined"])
+    assert math.isnan(fit["ridge_slope_per_v"])
+    # a shut gate is not a refusal: nothing was fitted, so nothing is flagged
+    assert fit["resonance_unresolved"] == 0.0 and fit["resonance_at_edge"] == 0.0
+    # the rows themselves need no prior — only the reading that needs a branch
+    # selector is withheld
+    assert fit["n_ridge_rows"] > 4
+    assert math.isfinite(fit["max_row_contrast"])
+    # WHERE the compensated transfer peaks is a measurement, not a claim, so it
+    # is reported anyway — that is the flux an operator can act on
+    assert math.isfinite(fit["ridge_peak_flux_amp_v"])
+    assert math.isfinite(fit["ridge_peak_transfer"])
+    assert out["outcomes"]["q0_q1"] == "successful"
+
+
+def test_qc_swap_flux_stark_refuses_an_impossible_prior():
+    """The prior is an exchange angle: a full swap is pi/2 and nothing exceeds it."""
+    cls = registry.get("qc_swap_flux_stark")
+    for bad in (0.0, -0.1, 2.0):
+        with pytest.raises(ValueError):
+            cls.Parameters(targets=["q0_q1"], swap_angle_rad=bad)
+    ok = cls.Parameters(targets=["q0_q1"], swap_angle_rad=math.pi / 2)
+    assert ok.swap_angle_rad == pytest.approx(math.pi / 2)
+    assert ok.min_row_contrast == 0.3
+
+
+def test_qc_swap_flux_stark_takes_the_stark_period_from_the_echo(session):
+    """``stark_amp_2pi`` makes the ridge's 2*pi unwrap exact, and checks itself.
+
+    The compensation is only defined modulo one turn, and the tone's phase is
+    NOT proportional to its amplitude, so the period is a measured input rather
+    than something the amplitude axis implies.
+    """
+    from scqo.experiments.qc_swap_flux_stark import SIM_SWAP_FRACTION
+
+    cls = registry.get("qc_swap_flux_stark")
+    for bad in (0.0, -0.5):
+        with pytest.raises(ValueError):
+            cls.Parameters(targets=["q0_q1"], stark_amp_2pi=bad)
+
+    n_swaps = 4
+    theta = SIM_SWAP_FRACTION * math.pi / n_swaps
+    out = session.run("qc_swap_flux_stark",
+                      {"targets": ["q0_q1"], "swap_count": n_swaps,
+                       "swap_angle_rad": theta, "stark_amp_2pi": 0.8},
+                      update="none")
+    fit = out["fit"]["q0_q1"]
+    assert fit["stark_amp_2pi_prior"] == pytest.approx(0.8)
+    assert fit["wrap_consistent"] in (0.0, 1.0)
+    assert math.isfinite(fit["compensating_stark_amp"])
+
+
+# ------------------------------------------------------------ coupler crossing
+
+@pytest.fixture
+def crossing_session(tmp_path):
+    """A fresh tunable session whose members sit where the crossing simulator puts
+    them (q1 high at 5.1 GHz, q0 low at 4.8 GHz) and whose coupler is parked at
+    5Q4C q1_q2_c's 0.16 V - so the frame re-reference is visible in every number."""
+    from scqo.experiments.pair_coupler_crossing_pulse import SIM_F_HIGH_HZ, SIM_F_LOW_HZ
+
+    roster = demo_components(CHAIN_QUBITS, tunable=True, chain=True)
+    design = demo_design(roster, CHAIN_QUBITS)
+    vendor = InMemoryDevice(roster, demo_vendor_state(roster, design))
+    s = Session(SimulatedBackend(vendor), roster, design=design,
+                scqo_dir=tmp_path / "scqo", data_root=tmp_path / "data",
+                device_name="chipT", setup_name="sim", cooldown_id="cd1")
+    s.set_values({"xy_q1.q1.drive_freq_hz": SIM_F_HIGH_HZ,
+                  "xy_q0.q0.drive_freq_hz": SIM_F_LOW_HZ,
+                  "zc_q0_q1.idle_flux": 0.16})
+    return s
+
+
+def _proposals(out):
+    return {(s["entity"], s["field"]): s["after"] for s in out["suggestions"]}
+
+
+def test_coupler_crossing_recovers_the_planted_arch(crossing_session):
+    """simulate -> estimate returns the hidden arch, re-referenced to ABSOLUTE, and
+    proposes the three coupler facts - never the coupler's idle_flux."""
+    from scqo.experiments.pair_coupler_crossing_pulse import simulated_arch
+
+    cls = registry.get("pair_coupler_crossing_pulse")
+    p = cls.Parameters(targets=["q0_q1"])
+    truth = simulated_arch("q0_q1", p.start_coupler_flux_v, p.end_coupler_flux_v)
+    out = crossing_session.run("pair_coupler_crossing_pulse", {"targets": ["q0_q1"]})
+    assert out.get("error") is None, out.get("error")
+    assert out["outcomes"]["q0_q1"] == "successful"
+    fit = out["fit"]["q0_q1"]
+    assert fit["center_kind"] == "apex"
+    assert fit["old_coupler_idle_flux"] == pytest.approx(0.16)
+    assert fit["center_from_idle_v"] == pytest.approx(truth["apex_v"], abs=3e-3)
+    # the frame invariant: flux_offset = old idle + the fitted pulse-frame apex
+    assert fit["flux_offset"] == pytest.approx(0.16 + fit["center_from_idle_v"])
+    assert fit["flux_per_phi0"] == pytest.approx(truth["period_v"], rel=0.08)
+    assert fit["f_q_max_hz"] == pytest.approx(truth["f_max_hz"], abs=0.5e9)
+    assert fit["ec_hz_used"] == pytest.approx(0.2e9)
+    for flag in ("crossings_not_bracketed_high", "crossings_not_bracketed_low",
+                 "center_mismatch", "side_conflict", "arch_unsolved"):
+        assert fit[flag] == 0, flag
+    proposals = _proposals(out)
+    assert set(proposals) == {("zc_q0_q1.q0_q1_c", "flux_offset"),
+                              ("zc_q0_q1.q0_q1_c", "flux_per_phi0"),
+                              ("q0_q1_c", "f_q_max_hz")}
+    assert proposals[("zc_q0_q1.q0_q1_c", "flux_offset")] == pytest.approx(fit["flux_offset"])
+
+
+def test_coupler_crossing_with_one_member_proposes_only_a_known_apex(crossing_session):
+    """One member: the symmetry point only - no arch; its apex claim needs a side."""
+    out = crossing_session.run("pair_coupler_crossing_pulse",
+                               {"targets": ["q0_q1"], "measure": "high"})
+    assert out["outcomes"]["q0_q1"] == "successful"
+    assert out["fit"]["q0_q1"]["center_kind"] == "unknown"
+    assert _proposals(out) == {}
+
+    told = crossing_session.run("pair_coupler_crossing_pulse",
+                                {"targets": ["q0_q1"], "measure": "high",
+                                 "coupler_side": "above"})
+    assert told["fit"]["q0_q1"]["center_kind"] == "apex"
+    assert told["fit"]["q0_q1"]["arch_unsolved"] == 1
+    assert set(_proposals(told)) == {("zc_q0_q1.q0_q1_c", "flux_offset")}
+
+
+def test_coupler_crossing_side_conflict_fails_and_proposes_nothing(crossing_session):
+    out = crossing_session.run("pair_coupler_crossing_pulse",
+                               {"targets": ["q0_q1"], "coupler_side": "below"})
+    assert out["outcomes"]["q0_q1"] == "failed"
+    assert out["fit"]["q0_q1"]["side_conflict"] == 1
+    assert out["suggestions"] == []
+
+
+def test_coupler_crossing_runs_one_pair_at_a_time(session):
+    out = session.run("pair_coupler_crossing_pulse", {"targets": ["q0_q1", "q1_q2"]})
+    assert "target validation refused" in out["error"]
+    assert "one pair per run" in out["error"]
+
+
+def test_coupler_crossing_refused_on_a_coupler_less_pair(tmp_path):
+    roster = demo_components(tunable=False)          # pair, NO coupler
+    design = demo_design(roster)
+    vendor = InMemoryDevice(roster, demo_vendor_state(roster, design))
+    s = Session(SimulatedBackend(vendor), roster, design=design,
+                scqo_dir=tmp_path / "scqo", device_name="chipT",
+                setup_name="sim", cooldown_id="cd1")
+    out = s.run("pair_coupler_crossing_pulse", {"targets": ["q0_q1"]})
+    assert "declares no coupler role" in out["error"]
+
+
+def test_coupler_swap_spectroscopy_finds_the_planted_ladder(crossing_session):
+    """simulate -> estimate returns the planted f01 and alpha - the ladder split
+    between the members, part of f01 in the reference arm, the probe's own line above
+    f01 in both arms - proposes the coupler's f_01_hz and anharmonicity_hz only, and
+    leaves the probe's tone power as it was."""
+    from scqo.experiments.pair_coupler_spectroscopy_swap import simulated_line
+
+    cls = registry.get("pair_coupler_spectroscopy_swap")
+    p = cls.Parameters(targets=["q0_q1"], ramp_v=(0.0, 0.14))
+    assert p.num_tone_freq_points == 501                 # 1 MHz over 500 MHz
+    truth = simulated_line("q0_q1", p.start_tone_freq_hz, p.end_tone_freq_hz,
+                           p.num_tone_freq_points)
+    assert truth["member_line_hz"] > truth["f01_hz"]
+    power_before = crossing_session.device_state()["xy_q1.q1"]["drive_power_dbm"]
+    out = crossing_session.run("pair_coupler_spectroscopy_swap",
+                               {"targets": ["q0_q1"], "ramp_v": [0.0, 0.14]})
+    assert out.get("error") is None, out.get("error")
+    assert out["outcomes"]["q0_q1"] == "successful"
+    fit = out["fit"]["q0_q1"]
+    assert fit["f_c_hz"] == pytest.approx(truth["f01_hz"], abs=1e6)
+    assert fit["alpha_hz"] == pytest.approx(truth["alpha_hz"], abs=3e6)
+    assert (fit["n_coupler_lines"], fit["n_ladder_lines"]) == (2, 2)
+    # what the ramp ADDED on each member: the reference share of f01 sits on high
+    assert fit["landing_high"] == pytest.approx(
+        (truth["to_high"] - truth["reference_share"]) * 0.35, abs=0.05)
+    assert fit["landing_low"] == pytest.approx((1 - truth["to_high"]) * 0.35, abs=0.05)
+    assert fit["no_line"] == fit["unexplained_lines"] == fit["peak_at_edge"] == 0
+    assert fit["lo_hz"] == pytest.approx(6.80e9)
+    assert fit["ramp_duration_ns"] == 936.0          # 0.14 V at 0.15 V/us, up to 4 ns
+    assert fit["old_ramp_idle_flux"] == pytest.approx(0.16)
+    proposals = _proposals(out)
+    assert set(proposals) == {("q0_q1_c", "f_01_hz"), ("q0_q1_c", "anharmonicity_hz")}
+    assert proposals[("q0_q1_c", "f_01_hz")] == pytest.approx(fit["f_c_hz"])
+    assert proposals[("q0_q1_c", "anharmonicity_hz")] == pytest.approx(fit["alpha_hz"])
+    assert crossing_session.device_state()["xy_q1.q1"]["drive_power_dbm"] == power_before
+
+
+def test_coupler_swap_spectroscopy_refusals(session):
+    out = session.run("pair_coupler_spectroscopy_swap",
+                      {"targets": ["q0_q1"], "ramp_v": None})
+    assert "ramp_v is required" in out["error"]
+    out = session.run("pair_coupler_spectroscopy_swap", {"targets": ["q0_q1", "q1_q2"]})
+    assert "one pair per run" in out["error"]
+    cls = registry.get("pair_coupler_spectroscopy_swap")
+    with pytest.raises(ValidationError, match="500 MHz"):
+        cls.Parameters(targets=["q0_q1"], start_tone_freq_hz=6.5e9, end_tone_freq_hz=7.1e9)
+    with pytest.raises(ValidationError, match="would not move"):
+        cls.Parameters(targets=["q0_q1"], ramp_v=(0.1, 0.1))
+    with pytest.raises(ValidationError):                   # a pair, nothing else
+        cls.Parameters(targets=["q0_q1"], ramp_v=(0.0, 0.1, 0.2))
+    # a descending window is a window
+    assert cls.Parameters(targets=["q0_q1"], start_tone_freq_hz=7.0e9,
+                          end_tone_freq_hz=6.6e9).end_tone_freq_hz == 6.6e9
+
+
+def test_coupler_swap_ramp_v_is_the_play_order(session):
+    """ramp_v = (first, last) AS PLAYED: (0, 0.14) swaps on the way out, (0.14, 0)
+    jumps out and swaps on the way back; same slope, same length either way."""
+    cls = registry.get("pair_coupler_spectroscopy_swap")
+    out = []
+    for ramp in ((0.0, 0.14), (0.14, 0.0), (0.14, 0.08)):
+        exp = cls(session.backend, cls.Parameters(targets=["q0_q1"], ramp_v=ramp))
+        exp.device = session.device
+        out.append((exp.ramp_play_order(), exp.ramp_duration_ns()))
+    assert out == [((0.0, 0.14), 936), ((0.14, 0.0), 936), ((0.14, 0.08), 400)]
+    run = session.run("pair_coupler_spectroscopy_swap",
+                      {"targets": ["q0_q1"], "ramp_v": [0.14, 0.0], "tone_on": "low"},
+                      update="none")
+    assert run.get("error") is None, run.get("error")
+
+
+def test_coupler_zz_spectroscopy_finds_the_planted_ladder(crossing_session):
+    """simulate -> estimate returns the planted f01 and alpha from the pi arm's dips
+    (shallower where the readout sees the coupler in the spoiled part), proposes the
+    coupler's f_01_hz and anharmonicity_hz only, and restores the TONE member's
+    power."""
+    from scqo.experiments.pair_coupler_spectroscopy_zz import simulated_line
+
+    cls = registry.get("pair_coupler_spectroscopy_zz")
+    p = cls.Parameters(targets=["q0_q1"])
+    assert (p.tone_on, p.num_tone_freq_points, p.selective_pi_len_ns) == ("low", 501, 2000)
+    truth = simulated_line("q0_q1", p.start_tone_freq_hz, p.end_tone_freq_hz,
+                           p.num_tone_freq_points)
+    before = crossing_session.device_state()
+    out = crossing_session.run("pair_coupler_spectroscopy_zz", {"targets": ["q0_q1"]})
+    assert out.get("error") is None, out.get("error")
+    assert out["outcomes"]["q0_q1"] == "successful"
+    fit = out["fit"]["q0_q1"]
+    assert fit["f_c_hz"] == pytest.approx(truth["f01_hz"], abs=1e6)
+    assert fit["alpha_hz"] == pytest.approx(truth["alpha_hz"], abs=3e6)
+    assert (fit["n_lines"], fit["n_ladder_lines"]) == (2, 2)
+    assert fit["pi_contrast"] == pytest.approx(truth["pi_contrast"], abs=0.03)
+    assert fit["dip_depth"] == pytest.approx(
+        (0.88 - truth["readout_share"]) * 0.9 * 0.45, rel=0.2)
+    assert fit["no_line"] == fit["unexplained_lines"] == fit["peak_at_edge"] == 0
+    assert fit["lo_hz"] == pytest.approx(6.80e9)
+    assert fit["old_coupler_idle_flux"] == pytest.approx(0.16)
+    proposals = _proposals(out)
+    assert set(proposals) == {("q0_q1_c", "f_01_hz"), ("q0_q1_c", "anharmonicity_hz")}
+    assert proposals[("q0_q1_c", "f_01_hz")] == pytest.approx(fit["f_c_hz"])
+    after = crossing_session.device_state()
+    for xy in ("xy_q0.q0", "xy_q1.q1"):
+        assert after[xy]["drive_power_dbm"] == before[xy]["drive_power_dbm"]
+
+
+def test_coupler_zz_pi_goes_to_the_member_the_tone_does_not_ride(crossing_session):
+    cls = registry.get("pair_coupler_spectroscopy_zz")
+    roles = crossing_session.device.roster.entities["q0_q1"].roles
+    for tone_on, pi_role in (("low", "high"), ("high", "low")):
+        exp = cls(crossing_session.backend, cls.Parameters(targets=["q0_q1"], tone_on=tone_on))
+        exp.device = crossing_session.device
+        assert exp.pi_role() == pi_role
+        assert (exp.tone_member("q0_q1"), exp.pi_member("q0_q1")) == (
+            roles[tone_on][0], roles[pi_role][0])
+    run = crossing_session.run("pair_coupler_spectroscopy_zz",
+                               {"targets": ["q0_q1"], "tone_on": "high"}, update="none")
+    assert run.get("error") is None, run.get("error")
+    assert run["outcomes"]["q0_q1"] == "successful"
+
+
+def test_coupler_zz_spectroscopy_refusals(session):
+    out = session.run("pair_coupler_spectroscopy_zz", {"targets": ["q0_q1", "q1_q2"]})
+    assert "one pair per run" in out["error"]
+    cls = registry.get("pair_coupler_spectroscopy_zz")
+    with pytest.raises(ValidationError, match="500 MHz"):
+        cls.Parameters(targets=["q0_q1"], start_tone_freq_hz=6.5e9, end_tone_freq_hz=7.1e9)
+    with pytest.raises(ValidationError):
+        cls.Parameters(targets=["q0_q1"], tone_on="both")
+    for bad in (2002, 8):                                  # the 4 ns grid, 16 ns up
+        with pytest.raises(ValidationError):
+            cls.Parameters(targets=["q0_q1"], selective_pi_len_ns=bad)
+
+
+def test_coupler_crossing_buffer_sits_on_the_clock_grid():
+    cls = registry.get("pair_coupler_crossing_pulse")
+    for bad in (8, 18):
+        with pytest.raises(ValidationError):
+            cls.Parameters(targets=["q0_q1"], flux_buffer_ns=bad)
+    assert cls.Parameters(targets=["q0_q1"], flux_buffer_ns=0).flux_buffer_ns == 0

@@ -88,7 +88,7 @@ def test_run_persists_full_layout(tmp_path):
     # choice lives on the target's READOUT CHANNEL
     before = json.loads((run_dir / "device_before.json").read_text(encoding="utf-8"))
     after = json.loads((run_dir / "device_after.json").read_text(encoding="utf-8"))
-    assert after["q0_ro"]["readout_freq_hz"] != before["q0_ro"]["readout_freq_hz"]
+    assert after["fl.q0"]["readout_freq_hz"] != before["fl.q0"]["readout_freq_hz"]
 
 
 def test_default_run_stores_pending_suggestions(tmp_path):
@@ -124,7 +124,7 @@ def test_update_suggestions_append_recomputes_pending(tmp_path):
 
     record = sess.load_run(run_id)["record"]
     appended = record["suggestions"] + [{
-        "entity": "q0_xy", "field": "pi_amp", "role": "knob",
+        "entity": "xy_q0.q0", "field": "pi_amp", "role": "knob",
         "before": 0.1, "after": 0.21, "status": "pending",
         "origin": "operator", "proposed_by": "alice",
     }]
@@ -1089,7 +1089,7 @@ def test_setup_snapshot_store_is_content_addressed_and_write_once(tmp_path):
     from scqo.datastore import DataStore, setup_snapshot_dir, snapshot_hash
 
     store = DataStore(tmp_path / "data", device_name="devA")
-    files = {"backend_config/state.json": b'{"a": 1}\n', "scqo/scqo_state.json": b'{"schema": 3}\n'}
+    files = {"backend_config/state.json": b'{"a": 1}\n', "scqo/scqo_state.json": b'{"schema": 4}\n'}
     first = store.store_setup_snapshot(files, {"backend": "qm", "first_run_id": "r1"})
     second = store.store_setup_snapshot(dict(reversed(list(files.items()))), {"first_run_id": "r2"})
     assert first["created"] is True and second["created"] is False
@@ -1132,10 +1132,11 @@ def test_run_stores_a_setup_snapshot_from_the_backend_hook(tmp_path):
     assert (folder / "backend_config" / "extra.json").read_text(encoding="utf-8") == '{"extra": true}\n'
     state = json.loads((folder / "scqo" / "scqo_state.json").read_text(encoding="utf-8"))
     # the loop's memory, not a vendor mirror: knobs re-seed from the vendor on a
-    # restore, the monitor is what the snapshot must carry
-    assert state["schema"] == 3 and state["values"]["q0_ro"]["fidelity_g"] == 0.9
+    # restore, the monitor is what the snapshot must carry - in the on-disk
+    # shape, schema 4 nested line -> target (q0's readout channel is fl.q0)
+    assert state["schema"] == 4 and state["values"]["fl"]["q0"]["fidelity_g"] == 0.9
     physical = json.loads((folder / "scqo" / "physical.json").read_text(encoding="utf-8"))
-    assert physical["schema"] == 3 and isinstance(physical["values"], dict)
+    assert physical["schema"] == 4 and isinstance(physical["values"], dict)
     manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["first_run_id"] == first["run_id"]
     assert manifest["backend"] == "qm" and (manifest["cooldown"], manifest["setup"]) == ("cd1", "main")

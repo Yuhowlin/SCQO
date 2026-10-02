@@ -1,25 +1,27 @@
 """Kind-catalog invariants of the greenfield model (scqo.catalog).
 
 These tests pin the schema contracts of docs/greenfield-schema.md sections 2,
-6, 7 — the catalogs themselves are data, so most protection lives in the
-import-time lints; here we verify the lints exist (a broken catalog refuses to
-build) and the load-bearing lookups behave.
+6, 7 and the 4.0.0 store-by-line split (docs/store-by-line-plan.md section 2.4) —
+the catalogs themselves are data, so most protection lives in the import-time
+lints; here we verify the lints exist (a broken catalog refuses to build) and
+the load-bearing lookups behave.
 """
 
 import pytest
 
 from scqo.catalog import (
+    ALL_FIELD_NAMES,
+    BORROWABLE,
     CHANNELS,
     COMPOSITES,
     DERIVATION,
     FLUX_TUNABLE,
     MODES,
-    OP_KNOBS,
+    OPERATION_FIELDS,
     QUBIT_LIKE,
     FieldSpec,
     _validate_fields,
     derived_op,
-    op_knob_fields,
 )
 
 
@@ -30,24 +32,35 @@ def test_role_routes_every_field_to_exactly_one_store():
         for kind, spec in family.items():
             for name, fs in spec.fields.items():
                 assert fs.role in ("fact", "knob", "monitor"), (kind, name)
+    for kind, spec in CHANNELS.items():
+        for name, fs in spec.line_fields.items():
+            assert fs.role in ("fact", "knob", "monitor"), (kind, name)
+    # gate knobs, plus the one measured read-back the chain analysis consults
+    assert {f for f, fs in OPERATION_FIELDS.items() if fs.role != "knob"} == {
+        "theta_rad"}
+    assert OPERATION_FIELDS["theta_rad"].role == "monitor"
 
 
-def test_modes_and_composites_carry_no_knobs_except_op_families():
-    """Standing knobs live on channels; composites get knobs only via declared
-    operations (OP_KNOBS). Mode kinds are pure facts."""
+def test_modes_and_composites_carry_no_knobs():
+    """Standing knobs live on lines and channels; a composite's gate knobs live
+    on its declared operations (<pair>.<op>). Mode kinds are pure facts."""
     for kind, spec in MODES.items():
         assert all(fs.role == "fact" for fs in spec.fields.values()), kind
     for kind, spec in COMPOSITES.items():
         assert all(fs.role == "fact" for fs in spec.fields.values()), kind
 
 
-def test_flux_channel_spans_both_stores():
-    """The mixed-store entity that justified per-field routing: q*_z holds
-    transfer-function facts AND the idle knob under one name."""
-    roles = {n: fs.role for n, fs in CHANNELS["flux"].fields.items()}
-    assert roles["idle_flux"] == "knob"
-    assert roles["flux_offset"] == "fact"
-    assert roles["flux_per_phi0"] == "fact"
+def test_flux_line_and_flux_channel_split_the_old_flux_channel():
+    """4.0.0: what exists once per WIRE (the DC offset, the delay, the impulse
+    response) belongs to the flux LINE; the per-target transfer function to the
+    channel <line>.<target>. A line still spans both stores."""
+    line = {n: fs.role for n, fs in CHANNELS["flux"].line_fields.items()}
+    assert line == {"idle_flux": "knob", "flux_delay_s": "knob",
+                    "distortion_amp": "fact", "distortion_tau_s": "fact"}
+    channel = {n: fs.role for n, fs in CHANNELS["flux"].fields.items()}
+    assert channel == {"flux_offset": "fact", "flux_per_phi0": "fact"}
+    for kind in ("drive", "readout", "pump"):
+        assert CHANNELS[kind].line_fields == {}, kind
 
 
 def test_flux_offset_declares_its_reference_plane():
@@ -57,13 +70,12 @@ def test_flux_offset_declares_its_reference_plane():
     slot, one plane — so the FieldSpec doc must say which, and say that a
     relative carrier re-references before writing. Losing that sentence is how
     the two frames silently start sharing a slot again."""
-    fields = CHANNELS["flux"].fields
-    offset_doc = fields["flux_offset"].doc
+    offset_doc = CHANNELS["flux"].fields["flux_offset"].doc
     assert "ABSOLUTE" in offset_doc
     assert "idle_flux" in offset_doc
     assert "re-reference" in offset_doc
     # and the knob names itself as the origin the relative frame measures from
-    assert "ORIGIN" in fields["idle_flux"].doc
+    assert "ORIGIN" in CHANNELS["flux"].line_fields["idle_flux"].doc
 
 
 # ---------------------------------------------------------------- vocabulary
@@ -73,7 +85,7 @@ def test_unit_suffix_convention_holds_and_is_enforced():
     assert "drive_freq_hz" in CHANNELS["drive"].fields
     assert "readout_freq_hz" in CHANNELS["readout"].fields
     # Flux set-points are the stated source-native exemption (no _v lie).
-    assert CHANNELS["flux"].fields["idle_flux"].unit == "source-native"
+    assert CHANNELS["flux"].line_fields["idle_flux"].unit == "source-native"
     # The lint actually fires on a violating field — in BOTH directions.
     with pytest.raises(AssertionError, match="unit"):
         _validate_fields("t", {"bad_freq": FieldSpec("Hz", "d", role="knob")})
@@ -98,8 +110,7 @@ def test_n_jj_is_design_only():
 
 def test_deleted_vocabulary_stayed_deleted():
     """The audit's unearned features must not creep back without a writer."""
-    all_fields = {n for f in (MODES, COMPOSITES, CHANNELS)
-                  for s in f.values() for n in s.fields}
+    all_fields = set(ALL_FIELD_NAMES)
     for dead in ("readout_fidelity", "drive_phase_rad", "centroids",
                  "pi_ef_amp", "threshold_ef", "coupler_decouple_v",
                  "coupler_interaction_v", "idle_flux_v", "v_offset_v",
@@ -131,14 +142,29 @@ def test_absent_row_is_illegal_capability_by_construction():
 def test_pump_is_any_target_no_op_and_explicit_only():
     assert derived_op("pump", "cavity") is None
     assert derived_op("pump", "transmon") is None
-    assert CHANNELS["pump"].rider_suffix is None
+    assert not CHANNELS["pump"].rider
     assert not any(ch == "pump" for ch, _ in DERIVATION)
 
 
-def test_rider_suffixes_are_the_frozen_map():
-    assert CHANNELS["drive"].rider_suffix == "_xy"
-    assert CHANNELS["readout"].rider_suffix == "_ro"
-    assert CHANNELS["flux"].rider_suffix == "_z"
+def test_riders_declare_drive_readout_flux():
+    assert [k for k, s in CHANNELS.items() if s.rider] == [
+        "drive", "readout", "flux"]
+
+
+def test_the_pre_4_0_suffix_map_stays_frozen_for_old_data():
+    """Old run data names channels q1_xy / q1_ro / q1_z forever; reading it is
+    the one place those names are still understood (scqo.v3_names)."""
+    from scqo.v3_names import V3_RIDER_SUFFIXES
+    assert V3_RIDER_SUFFIXES == {"drive": "_xy", "readout": "_ro", "flux": "_z"}
+
+
+def test_only_drive_is_borrowable_and_the_targets_own_fields_stay_home():
+    """A borrowed channel (a coupler through a neighbour's line) carries the
+    route's own knobs, never what belongs to the target itself."""
+    assert BORROWABLE == ("drive",)
+    assert CHANNELS["drive"].designed_only == {"thermalization_time_s",
+                                              "parity_delta_f_hz"}
+    assert all(not s.designed_only for k, s in CHANNELS.items() if k != "drive")
 
 
 def test_via_is_readout_only():
@@ -154,22 +180,35 @@ def test_flux_tunable_mirrors_the_table():
 
 # ------------------------------------------------------------------ families
 
-def test_op_knob_family_instantiates_full_names():
-    fields = op_knob_fields("cz")
-    assert "cz_coupler_flux" in fields
-    assert "cz_drive_freq_hz" in fields
-    assert "cz_waveform" in fields and "cz_waveform_dt_s" in fields
-    assert all(fs.role == "knob" for fs in fields.values())
+def test_operation_fields_are_the_gate_knobs():
+    """An operation's fields are plain names on <pair>.<op> - no flattening."""
+    assert "coupler_flux" in OPERATION_FIELDS
+    assert "drive_freq_hz" in OPERATION_FIELDS
+    assert "waveform" in OPERATION_FIELDS and "waveform_dt_s" in OPERATION_FIELDS
+    order = list(OPERATION_FIELDS)
+    assert order.index("waveform_dt_s") < order.index("waveform")  # dt first
 
 
 def test_waveform_arrays_require_dt_companion():
     with pytest.raises(AssertionError, match="_dt_s"):
         _validate_fields("t", {
             "x_waveform": FieldSpec("", "d", role="knob", shape="float[]")})
+    with pytest.raises(AssertionError, match="_dt_s"):
+        _validate_fields("t", {
+            "waveform": FieldSpec("", "d", role="knob", shape="float[]")})
+
+
+def test_field_names_never_carry_a_dot_or_dunder():
+    """A dot separates an entity from its field in an address; __ was the
+    retired parameter grammar."""
+    for bad in ("a.b", "a__b"):
+        with pytest.raises(AssertionError, match="never appear"):
+            _validate_fields("t", {bad: FieldSpec("", "d", role="knob")})
+    assert not any("." in n or "__" in n for n in ALL_FIELD_NAMES)
 
 
 def test_paired_arrays_are_declared_and_typed():
-    flux = CHANNELS["flux"].fields
+    flux = CHANNELS["flux"].line_fields
     assert flux["distortion_amp"].paired_with == "distortion_tau_s"
     assert flux["distortion_tau_s"].shape == "float[]"
     with pytest.raises(AssertionError, match="paired_with"):
@@ -184,7 +223,7 @@ def test_field_names_unique_across_channel_and_mode_catalogs():
     """The invariant behind `scqo set q1.pi_amp` default addressing."""
     seen = {}
     for kind, spec in CHANNELS.items():
-        for name in spec.fields:
+        for name in (*spec.fields, *spec.line_fields):
             assert name not in seen, (name, seen.get(name), kind)
             seen[name] = kind
     mode_fields = {n for s in MODES.values() for n in s.fields}

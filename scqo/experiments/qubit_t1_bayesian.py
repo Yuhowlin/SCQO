@@ -151,9 +151,10 @@ class QubitT1Bayesian(Experiment):
         "shrinking credible interval in ~num_probes shots per block. "
         "Interleaved non-adaptive shots give a classical decay cross-check. "
         "Record-only: characterizes T1 stability; qubit_relaxation stays the "
-        "t1_s authority. REQUIRES a calibrated readout discriminator AND a "
-        "measured confusion matrix (the SPAM-aware likelihood reads "
-        "alpha/beta from it). Runs on the QM backend only (per-shot exp/ln "
+        "t1_s authority. REQUIRES a calibrated readout discriminator AND the "
+        "readout channel's measured fidelity_g/fidelity_e (the SPAM-aware "
+        "likelihood reads alpha/beta from them; single_shot_readout stores "
+        "both). Runs on the QM backend only (per-shot exp/ln "
         "feedback on the pulse processor); a Qblox session refuses with "
         "NotImplementedError."
     )

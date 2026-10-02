@@ -9,21 +9,32 @@ from __future__ import annotations
 
 from typing import Any
 
-from .catalog import CHANNELS, COMPOSITES, MODES
+from .catalog import CHANNELS, COMPOSITES, MODES, OPERATION_FIELDS
 from .design import Design, seed_anchor
-from .entities import Channel, Composite, Line, Mode
+from .entities import Channel, Composite, Line, Mode, Operation
 from .roster import Roster
+
+
+def _catalog_field_specs():
+    """Every catalog (name, FieldSpec), in declaration order: modes,
+    composites, channel kinds (their channel fields, then their line fields),
+    operations."""
+    for kinds in (MODES, COMPOSITES):
+        for spec in kinds.values():
+            yield from spec.fields.items()
+    for spec in CHANNELS.values():
+        yield from spec.fields.items()
+        yield from spec.line_fields.items()
+    yield from OPERATION_FIELDS.items()
 
 
 def catalog_fields(*roles: str) -> list[str]:
     """Catalog field names of the given roles, in declaration order (deduped
     across kinds)."""
     out: list[str] = []
-    for kinds in (MODES, COMPOSITES, CHANNELS):
-        for spec in kinds.values():
-            for f, fs in spec.fields.items():
-                if fs.role in roles and f not in out:
-                    out.append(f)
+    for f, fs in _catalog_field_specs():
+        if fs.role in roles and f not in out:
+            out.append(f)
     return out
 
 
@@ -38,14 +49,11 @@ FIT_ONLY_QUANTITIES = ("p_e_given_g", "p_g_given_e", "pop_e_prep_g", "pop_g_prep
 
 #: Catalog unit per field name (declaration order, first kind wins — a field
 #: name never carries two different units across kinds). Derived, never
-#: hand-kept. Consumer: the viewer's per-parameter unit column; composite
-#: per-operation knobs are minted at runtime and simply miss (empty unit).
+#: hand-kept. Consumer: the viewer's per-parameter unit column.
 FIELD_UNITS: dict[str, str] = {}
-for _kinds in (MODES, COMPOSITES, CHANNELS):
-    for _spec in _kinds.values():
-        for _f, _fs in _spec.fields.items():
-            FIELD_UNITS.setdefault(_f, _fs.unit)
-del _kinds, _spec, _f, _fs
+for _f, _fs in _catalog_field_specs():
+    FIELD_UNITS.setdefault(_f, _fs.unit)
+del _f, _fs
 
 #: The subset that can actually MOVE on its own: facts and monitors the fit
 #: measured, never knobs. A knob appearing in a fit dict is the standing value the
@@ -60,14 +68,23 @@ MEASURED_QUANTITIES = (
 
 
 def _origin(entity) -> str:
+    if isinstance(entity, Channel) and entity.borrowed:
+        return "borrowed"
+    if isinstance(entity, Operation):
+        return f"[composites.{entity.composite}] operations"
     return str(entity.derived) if entity.derived is not None else "declared"
 
 
-def expansion_rows(roster: Roster) -> list[dict[str, Any]]:
+def expansion_rows(roster: Roster, *, borrowed: bool = False
+                   ) -> list[dict[str, Any]]:
     """The EXPANDED roster — what ``scqo device`` prints so a reader sees the
-    minted names (and where each came from) that the file does not list."""
+    derived names (and where each came from) that the file does not list.
+    Borrowed channels are summarized on their line (``lends``) unless asked
+    for one by one."""
     rows = []
     for name, e in sorted(roster.entities.items()):
+        if isinstance(e, Channel) and e.borrowed and not borrowed:
+            continue
         row: dict[str, Any] = {
             "entity": name,
             "section": type(e).__name__.lower() + "s",
@@ -81,23 +98,34 @@ def expansion_rows(roster: Roster) -> list[dict[str, Any]]:
         elif isinstance(e, Composite):
             row["roles"] = {r: list(v) for r, v in e.roles.items()}
             row["operations"] = list(e.operations)
+        elif isinstance(e, Operation):
+            row["composite"] = e.composite
         elif isinstance(e, Channel):
+            row["kinds"] = list(e.kinds)
             row["target"] = list(e.target)
             row["line"] = e.line
             row["via"] = e.via
+            row["borrowed"] = e.borrowed
         elif isinstance(e, Line):
-            row["carries"] = sorted(c.name for c in roster.channels().values()
-                                    if c.line == name)
+            row["carries"] = sorted(c.name for c in roster.channels_on(name))
+            row["lends"] = sorted(
+                c.target[0] for c in roster.borrowed_channels().values()
+                if c.line == name)
         rows.append(row)
     return rows
 
 
-def field_rows(roster: Roster) -> list[dict[str, Any]]:
+def field_rows(roster: Roster, *, borrowed: bool = False
+               ) -> list[dict[str, Any]]:
     """The catalog behind ``scqo state --fields``: every legal (entity,
-    field) with its routing, unit, and design/seed story."""
+    field) with its routing, unit, and design/seed story. BORROWED channels
+    (every drive line x every drivable mode) are left out unless asked for:
+    they share one field set, and listing them per entity drowns the rest."""
     rows = []
     for name in sorted(roster.entities):
         e = roster.entities[name]
+        if isinstance(e, Channel) and e.borrowed and not borrowed:
+            continue
         legal = roster._legal[name]  # compiled set incl. why-legal provenance
         for field, lf in sorted(legal.items()):
             spec = lf.spec
@@ -165,18 +193,11 @@ def state_rows(roster: Roster, state: dict, physical: dict, *,
 
 def qubit_rows(roster: Roster, qubit: str, state: dict,
                physical: dict) -> list[dict[str, Any]]:
-    """The per-qubit ASSEMBLED view: the mode plus its closure (default
-    channels, attached resonator), each row tagged with the closure ROLE it
-    plays — grouping derived from refs, never declared."""
-    members: list[tuple[str, str]] = [(qubit, "mode")]
-    for kind in CHANNELS:
-        ch = roster.defaults.get((qubit, kind))
-        if ch is not None:
-            members.append((ch, f"{kind} channel"))
-    members += [(m.name, "resonator") for m in roster.modes().values()
-                if m.refs.get("qubit") == qubit]
+    """The per-qubit ASSEMBLED view: the mode plus its closure
+    (:meth:`Roster.closure` - default channels, the flux line they ride, the
+    attached resonator), each row tagged with the closure ROLE it plays."""
     rows = []
-    for name, role in members:
+    for name, role in roster.closure(qubit):
         for row in state_rows(roster, {name: state.get(name, {})},
                               {name: physical.get(name, {})}):
             rows.append({**row, "member": role})
@@ -217,9 +238,14 @@ def catalog_rows() -> list[dict[str, Any]]:
                 "kind": kind,
                 "doc": spec.doc,
                 "fields": sorted(spec.fields),
+                "line_fields": sorted(getattr(spec, "line_fields", {})),
                 "roles": sorted(getattr(spec, "roles", {}) or
                                 getattr(spec, "refs", {}) or {}),
             })
+    rows.append({"family": "operation", "kind": "operation",
+                 "doc": "A declared composite operation, <composite>.<op>.",
+                 "fields": sorted(OPERATION_FIELDS), "line_fields": [],
+                 "roles": []})
     return rows
 
 

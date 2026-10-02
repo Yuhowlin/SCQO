@@ -180,20 +180,20 @@ def test_change_records_carry_the_setup(tmp_path):
     """Every write — run-driven or manual — is stamped with the session's setup,
     and the stamp round-trips through the state file."""
     dev = _recorder(tmp_path, setup="alpha")
-    dev.component("q0_xy").pi_amp = 0.3  # a manual write, no run context
+    dev.component("xy_q0.q0").pi_amp = 0.3  # a manual write, no run context
     assert [r.setup for r in dev.history()] == ["alpha"]
     dev.save()
 
     again = _recorder(tmp_path, setup="beta", on_load="push")
     assert [r.setup for r in again.history()] == ["alpha"]  # loaded rows keep theirs
-    again.component("q0_xy").pi_amp = 0.4
+    again.component("xy_q0.q0").pi_amp = 0.4
     assert [r.setup for r in again.history()] == ["alpha", "beta"]
 
 
 def test_setupless_device_stamps_none(tmp_path):
     """Direct-API sessions without a setup still record — with setup=None."""
     dev = _recorder()
-    dev.component("q0_xy").pi_amp = 0.3
+    dev.component("xy_q0.q0").pi_amp = 0.3
     assert dev.history()[0].setup is None
 
 
@@ -262,9 +262,9 @@ def test_physical_same_field_concurrent_newest_wins(tmp_path, monkeypatch):
 
 
 def test_physical_pre_cutover_file_is_archived_aside(tmp_path):
-    """Fresh start: a physical.json without the "schema": 3 stamp is pre-cutover —
+    """Fresh start: a physical.json with no known stamp (pre-greenfield) is
     archived as *.v2.bak on first contact (values and any sidecar both) and never
-    read; the store starts empty and the next save writes a clean v3 file."""
+    read; the store starts empty and the next save writes a clean schema-4 file."""
     roster = _roster()
     path = tmp_path / "physical.json"
     path.write_text(json.dumps({
@@ -282,9 +282,24 @@ def test_physical_pre_cutover_file_is_archived_aside(tmp_path):
     store.record("q0", "t2_echo_s", 12e-6)
     store.save()
     data = json.loads(path.read_text(encoding="utf-8"))
-    assert data["schema"] == 3 and "history" not in data
+    assert data["schema"] == 4 and "history" not in data
     assert [r["new"] for r in _db_rows(tmp_path, "physical")] == [
         12e-6]  # v2 rows never merged
+
+
+def test_a_3x_physical_file_is_refused_never_archived(tmp_path):
+    """4.0.0: a schema-3 physical.json holds facts that cannot be regenerated,
+    so it is refused BY NAME - pointing at the one-time conversion - and left
+    exactly where it is."""
+    from scqo.stores import StoreError
+
+    path = tmp_path / "physical.json"
+    original = json.dumps({"schema": 3, "values": {"q0": {"t1_s": 25e-6}}})
+    path.write_text(original, encoding="utf-8")
+    with pytest.raises(StoreError, match="convert_store_v4"):
+        physical_store(tmp_path, _roster(), setup="alpha")
+    assert path.read_text(encoding="utf-8") == original      # untouched
+    assert not (tmp_path / "physical.json.v2.bak").exists()  # never archived
 
 
 def test_physical_save_takes_over_stale_lock_then_times_out_on_fresh(tmp_path, monkeypatch):
@@ -392,7 +407,7 @@ def test_persist_is_atomic_and_leaves_no_temp(tmp_path):
     scqo_dir = tmp_path / "sub"  # parent created on first save
     path = scqo_dir / "scqo_state.json"
     dev = _recorder(scqo_dir, setup="alpha")
-    dev.component("q0_xy").pi_amp = 0.3
+    dev.component("xy_q0.q0").pi_amp = 0.3
     dev.save()
     assert path.is_file()
     assert list(path.parent.glob("*.tmp")) == []
@@ -401,7 +416,7 @@ def test_persist_is_atomic_and_leaves_no_temp(tmp_path):
     # holds no -wal/-shm side files, so a folder copy is always clean
     assert list(path.parent.glob("*.sqlite-*")) == []
     data = json.loads(path.read_text(encoding="utf-8"))
-    assert data["schema"] == 3  # the model-cutover stamp
+    assert data["schema"] == 4  # the store-by-line stamp
     assert "history" not in data  # values-only: history lives in the database
     assert _db_rows(scqo_dir, "state")[0]["setup"] == "alpha"
 
@@ -414,9 +429,9 @@ def test_device_history_merges_same_setup_sessions(tmp_path):
     a = _recorder(tmp_path, setup="alpha")
     b = _recorder(tmp_path, setup="alpha")  # both pre-save
 
-    a.component("q0_xy").pi_amp = 0.3
+    a.component("xy_q0.q0").pi_amp = 0.3
     a.save()
-    b.component("q0_xy").drive_freq_hz = 3.9e9
+    b.component("xy_q0.q0").drive_freq_hz = 3.9e9
     b.save()  # must NOT erase a's pi_amp row
 
     assert path.is_file()
@@ -425,9 +440,9 @@ def test_device_history_merges_same_setup_sessions(tmp_path):
 
 
 def test_pre_cutover_state_file_is_archived_on_save_path_too(tmp_path):
-    """The v3 gate applies at the device's store as well: a pre-cutover
+    """The schema gate applies at the device's store as well: a pre-greenfield
     scqo_state.json (schema 2, "config" block, embedded "history") is archived
-    aside on first contact and its rows never leak into the v3 sidecar."""
+    aside on first contact and its rows never leak into the history database."""
     path = tmp_path / "scqo_state.json"
     path.write_text(json.dumps({
         "schema": 2,
@@ -440,12 +455,12 @@ def test_pre_cutover_state_file_is_archived_on_save_path_too(tmp_path):
     dev = _recorder(tmp_path, setup="alpha")
     assert (tmp_path / "scqo_state.json.v2.bak").is_file()  # archived, not read
     assert dev.history() == ()
-    assert dev.component("q0_xy").pi_amp == 0.1  # reseeded from the vendor
-    dev.component("q0_xy").pi_amp = 0.4
+    assert dev.component("xy_q0.q0").pi_amp == 0.1  # reseeded from the vendor
+    dev.component("xy_q0.q0").pi_amp = 0.4
     dev.save()
 
     data = json.loads(path.read_text(encoding="utf-8"))
-    assert data["schema"] == 3 and "history" not in data
+    assert data["schema"] == 4 and "history" not in data
     assert [r["new"] for r in _db_rows(tmp_path, "state")] == [
         0.4]  # v2 rows never resurrect
 
@@ -456,12 +471,12 @@ def test_values_only_reset_keeps_history(tmp_path):
     every row."""
     path = tmp_path / "scqo_state.json"
     dev = _recorder(tmp_path, setup="alpha")
-    dev.component("q0_xy").pi_amp = 0.3
+    dev.component("xy_q0.q0").pi_amp = 0.3
     dev.save()
 
     path.unlink()  # the reset: values gone, history.sqlite stays
     fresh = _recorder(tmp_path, setup="alpha")
-    assert fresh.component("q0_xy").pi_amp == 0.1  # reseeded from the vendor
+    assert fresh.component("xy_q0.q0").pi_amp == 0.1  # reseeded from the vendor
     assert [r.new for r in fresh.history()] == [0.3]  # provenance continuous
 
 
@@ -514,9 +529,10 @@ def test_two_users_two_setups_end_to_end(tmp_path, monkeypatch):
         (res_a["run_id"], "alpha"), (t1_a["run_id"], "alpha")}
     assert {(r["run_id"], r["setup"]) for r in hist_b} == {
         (res_b["run_id"], "beta"), (t1_b["run_id"], "beta")}
-    assert (file_a["values"]["q0_ro"]["readout_freq_hz"]
+    # schema 4 nests a channel under its line: fl.q0 -> values["fl"]["q0"]
+    assert (file_a["values"]["fl"]["q0"]["readout_freq_hz"]
             == res_a["fit"]["q0"]["readout_freq_hz"])
-    assert (file_b["values"]["q0_ro"]["readout_freq_hz"]
+    assert (file_b["values"]["fl"]["q0"]["readout_freq_hz"]
             == res_b["fit"]["q0"]["readout_freq_hz"])
     assert not (ddir / "scqo_state.json").exists()  # no retired per-device file
 

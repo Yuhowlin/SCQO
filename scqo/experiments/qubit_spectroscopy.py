@@ -209,8 +209,8 @@ class QubitSpectroscopy(Experiment):
                     "n_peaks": float(len(peaks)),
                     "old_drive_freq_hz": old,
                 }
-                # window_bounds, never a chained start <= det <= end: the edges
-                # may arrive in either order and a reversed pair would make the
+                # window_bounds, never a chained start <= det <= end: the window
+                # may be swept high -> low, and a descending pair would make the
                 # chain always-False, failing every good fit.
                 low, high = window_bounds(self.params.start_drive_detuning_hz,
                                           self.params.end_drive_detuning_hz)

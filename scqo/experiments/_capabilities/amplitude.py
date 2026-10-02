@@ -1,10 +1,11 @@
 """Amplitude-sweep capability: the absolute amplitude behind a swept RATIO.
 
-Four experiments sweep a drive or readout pulse amplitude as a dimensionless
+Five experiments sweep a drive or readout-channel amplitude as a dimensionless
 FACTOR of whatever the target currently stores — ``qubit_power_rabi`` and
 ``qubit_pi_pulse_error`` against the drive channel's ``pi_amp``,
 ``qubit_deterministic_benchmarking`` against ``pi_amp`` or ``pi_amp_x90``, and
-``readout_power`` against the readout channel's ``readout_amp``.
+``readout_power`` (the readout pulse) and ``qubit_resonator_stark`` (its Stark
+tone) against the readout channel's ``readout_amp``.
 
 THE RATIO IS THE INPUT, ON PURPOSE. One factor array serves every target in a
 multiplexed run: q1 with ``pi_amp`` 0.15 and q2 with 0.35 are each driven around
@@ -49,8 +50,9 @@ A carrier declares ONE thing and inherits the rest::
 ``amp_reference_field`` returns a BARE FIELD NAME, never a (channel kind, field)
 pair: :meth:`Experiment.anchor` resolves it through ``Roster.resolve_field``
 (qubit-closure addressing), and ``catalog.py`` asserts that no field name appears
-in two channel-kind catalogs — so ``"pi_amp"`` already means ``q1_xy`` and
-``"readout_amp"`` already means ``q1_ro``. Passing the kind as well would be a
+in two channel-kind catalogs — so ``"pi_amp"`` already means q1's designed
+drive channel (``xy1.q1``) and ``"readout_amp"`` its readout channel
+(``feedline.q1``). Passing the kind as well would be a
 second, unchecked source of truth. It is a METHOD rather than a ClassVar because
 ``qubit_deterministic_benchmarking`` picks its knob from ``target_gate``.
 
@@ -58,6 +60,15 @@ The axis is ``amp_prefactor`` and not ``amp_factor`` because that is already the
 name in scqat (all three amplitude estimators), in the QM probes and in the QM
 qualibrate nodes — choosing it DELETES boundary renames instead of adding them,
 including a positional-fallback hop in the QM backend's ``_to_canonical``.
+
+THE WINDOW IS A TRAVERSAL ORDER: ``start_amp_factor`` -> ``end_amp_factor``, in
+either direction, and the dataset keeps the order the probe walked (decided
+2026-09-26) — a strong readout or Stark tone leaves the next point heated, so
+which way the amplitude went must be the caller's choice and visible in the data.
+scqat's estimators cannot tell the direction, so it never changes a fitted number.
+Only a zero-width window is refused (``.._window``), and the bounds hold on BOTH
+edges, since either one may be the larger. A carrier that overrides
+:meth:`AmplitudeSweepParameters.amp_values` must keep that order too.
 """
 
 from __future__ import annotations
@@ -68,6 +79,7 @@ import numpy as np
 from pydantic import Field, model_validator
 
 from ...parameters import Parameters
+from .._window import refuse_zero_width
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ...experiment import Experiment
@@ -87,11 +99,16 @@ ABS_AMP_LABEL = "absolute amplitude (normalized)"
 
 #: canonical field texts — a subclass overriding a DEFAULT re-declares the Field
 #: with these constants, so the catalog text can never drift (test-enforced).
-MIN_AMP_FACTOR_DESC = (
-    "Lowest drive/readout amplitude, as a FACTOR of the target's currently "
-    "stored amplitude (1.0 = leave it as calibrated)."
+START_AMP_FACTOR_DESC = (
+    "First drive/readout amplitude of the sweep, as a FACTOR of the target's "
+    "currently stored amplitude (1.0 = leave it as calibrated). The probe walks "
+    "start_amp_factor -> end_amp_factor IN THAT ORDER, either direction, and the "
+    "data keeps it; the fitted result does not depend on it."
 )
-MAX_AMP_FACTOR_DESC = "Highest amplitude factor."
+END_AMP_FACTOR_DESC = (
+    "Last amplitude factor of the sweep. May be above or below "
+    "start_amp_factor; only a zero-width window (both edges equal) is refused."
+)
 NUM_AMP_POINTS_DESC = "Number of amplitude points."
 #: the ONE carrier that legitimately allows a single point — a degenerate
 #: "measure at the current amplitude" mode, not a sweep.
@@ -104,29 +121,32 @@ NUM_AMP_POINTS_OPTIONAL_DESC = (
 class AmplitudeSweepParameters(Parameters):
     """Mixin: the swept amplitude window as a FACTOR of the standing amplitude.
 
-    The factor frame is deliberate — see the module docstring. The bound is
-    ``lt=2.0`` because that is the widest window ANY current backend can express
+    The factor frame is deliberate — see the module docstring. The bounds are
+    ``ge=0.0`` and ``lt=2.0`` on BOTH edges (the order is free, so either may be
+    the larger): ``2.0`` is the widest window ANY current backend can express
     (QUA's dynamic ``amplitude_scale`` is fixed-point on ``(-2, 2)``); the real,
     device-state-dependent limit is ``factor x stored_amplitude <= 1`` and belongs
-    to the drivers, which refuse it BY NAME rather than clipping.
+    to the drivers, which refuse it BY NAME rather than clipping. A carrier
+    re-declaring the edges keeps a bound on both — tighter where its physics
+    needs it.
     """
 
-    min_amp_factor: float = Field(0.9, ge=0.0, description=MIN_AMP_FACTOR_DESC)
-    max_amp_factor: float = Field(1.1, gt=0.0, lt=2.0, description=MAX_AMP_FACTOR_DESC)
+    start_amp_factor: float = Field(0.9, ge=0.0, lt=2.0, description=START_AMP_FACTOR_DESC)
+    end_amp_factor: float = Field(1.1, ge=0.0, lt=2.0, description=END_AMP_FACTOR_DESC)
     num_amp_points: int = Field(41, gt=1, description=NUM_AMP_POINTS_DESC)
 
     @model_validator(mode="after")
-    def _window_ordered(self) -> "AmplitudeSweepParameters":
-        if not self.min_amp_factor < self.max_amp_factor:
-            raise ValueError(
-                f"min_amp_factor ({self.min_amp_factor}) must be below "
-                f"max_amp_factor ({self.max_amp_factor})"
-            )
+    def _amp_window_spans(self) -> "AmplitudeSweepParameters":
+        refuse_zero_width(
+            self.start_amp_factor, self.end_amp_factor,
+            start_name="start_amp_factor", end_name="end_amp_factor",
+            points_name="num_amp_points", quantity="amplitude")
         return self
 
     def amp_values(self) -> np.ndarray:
-        """The swept factors. Overridden by a carrier with a different rule."""
-        return np.linspace(self.min_amp_factor, self.max_amp_factor,
+        """The swept factors, ``start`` -> ``end`` in THAT order. Overridden by a
+        carrier with a different rule, which must keep the order it is given."""
+        return np.linspace(self.start_amp_factor, self.end_amp_factor,
                            self.num_amp_points)
 
 
@@ -146,8 +166,19 @@ def amp_anchor(experiment: "Experiment", target: str) -> float:
     Every carrier's ``estimate()`` reads ``old_<knob>`` through this same call,
     so the attached axis and the reported reference can never come from two
     different reads.
+
+    A DRIVE-channel knob resolves through :func:`drive_line.drive_owner`: a
+    carrier that names a drive line reads the knob on ``<line>.<target>`` (a
+    coupler's borrowed ``xy2.q1_q2_c``), every other read stays the qubit
+    shorthand it always was. A readout knob never follows the drive line.
     """
-    return experiment.anchor(target, experiment.amp_reference_field())
+    from ...catalog import CHANNELS
+    from .drive_line import drive_owner
+
+    field = experiment.amp_reference_field()
+    owner = (drive_owner(experiment, target) if field in CHANNELS["drive"].fields
+             else target)
+    return experiment.anchor(owner, field)
 
 
 def absolute_amps(experiment: "Experiment") -> Optional[np.ndarray]:

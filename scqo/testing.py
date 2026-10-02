@@ -15,8 +15,8 @@ from __future__ import annotations
 import xarray as xr
 
 from .design import Design, parse_design
-from .device import CompositeView, DeviceModel, EntityView
-from .entities import Composite
+from .device import DeviceModel, EntityView, OperationView
+from .entities import Operation
 from .roster import Roster, parse_components
 
 #: Demo design targets grow with the qubit index — the LATER qubit is the
@@ -31,13 +31,16 @@ def demo_components(qubits: tuple[str, ...] = ("q0", "q1"), *,
                     pair: bool = True, tunable: bool = False,
                     chain: bool = False) -> Roster:
     """The chipT-shaped demo roster in the greenfield schema: one
-    multiplexed feedline, a dedicated drive wire each, and (default) a
-    qubit_pair over the first two qubits — so every core test exercises
-    rider minting, multiplexed readout, and pair plumbing.
+    multiplexed feedline ``fl``, a dedicated drive wire each (``xy_<q>``), and
+    (default) a qubit_pair over the first two qubits — so every core test
+    exercises rider expansion, multiplexed readout, and pair plumbing. The
+    channels are addressed ``fl.<q>`` and ``xy_<q>.<q>``; every drive line also
+    lends itself to the other modes as a borrowed channel.
 
     ``tunable=True`` is the flux-demo variant: flux_transmon qubits with a
-    z wire each, plus a tracked coupler mode with its own flux wire on the
-    pair — the substrate for the flux/pair experiment tests.
+    z wire each (``z_<q>``: the line owns the bias, ``z_<q>.<q>`` the transfer
+    function), plus a tracked coupler mode with its own flux wire on the pair
+    (``zc_<a>_<b>``) — the substrate for the flux/pair experiment tests.
 
     ``chain=True`` mints a pair over EVERY consecutive qubit instead of just
     the first two (q0_q1, q1_q2, …), so a multi-pair experiment — a swap
@@ -65,12 +68,12 @@ def demo_components(qubits: tuple[str, ...] = ("q0", "q1"), *,
             if tunable:
                 # one flux wire PER coupler: a shared line would mint both
                 # couplers' channels onto one wire, which no chip is wired as
-                lines.append(f"[lines.{a}_{b}_zc]\nflux = [\"{a}_{b}_c\"]")
+                lines.append(f"[lines.zc_{a}_{b}]\nflux = [\"{a}_{b}_c\"]")
     readout = ", ".join(f'"{q}"' for q in qubits)
     lines.append(f"[lines.fl]\nreadout = [{readout}]")
-    lines.extend(f"[lines.{q}_xyl]\ndrive = [\"{q}\"]" for q in qubits)
+    lines.extend(f"[lines.xy_{q}]\ndrive = [\"{q}\"]" for q in qubits)
     if tunable:
-        lines.extend(f"[lines.{q}_zl]\nflux = [\"{q}\"]" for q in qubits)
+        lines.extend(f"[lines.z_{q}]\nflux = [\"{q}\"]" for q in qubits)
     return parse_components("schema = 3\n" + "\n".join(lines))
 
 
@@ -89,8 +92,10 @@ def demo_design(roster: Roster,
 
 
 def demo_vendor_state(roster: Roster, design: Design) -> dict:
-    """A plausible vendor tree for the demo device: channel knobs seeded
-    from the design (the shape a real instrument config would carry)."""
+    """A plausible vendor tree for the demo device: the knobs of every
+    designed channel, every line with knobs and every operation, seeded from
+    the design (the shape a real instrument config would carry). Borrowed
+    channels are absent - not adopted, so unrealized."""
     from .design import seed_value
 
     state: dict[str, dict] = {}
@@ -122,11 +127,14 @@ def demo_vendor_state(roster: Roster, design: Design) -> dict:
             fields.setdefault("readout_power_dbm", -30.0)
             fields.setdefault("readout_duration_s", 8.0e-7)
             fields.setdefault("readout_integration_s", 8.0e-7)
-        elif e.kind == "flux":
-            fields.setdefault("idle_flux", 0.0)
-            fields.setdefault("flux_delay_s", 0.0)
-        state[name] = fields
-    for name, e in roster.composites().items():
+        if fields:
+            state[name] = fields
+    for name in roster.lines():
+        knobs = [f for f, spec in roster.fields_of(name).items()
+                 if spec.role == "knob"]
+        if "idle_flux" in knobs:
+            state[name] = {"idle_flux": 0.0, "flux_delay_s": 0.0}
+    for name in roster.operation_entities():
         state[name] = {}
     return state
 
@@ -166,7 +174,7 @@ class _InMemoryChannel(EntityView):
                               if isinstance(value, list) else float(value))
 
 
-class _InMemoryComposite(CompositeView):
+class _InMemoryOperation(OperationView):
     def __init__(self, name: str, kind: str, state: dict) -> None:
         object.__setattr__(self, "name", name)
         object.__setattr__(self, "kind", kind)
@@ -183,21 +191,34 @@ class _InMemoryComposite(CompositeView):
 class InMemoryDevice(DeviceModel):
     """A DeviceModel held entirely in memory (no vendor files).
 
-    ``roster`` tells it which entities are composites (generic knob surface)
-    versus channels (attribute surface); entities absent from ``state`` are
-    unrealized (KeyError — exactly a real vendor's behavior for unwired
-    roster entries)."""
+    ``roster`` tells it which entities are operations (generic knob surface)
+    versus channels and lines (attribute surface); entities absent from
+    ``state`` are unrealized (KeyError — exactly a real vendor's behavior for
+    unwired roster entries and not-yet-adopted borrowed channels)."""
 
     def __init__(self, roster: Roster, state: dict) -> None:
         self._roster = roster
         self._state = {name: dict(fields) for name, fields in state.items()}
 
     def component(self, name: str) -> EntityView:
-        state = self._state[name]  # KeyError = vendor does not realize it
+        if name not in self._state:  # KeyError = vendor does not realize it
+            e = self._roster.entities.get(name)
+            if getattr(e, "borrowed", False):
+                raise KeyError(
+                    f"{name!r} is a BORROWED channel this vendor has not "
+                    f"adopted (the demo stand-in adopts one with "
+                    f"InMemoryDevice.adopt)")
+            raise KeyError(f"{name!r} is not realized by this vendor")
+        state = self._state[name]
         e = self._roster.entities[name]
-        if isinstance(e, Composite):
-            return _InMemoryComposite(name, e.kind, state)
+        if isinstance(e, Operation):
+            return _InMemoryOperation(name, e.kind, state)
         return _InMemoryChannel(name, e.kind, state)
+
+    def adopt(self, name: str, fields: dict | None = None) -> None:
+        """Realize a borrowed channel on this stand-in vendor, the offline
+        twin of a driver creating the vendor element for it."""
+        self._state.setdefault(name, dict(fields or {}))
 
     def save(self) -> None:  # nothing to persist
         pass
