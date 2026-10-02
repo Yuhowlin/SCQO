@@ -19,7 +19,7 @@ crosstalk_cancellation_tomography, calibrated in the same program context.
 
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 import numpy as np
 from pydantic import Field, model_validator
@@ -124,6 +124,15 @@ class CrosstalkCompensatedSQRBParameters(
     drive_init_phase: float = Field(
         0.0,
         description="Bidirectional: phase (rad) of that cancellation copy."
+    )
+    cancel_tone: Literal["aggressor", "victim"] = Field(
+        "aggressor",
+        description=(
+            "Frequency of the cancellation copy. 'aggressor': at the aggressor's frequency on the "
+            "victim's line, a copy of the leaked field itself. 'victim': at the victim's frequency, "
+            "following the leak's phase advance in 16 ns steps. Calibrate it with "
+            "crosstalk_cancellation_tomography run with the same cancel_tone."
+        )
     )
 
     def get_depths(self) -> np.ndarray:

@@ -157,7 +157,7 @@ def test_bidirectional_reverse_compensation_is_independent(session):
 
 @pytest.mark.parametrize("removed", [
     {"mode": "calibrate"}, {"cal_stage_repetitions": [10, 20]}, {"min_cancel_amp": 0.01},
-    {"readout_scheme": "separate_passes"}, {"sequence_mode": "unrolled"}, {"cancel_tone": "victim"},
+    {"readout_scheme": "separate_passes"}, {"sequence_mode": "unrolled"},
     {"stark_frame_rad": 0.01}, {"phase_reset": "if_only"}, {"fpga_dispatch": "merged"},
     {"reverse_track": False}, {"strict_timing": True}, {"target_gate": "x180"},
 ])
@@ -176,3 +176,10 @@ def test_conditions_and_depths_are_checked():
     with pytest.raises(ValueError, match="depths"):
         CrosstalkCompensatedSQRBParameters(depths=[0, 4])
     assert CrosstalkCompensatedSQRBParameters().sequences_per_program == 7
+
+
+def test_cancel_tone_is_aggressor_or_victim():
+    assert CrosstalkCompensatedSQRBParameters().cancel_tone == "aggressor"
+    assert CrosstalkCompensatedSQRBParameters(cancel_tone="victim").cancel_tone == "victim"
+    with pytest.raises(ValueError):
+        CrosstalkCompensatedSQRBParameters(cancel_tone="drive")

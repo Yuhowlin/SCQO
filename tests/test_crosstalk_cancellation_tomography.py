@@ -115,12 +115,21 @@ def test_estimate_suggests_the_simulated_optimum(session):
 
 
 @pytest.mark.parametrize("removed", [
-    {"cancel_tone": "victim"}, {"phase_reset": "if_only"}, {"stark_frame_rad": 0.01},
+    {"phase_reset": "if_only"}, {"stark_frame_rad": 0.01},
     {"drive_cancel_amp": 0.0}, {"drive_init_phase": 0.1},
 ])
 def test_removed_tomography_options_are_refused(removed):
-    """The cancel tone is always the aggressor's; the unrolled-era knobs are gone."""
+    """The unrolled-era knobs are gone."""
     from scqo.experiments.crosstalk_cancellation_tomography import CrosstalkCancellationTomographyParameters
 
     with pytest.raises(ValueError):
         CrosstalkCancellationTomographyParameters(probe_qubit="q1", drive_qubit="q3", **removed)
+
+
+def test_cancel_tone_is_aggressor_or_victim():
+    from scqo.experiments.crosstalk_cancellation_tomography import CrosstalkCancellationTomographyParameters
+
+    assert CrosstalkCancellationTomographyParameters().cancel_tone == "aggressor"
+    assert CrosstalkCancellationTomographyParameters(cancel_tone="victim").cancel_tone == "victim"
+    with pytest.raises(ValueError):
+        CrosstalkCancellationTomographyParameters(cancel_tone="drive")

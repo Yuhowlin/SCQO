@@ -15,7 +15,7 @@ bidirectional benchmark.
 
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 import numpy as np
 from pydantic import Field, field_validator, model_validator
@@ -106,6 +106,14 @@ class CrosstalkCancellationTomographyParameters(
             "bidirectional benchmark does (its data is not returned). Reading a qubit shifts its "
             "drive phase by one 4 ns IF cycle on chipQM, so a bidirectional benchmark must be "
             "calibrated with this on."
+        )
+    )
+    cancel_tone: Literal["aggressor", "victim"] = Field(
+        "aggressor",
+        description=(
+            "Frequency of the cancellation element, as in crosstalk_compensated_sqrb: 'aggressor' "
+            "(turns with the drive's frame-freezing steps) or 'victim' (still in the probe's frame). "
+            "Calibrate with the cancel_tone the benchmark will use."
         )
     )
     repetitions: list[int] | str | int | None = Field(
