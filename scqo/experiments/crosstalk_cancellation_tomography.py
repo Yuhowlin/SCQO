@@ -6,14 +6,16 @@ cancellation across three conditions:
 2. 'cancel_only': Probe state evolution driven purely by active cancellation pulses.
 3. 'compensated': Probe state evolution under simultaneous drive and cancellation.
 
-Diagnoses whether residual errors in calibrate mode are coherent (e.g. AC Stark phase shift /
-Z rotation) or mixed (incoherent dephasing / heating), and extracts the effective AC Stark shift
-per gate to determine necessary virtual Z corrections.
+Fits each trajectory to a fixed rotation per pulse; the noise and cancel rotation vectors give
+the cancel_amp / init_phase that crosstalk_compensated_sqrb uses (the cancel element plays a
+scaled copy of the aggressor's pulse at the aggressor's frequency, on the probe's line).
+Calibrate in the context the benchmark runs in: bidirectional + read_drive for a
+bidirectional benchmark.
 """
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar
 
 import numpy as np
 from pydantic import Field, field_validator, model_validator
@@ -91,63 +93,21 @@ class CrosstalkCancellationTomographyParameters(
     bidirectional: bool = Field(
         False,
         description=(
-            "Reproduce the bidirectional crosstalk_compensated_sqrb program context: add the "
-            "drive-line cancellation element (aligned, frame-reset, set to drive_init_phase, and "
-            "advancing its frame every pulse as it does while the probe idles). It plays no pulse "
-            "here - the probe is idle - so this measures the probe-side cancellation inside the "
-            "same 4-element program the bidirectional benchmark runs."
-        )
-    )
-    drive_init_phase: float = Field(
-        0.0,
-        description="Bidirectional only: initial phase in radians of the drive-line cancellation element."
-    )
-    drive_cancel_amp: float | None = Field(
-        None,
-        ge=0.0,
-        description=(
-            "Bidirectional only, diagnostic: if set, the drive-line element PLAYS target_gate at this "
-            "amplitude in every compensated pulse slot (0.0 = a silent play) instead of idling, to test "
-            "whether a concurrent play on it disturbs the probe-side cancellation."
+            "Reproduce the bidirectional crosstalk_compensated_sqrb program: add the drive-line "
+            "cancellation element too (idle here - the probe plays nothing), so both cancel elements "
+            "sit on the same FEM cores as in the benchmark. The phase reference is per core, so a "
+            "bidirectional benchmark must be calibrated with this on."
         )
     )
     read_drive: bool = Field(
         False,
         description=(
-            "Diagnostic: also read the drive qubit in the same shot, multiplexed with the probe "
-            "(as the simultaneous-readout bidirectional SQRB does). Its data is not returned."
+            "Also read the drive qubit in the same shot, multiplexed with the probe, as the "
+            "bidirectional benchmark does (its data is not returned). Reading a qubit shifts its "
+            "drive phase by one 4 ns IF cycle on chipQM, so a bidirectional benchmark must be "
+            "calibrated with this on."
         )
     )
-    phase_reset: Literal["global", "if_only"] = Field(
-        "global",
-        description=(
-            "Phase reset at the start of every shot. 'global': reset_if_phase on each xy element "
-            "plus reset_global_phase(). 'if_only': reset_if_phase only. On chipQM (QM simulator and "
-            "hardware, 2026-10-01) reset_global_phase() makes an element's phase depend on which "
-            "resonators the program reads (q3.xy slips one 4 ns IF cycle when q3 is read) in the "
-            "QM simulator, but on chipQM hardware (2026-10-01) 'if_only' dephases the phase between "
-            "lines shot to shot - keep 'global' and calibrate in the same readout context instead."
-        )
-    )
-    cancel_tone: Literal["victim", "aggressor"] = Field(
-        "victim",
-        description=(
-            "Frequency of the cancel element(s). 'victim': the victim's IF, the crosstalk phase "
-            "followed by frame steps of phase_rate per subslot. 'aggressor': the element outputs at "
-            "the aggressor's frequency on the victim's line - a scaled copy of the leaked field, "
-            "phase-locked to it with no frame steps (also cancels the leak's AC-Stark shift). "
-            "cancel_amp / init_phase differ between the two; calibrate with the same tone."
-        )
-    )
-    stark_frame_rad: float = Field(
-        0.0,
-        description=(
-            "Compensated condition: frame rotation (rad) applied to the probe after every drive "
-            "pulse (1/4 of it for a 90-type target_gate) - the virtual Z that crosstalk_compensated_sqrb's "
-            "stark_frame_rad applies. Scan it here: the compensated Z residual goes to 0 at the right value."
-        )
-    )
-
     repetitions: list[int] | str | int | None = Field(
         None,
         description=(

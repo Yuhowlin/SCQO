@@ -1,55 +1,41 @@
 """Crosstalk Compensated Simultaneous SQRB experiment.
 
-Evaluates and mitigates microwave crosstalk during simultaneous single-qubit
-randomized benchmarking (SQRB) on a probe qubit when an aggressor drive qubit
-is running concurrent Clifford gates.
+Measures how much a neighbouring qubit's drive ("aggressor", drive_qubit) degrades single-qubit
+randomized benchmarking of a "victim" (probe_qubit), and how much of it active cancellation
+recovers. Three conditions are compared, each a full SQRB decay:
 
-Three conditions are compared:
-1. Isolated: Probe qubit runs SQRB alone (drive qubit idle).
-2. Simultaneous: Probe qubit and drive qubit run SQRB concurrently without compensation.
-3. Compensated: Probe qubit and drive qubit run SQRB concurrently, while active
-   cancellation pulses (at probe frequency) are injected to cancel crosstalk.
+1. isolated:     the victim runs SQRB alone.
+2. simultaneous: both qubits run independent random Clifford sequences at the same time.
+3. compensated:  as simultaneous, plus a cancellation element on the victim's line that plays a
+                 scaled, phase-shifted copy of the aggressor's pulses at the AGGRESSOR's frequency,
+                 so the leaked field and its copy cancel on the chip.
 
-The phase of the compensation pulse evolves gate-by-gate:
-    Phi_k = init_phase + k * phase_rate + gate_phase(G_d,k)
-where phase_rate = 2 * pi * (f_d - f_p) * tau_slot is derived from the inter-qubit
-detuning and Clifford time slot duration.
+With ``bidirectional`` both qubits are victim and aggressor: each line gets its own cancellation
+element and each qubit its own three RB curves, both qubits read out together.
+
+The cancellation amplitude / phase (cancel_amp, init_phase and the drive_* pair) come from
+crosstalk_cancellation_tomography, calibrated in the same program context.
 """
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar
 
 import numpy as np
 from pydantic import Field, model_validator
 import xarray as xr
 
-from .._scqat import per_qubit_results
-from ..contract import DatasetContract
+from ..contract import ContractError, DatasetContract
 from ._capabilities.qubit_reset import QubitResetParameters
-from ._capabilities.state_readout import (
-    POPULATION_ALT,
-    StateReadoutParameters,
-    population_row,
-    readout_vars,
-    signal_rename,
-)
-from ._sim import iq_from_population, stable_seed
+from ._capabilities.state_readout import POPULATION_ALT, StateReadoutParameters
+from ._sim import stable_seed
 from ..parameters import AveragingParameters, TargetSelection
 from ..result import Outcome, Result
 from ..experiment import Experiment
 from . import register
 
 
-def compute_theoretical_phase_rate(
-    f_drive_hz: float, f_probe_hz: float, duration_ns: float
-) -> float:
-    """Calculate theoretical phase accumulation per gate slot in radians.
-
-    Formula: Delta phi = 2 * pi * (f_d - f_p) * tau_slot.
-    """
-    delta_f = f_drive_hz - f_probe_hz
-    return float(2.0 * np.pi * delta_f * (duration_ns * 1e-9))
+CONDITIONS = ("isolated", "simultaneous", "compensated")
 
 
 class CrosstalkCompensatedSQRBParameters(
@@ -59,44 +45,89 @@ class CrosstalkCompensatedSQRBParameters(
 
     probe_qubit: str = Field(
         "q0",
-        description="Target qubit under SQRB measurement (e.g. 'q1')."
+        description="Victim qubit whose SQRB is measured (e.g. 'q1')."
     )
     drive_qubit: str = Field(
         "q1",
-        description="Interfering aggressor qubit running concurrent Cliffords (e.g. 'q2')."
+        description="Aggressor qubit running concurrent Cliffords (e.g. 'q3')."
     )
     targets: list[str] = Field(
         default_factory=list,
         description="Target qubits [probe_qubit, drive_qubit]. Auto-derived if omitted."
     )
 
+    # Sequences and depths
     num_random_sequences: int = Field(
         30,
         gt=0,
         description="Number of distinct random Clifford sequences."
     )
-    # Clifford sequence settings
     max_circuit_depth: int = Field(
         256,
         gt=0,
-        description="Maximum Clifford circuit depth to sweep in benchmark mode."
+        description="Maximum Clifford depth when `depths` is not given."
     )
     delta_clifford: int = Field(
         20,
         gt=0,
-        description="Step size between depths when log_scale is False."
+        description="Step between depths when log_scale is False."
     )
     log_scale: bool = Field(
         True,
-        description="Whether to use logarithmic (powers of 2) depth spacing."
+        description="Powers-of-2 depths (1, 2, 4, ...) up to max_circuit_depth."
     )
     depths: list[int] | None = Field(
         None,
-        description="Explicit list of Clifford circuit depths to sweep. If None, derived from max_circuit_depth and log_scale."
+        description="Explicit Clifford depths (>= 1). If None, derived from max_circuit_depth and log_scale."
+    )
+    conditions: list[str] | None = Field(
+        None,
+        description="Conditions to benchmark, a subset of ['isolated', 'simultaneous', 'compensated'] (default: all)."
+    )
+    sequences_per_program: int = Field(
+        7,
+        ge=1,
+        description=(
+            "Max sequences per QUA program (each program runs one condition, every depth). Keep "
+            "programs short: on chipQM the simultaneous/compensated error grew steadily during a "
+            "single 30-sequence program (~1.3 min) and stayed flat with 7 per program (2026-10-01)."
+        )
+    )
+    seed: int | None = Field(
+        None,
+        description="Random seed of the Clifford sequences (None: 42 for the probe, 1042 for the drive)."
+    )
+
+    # Cancellation (from crosstalk_cancellation_tomography)
+    cancel_amp: float = Field(
+        0.0,
+        ge=0.0,
+        description="Amplitude scale of the cancellation copy of the drive qubit's pulses, on the probe's line."
+    )
+    init_phase: float = Field(
+        0.0,
+        description="Phase (rad) of that cancellation copy."
+    )
+    bidirectional: bool = Field(
+        False,
+        description=(
+            "Compensate both directions: a second cancellation element on the drive qubit's line "
+            "copies the probe's pulses, both qubits are read out together, and each qubit gets its "
+            "own isolated / simultaneous / compensated RB."
+        )
+    )
+    drive_cancel_amp: float = Field(
+        0.0,
+        ge=0.0,
+        description="Bidirectional: amplitude scale of the cancellation copy of the probe's pulses, on the drive qubit's line."
+    )
+    drive_init_phase: float = Field(
+        0.0,
+        description="Bidirectional: phase (rad) of that cancellation copy."
     )
 
     def get_depths(self) -> np.ndarray:
-        """Generate depths based on explicit list or log_scale / max_circuit_depth."""
+        """Depths from the explicit list, or from log_scale / max_circuit_depth."""
         if self.depths is not None and len(self.depths) > 0:
             return np.asarray(self.depths, dtype=int)
         if self.log_scale:
@@ -106,333 +137,17 @@ class CrosstalkCompensatedSQRBParameters(
                 depth_list.append(cur)
                 cur *= 2
             return np.array(depth_list, dtype=int)
-        else:
-            arr = np.arange(0, self.max_circuit_depth + 0.1, self.delta_clifford, dtype=int)
-            arr[0] = 1
-            return arr
+        arr = np.arange(0, self.max_circuit_depth + 0.1, self.delta_clifford, dtype=int)
+        arr[0] = 1
+        return arr
 
-    target_gate: str = Field(
-        "x180",
-        description="Target gate repeated on drive qubit and cancel element in calibrate mode: x180, y180, x90, y90."
-    )
-
-    benchmark_batch_size: int = Field(
-        1,
-        gt=0,
-        description="Number of depths per execution batch to prevent OPX memory overload."
-    )
-    benchmark_sequence_batch_size: int | None = Field(
-        None,
-        gt=0,
-        description="Chunk size for sequences per batch. If None, computed adaptively from max_gates_per_batch and depth."
-    )
-    max_gates_per_batch: int = Field(
-        120,
-        gt=0,
-        description="Maximum Clifford gates per QUA compilation batch to avoid QOP memory exhaustion and compile timeouts."
-    )
-    conditions: list[str] | None = Field(
-        None,
-        description="List of conditions to benchmark (e.g. ['isolated', 'simultaneous', 'compensated'])."
-    )
-
-    # Active compensation knobs
-    cancel_amp: float = Field(
-        0.0,
-        ge=0.0,
-        description="Compensation pulse amplitude scale relative to probe drive amplitude."
-    )
-    init_phase: float = Field(
-        0.0,
-        description="Initial phase offset in radians."
-    )
-    phase_rate: float | None = Field(
-        None,
-        description=(
-            "Phase evolution rate per atomic pulse subslot in radians (Delta phi). "
-            "If None, computed automatically from theoretical detuning (f_d - f_p) and atomic pulse duration."
-        )
-    )
-    clifford_duration_ns: int = Field(
-        16,
-        gt=0,
-        description="Duration of each atomic pulse subslot in ns for theoretical phase rate calculation."
-    )
-
-    # Bidirectional compensation: both qubits are victim AND aggressor
-    bidirectional: bool = Field(
-        False,
-        description=(
-            "Benchmark mode only. If True, both qubits are compensated and read out: a second "
-            "cancellation track on the drive qubit's line mirrors the probe qubit's gates "
-            "(cancelling probe -> drive crosstalk), and each qubit gets its own isolated / "
-            "simultaneous / compensated RB. Calibrate each direction separately by swapping "
-            "probe_qubit and drive_qubit in calibrate mode."
-        )
-    )
-    drive_cancel_amp: float = Field(
-        0.0,
-        ge=0.0,
-        description=(
-            "Bidirectional only: amplitude scale of the compensation on the drive qubit's line "
-            "(the cancel_amp found by a calibrate run with probe_qubit and drive_qubit swapped)."
-        )
-    )
-    drive_init_phase: float = Field(
-        0.0,
-        description=(
-            "Bidirectional only: initial phase in radians of the compensation on the drive "
-            "qubit's line (the init_phase found by the swapped calibrate run)."
-        )
-    )
-    drive_phase_rate: float | None = Field(
-        None,
-        description=(
-            "Bidirectional only: phase evolution rate per subslot in radians for the drive-line "
-            "compensation. If None, computed from the theoretical detuning (f_p - f_d)."
-        )
-    )
-    reverse_track: bool | None = Field(
-        None,
-        description=(
-            "Bidirectional diagnostic: whether the drive-line cancellation element exists and plays. "
-            "None follows `bidirectional`."
-        )
-    )
-    read_both: bool | None = Field(
-        None,
-        description=(
-            "Bidirectional diagnostic: whether the drive qubit is read out too (and gets its own "
-            "isolated pass). None follows `bidirectional`; False fits the probe only."
-        )
-    )
-
-    readout_scheme: Literal["separate_passes", "sequential", "simultaneous"] = Field(
-        "separate_passes",
-        description=(
-            "Bidirectional readout of the two qubits. 'separate_passes' (default): every shot "
-            "plays the sequence once per qubit and reads ONE qubit per pass, so the readouts never "
-            "share a pass. 'sequential': one pass, probe read first, drive read after it. "
-            "'simultaneous': one pass, both read together (multiplexed). On chipQM q1/q3 "
-            "(2026-09-30) reading the drive qubit in the same pass broke the probe-side "
-            "compensation when calibrated without the drive readout; calibrate with tomography "
-            "read_drive=true + bidirectional=true and 'simultaneous' works (20261001-124109-057)."
-        )
-    )
-
-    phase_reset: Literal["global", "if_only"] = Field(
-        "global",
-        description=(
-            "Phase reset at the start of every shot. 'global': reset_if_phase on each xy element "
-            "plus reset_global_phase(). 'if_only': reset_if_phase only. On chipQM (QM simulator and "
-            "hardware, 2026-10-01) reset_global_phase() makes an element's phase depend on which "
-            "resonators the program reads (q3.xy slips one 4 ns IF cycle when q3 is read) in the "
-            "QM simulator, but on chipQM hardware (2026-10-01) 'if_only' dephases the phase between "
-            "lines shot to shot - keep 'global' and calibrate in the same readout context instead."
-        )
-    )
-    cancel_tone: Literal["victim", "aggressor"] = Field(
-        "victim",
-        description=(
-            "Frequency of the cancel element(s). 'victim': the victim's IF, the crosstalk phase "
-            "followed by frame steps of phase_rate per subslot. 'aggressor': the element outputs at "
-            "the aggressor's frequency on the victim's line - a scaled copy of the leaked field, "
-            "phase-locked to it with no frame steps (also cancels the leak's AC-Stark shift). "
-            "cancel_amp / init_phase differ between the two; calibrate with the same tone."
-        )
-    )
-    sequence_mode: Literal["unrolled", "fpga"] = Field(
-        "unrolled",
-        description=(
-            "Benchmark only. 'unrolled': every Clifford is its own strict-timed QUA statements "
-            "(program size grows with depth; depth ~400 is the compile limit). 'fpga': sequences "
-            "live in QUA arrays and an FPGA loop plays one composite 3-subslot op per Clifford, so "
-            "depth > 1000 compiles. The loop adds a fixed dispatch gap per Clifford (~52 ns on "
-            "chipQM, same on every element), so the compensated condition needs "
-            "cancel_tone='aggressor'; stark_frame_rad is not supported."
-        )
-    )
-    fpga_dispatch: Literal["parallel", "per_element", "merged"] = Field(
-        "parallel",
-        description=(
-            "sequence_mode='fpga': how the Cliffords are dispatched. 'parallel' (default): one FPGA loop "
-            "per element, each indexing the gate array with its own loop variable - on chipQM hardware "
-            "(timestamp_stream, 2026-10-01) 48 ns Cliffords back to back and in step on all 4 elements. "
-            "'per_element': one shared loop with a switch_ per element - 160 ns per Clifford with 4 "
-            "elements on hardware. 'merged' (experimental, never measured): one 576-case switch_, heavy "
-            "to compile on the shared gateway."
-        ),
-    )
-    fpga_sequence_source: Literal["host", "fpga_rng"] = Field(
-        "host",
-        description=(
-            "sequence_mode='fpga': 'host' (default) precomputes the sequences in Python into QUA arrays. "
-            "'fpga_rng' draws each sequence on the FPGA (QUA Random + Cayley table, as qubit_sqrb), one "
-            "in memory at a time. Either way a program holds at most fpga_sequences_per_program sequences: "
-            "long programs drift (see there)."
-        ),
-    )
-    fpga_sequences_per_program: int = Field(
-        7,
-        ge=1,
-        description=(
-            "sequence_mode='fpga': max sequences per program (with every depth, one condition). Keep "
-            "programs short: on chipQM the simultaneous/compensated error grew steadily during a single "
-            "30-sequence program (~1.3 min) and stayed flat in 7-sequence programs (2026-10-01); cause "
-            "not identified."
-        ),
-    )
-    fpga_unroll: int = Field(
-        1,
-        ge=1,
-        description=(
-            "sequence_mode='fpga' with fpga_dispatch per_element/merged: Cliffords per loop iteration "
-            "(ignored by 'parallel'). Keep 1: unrolling needs computed indices (gates[k + u]) that cost "
-            "~50-70 ns per Clifford on chipQM hardware (timestamp_stream, 2026-10-01)."
-        ),
-    )
-    fpga_max_array_gates: int = Field(
-        16000,
-        gt=0,
-        description="sequence_mode='fpga': max Clifford gates held in QUA arrays per program (sets the sequence chunk).",
-    )
-
-    stark_frame_rad: float = Field(
-        0.0,
-        description=(
-            "Compensated condition: frame rotation (rad) applied to the probe qubit after every "
-            "drive 180-type pulse (1/4 of it after a 90-type pulse) - a virtual Z that undoes the "
-            "Z (AC-Stark-like) part of the crosstalk a resonant cancel pulse cannot remove. "
-            "Calibrate with crosstalk_cancellation_tomography's stark_frame_rad."
-        )
-    )
-    drive_stark_frame_rad: float = Field(
-        0.0,
-        description="Bidirectional only: the same correction on the drive qubit, per probe pulse."
-    )
-
-    def uses_reverse_track(self) -> bool:
-        return bool(self.bidirectional) and (self.reverse_track is None or bool(self.reverse_track))
-
-    def reads_both(self) -> bool:
-        return bool(self.bidirectional) and (self.read_both is None or bool(self.read_both))
-    strict_timing: bool = Field(
-        True,
-        description="Whether to enforce strict_timing_() in QUA to eliminate inter-gate calculation gaps."
-    )
-
-    # Execution mode
-    mode: Literal["benchmark", "calibrate"] = Field(
-        "benchmark",
-        description=(
-            "'benchmark' runs 3 SQRB curves (isolated, simultaneous, compensated). "
-            "'calibrate' runs multi-stage zoom-in sweeps of cancel_amp and init_phase with probe idle in |0>."
-        )
-    )
-
-    # Multi-stage zoom-in calibration parameters
-    cal_stage_repetitions: list[int] | str | int | None = Field(
-        default_factory=lambda: [5, 10, 20],
-        description="Clifford depths or pulse repetitions for each zoom-in stage in calibrate mode."
-    )
-    zoom_factor: float = Field(
-        2.0,
-        gt=1.0,
-        description="Range contraction factor per zoom-in stage (span /= zoom_factor)."
-    )
-
-    def get_cal_stage_repetitions(self) -> list[int]:
-        """Generate list of gate counts for each zoom-in calibration stage."""
-        val = self.cal_stage_repetitions
-        if val is not None:
-            if isinstance(val, str):
-                cleaned = val.strip()
-                if "," in cleaned:
-                    return [max(1, int(x.strip())) for x in cleaned.split(",") if x.strip()]
-                elif ":" in cleaned:
-                    parts = cleaned.split(":")
-                    if len(parts) == 2:
-                        return list(range(int(parts[0]), int(parts[1]) + 1, max(1, (int(parts[1]) - int(parts[0])) // 3)))
-                    elif len(parts) >= 3:
-                        return list(range(int(parts[0]), int(parts[1]) + 1, int(parts[2])))
-                try:
-                    return [max(1, int(cleaned))]
-                except ValueError:
-                    pass
-            elif isinstance(val, (int, float)):
-                return [max(1, int(val))]
-            elif isinstance(val, (list, tuple, np.ndarray)):
-                return [max(1, int(x)) for x in val]
-        return [5, 10, 20]
-
-    # Calibration mode sweep parameters
-    min_cancel_amp: float = Field(
-        0.0,
-        ge=0.0,
-        description="Minimum compensation amplitude scale for calibrate mode."
-    )
-    max_cancel_amp: float = Field(
-        0.1,
-        ge=0.0,
-        description="Maximum compensation amplitude scale for calibrate mode."
-    )
-    num_cancel_amps: int = Field(
-        21,
-        gt=1,
-        description="Number of amplitude sweep points for calibrate mode."
-    )
-    cancel_amps: list[float] | None = Field(
-        None,
-        description="Explicit list of amplitude sweep points for calibrate mode. Overrides min/max/num."
-    )
-
-    min_init_phase: float = Field(
-        -np.pi,
-        description="Minimum initial phase in radians for calibrate mode."
-    )
-    max_init_phase: float = Field(
-        np.pi,
-        description="Maximum initial phase in radians for calibrate mode."
-    )
-    num_init_phases: int = Field(
-        25,
-        gt=1,
-        description="Number of initial phase sweep points for calibrate mode."
-    )
-    init_phases: list[float] | None = Field(
-        None,
-        description="Explicit list of initial phase sweep points for calibrate mode in radians. Overrides min/max/num."
-    )
-
-    def get_cancel_amps(self) -> np.ndarray:
-        """Generate amplitude sweep array based on explicit list or min/max/num."""
-        if self.cancel_amps is not None and len(self.cancel_amps) > 0:
-            return np.asarray(self.cancel_amps, dtype=float)
-        return np.linspace(self.min_cancel_amp, self.max_cancel_amp, self.num_cancel_amps, dtype=float)
-
-    def get_init_phases(self) -> np.ndarray:
-        """Generate initial phase sweep array based on explicit list or min/max/num."""
-        if self.init_phases is not None and len(self.init_phases) > 0:
-            return np.asarray(self.init_phases, dtype=float)
-        return np.linspace(self.min_init_phase, self.max_init_phase, self.num_init_phases, dtype=float)
-
-    cal_depth: int = Field(
-        20,
-        gt=0,
-        description="Fixed Clifford depth used for parameter scan in calibrate mode."
-    )
-
-    seed: int | None = Field(
-        None,
-        description="Optional random seed for reproducible sequence generation."
-    )
+    def get_conditions(self) -> list[str]:
+        return [c for c in (self.conditions or CONDITIONS) if c in CONDITIONS]
 
     @model_validator(mode="before")
     @classmethod
     def _resolve_targets_and_qubits(cls, data: Any) -> Any:
         if isinstance(data, dict):
-            if "batch_size" in data:
-                data["benchmark_batch_size"] = data.pop("batch_size")
             targets = data.get("targets")
             if targets:
                 if isinstance(targets, str):
@@ -457,49 +172,30 @@ class CrosstalkCompensatedSQRBParameters(
         return data
 
     @model_validator(mode="after")
-    def _ensure_targets(self) -> CrosstalkCompensatedSQRBParameters:
+    def _check(self) -> CrosstalkCompensatedSQRBParameters:
         if not self.targets:
             self.targets = [self.probe_qubit, self.drive_qubit]
-        if self.sequence_mode == "fpga" and self.mode == "benchmark":
-            conds = self.conditions or ["isolated", "simultaneous", "compensated"]
-            if "compensated" in conds and self.cancel_tone != "aggressor":
-                raise ValueError(
-                    "sequence_mode='fpga' with the compensated condition needs cancel_tone='aggressor' "
-                    "(the FPGA loop's dispatch gaps break per-subslot frame steps)"
-                )
-            if self.stark_frame_rad or self.drive_stark_frame_rad:
-                raise ValueError("sequence_mode='fpga' does not support stark_frame_rad")
-        if self.bidirectional and self.mode == "calibrate":
-            raise ValueError(
-                "bidirectional=True is benchmark-only: calibrate needs the victim idle, so each "
-                "direction is calibrated on its own - run calibrate twice with probe_qubit and "
-                "drive_qubit swapped, then set drive_cancel_amp / drive_init_phase."
-            )
+        if self.conditions is not None:
+            unknown = [c for c in self.conditions if c not in CONDITIONS]
+            if unknown or not self.conditions:
+                raise ValueError(f"conditions must be a non-empty subset of {list(CONDITIONS)}, got {self.conditions}")
+        if int(np.min(self.get_depths())) < 1:
+            raise ValueError("depths must be >= 1")
         return self
 
 
-from ..contract import ContractError, DatasetContract
-
-
 class CrosstalkCompensatedSQRBContract(DatasetContract):
-    """Custom dataset contract for CrosstalkCompensatedSQRB supporting benchmark and calibrate modes."""
+    """Dataset contract: (target, condition, sequence_idx, depth) + a readout variable."""
 
     def validate(self, ds: xr.Dataset) -> None:
-        if "cancel_amp" in ds.coords and "init_phase" in ds.coords:
-            required_coords = {"target", "cancel_amp", "init_phase"}
-        else:
-            required_coords = {"target", "condition", "sequence_idx", "depth"}
-
         problems: list[str] = []
-        for coord in required_coords:
+        for coord in ("target", "condition", "sequence_idx", "depth"):
             if coord not in ds.dims:
                 problems.append(f"missing dimension {coord!r}")
             if coord not in ds.coords:
                 problems.append(f"missing coordinate {coord!r}")
-
         if not any(v in ds.data_vars for v in ("I", "state", "signal", "population")):
             problems.append("missing data variable ('I', 'state', 'signal', or 'population')")
-
         if problems:
             raise ContractError("; ".join(problems))
 
@@ -509,7 +205,7 @@ class CrosstalkCompensatedSQRBResult(Result):
 
     fit: dict[str, dict[str, Any]] = Field(
         default_factory=dict,
-        description="Extracted quantities (fidelities, error rates, optimal compensation)."
+        description="Per victim qubit: error per Clifford of each condition and the recovered fraction."
     )
 
 
@@ -519,8 +215,8 @@ class CrosstalkCompensatedSQRB(Experiment):
 
     name: ClassVar[str] = "crosstalk_compensated_sqrb"
     description: ClassVar[str] = (
-        "Simultaneous Single Qubit Randomized Benchmarking comparing isolated, simultaneous, "
-        "and active crosstalk-compensated conditions using gate-by-gate dynamic phase tracking."
+        "Simultaneous single-qubit randomized benchmarking comparing isolated, simultaneous and "
+        "actively crosstalk-compensated conditions (cancellation copies at the aggressor's frequency)."
     )
     Parameters: ClassVar[type] = CrosstalkCompensatedSQRBParameters
     Result: ClassVar[type] = CrosstalkCompensatedSQRBResult
@@ -535,177 +231,69 @@ class CrosstalkCompensatedSQRB(Experiment):
     params: CrosstalkCompensatedSQRBParameters
 
     def define_sweep(self) -> dict[str, np.ndarray]:
-        if self.params.mode == "calibrate":
-            return {
-                "cancel_amp": self.params.get_cancel_amps(),
-                "init_phase": self.params.get_init_phases(),
-            }
         return {
-            "condition": np.array(["isolated", "simultaneous", "compensated"]),
+            "condition": np.array(self.params.get_conditions()),
             "sequence_idx": np.arange(self.params.num_random_sequences, dtype=int),
             "depth": self.params.get_depths(),
         }
 
     def simulate(self, coords: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
-        probe = self.params.probe_qubit
-        rng = np.random.default_rng(stable_seed("crosstalk_compensated_sqrb", probe))
+        rng = np.random.default_rng(stable_seed("crosstalk_compensated_sqrb", self.params.probe_qubit))
 
-        # Base decay parameters
-        p_iso = 0.995  # Isolated Clifford survival factor
-        p_sim = 0.970  # Degraded survival factor under uncompensated crosstalk
-
-        # Quality of compensation depends on distance from optimal (alpha=0.035, phi=0.85)
-        opt_amp = 0.035
-        opt_phi = 0.85
+        p_iso = 0.995  # isolated Clifford survival factor
+        p_sim = 0.970  # degraded by uncompensated crosstalk
 
         def _p_comp(amp: float, phi: float, o_amp: float, o_phi: float) -> float:
+            # compensation quality falls off with the distance from a nominal optimum
             dist_sq = (amp - o_amp) ** 2 + 0.001 * (phi - o_phi) ** 2
-            comp_quality = np.exp(-dist_sq / 0.002)
-            return p_sim + (p_iso - 0.002 - p_sim) * comp_quality
+            return p_sim + (p_iso - 0.002 - p_sim) * np.exp(-dist_sq / 0.002)
 
-        p_comp = _p_comp(float(self.params.cancel_amp), float(self.params.init_phase), opt_amp, opt_phi)
-        # Reverse direction (probe -> drive) has its own optimum, so a swapped setting shows up
-        p_comp_drive = _p_comp(
-            float(self.params.drive_cancel_amp), float(self.params.drive_init_phase), 0.028, -0.6
-        )
+        p_comp = _p_comp(float(self.params.cancel_amp), float(self.params.init_phase), 0.035, 0.85)
+        p_comp_drive = _p_comp(float(self.params.drive_cancel_amp), float(self.params.drive_init_phase), 0.028, -0.6)
 
-        n_targets = max(1, len(self.params.targets))
-
-        if self.params.mode == "calibrate":
-            amps = coords["cancel_amp"]
-            phases = coords["init_phase"]
-            stage_reps = self.params.get_cal_stage_repetitions()
-
-            # Simulate cancellation response across stage gate repetitions with probe idle in |0>
-            A_grid, P_grid = np.meshgrid(amps, phases, indexing="ij")
-            residual_drive = np.sqrt(
-                (A_grid - opt_amp) ** 2 + 0.001 * (np.sin((P_grid - opt_phi) / 2)) ** 2
-            )
-            p1_acc = np.zeros_like(residual_drive)
-            for r in stage_reps:
-                theta = 2.0 * np.pi * residual_drive * r
-                p1_acc += (np.sin(theta / 2)) ** 2
-            p1_sim = p1_acc / len(stage_reps)
-            p1_sim = np.clip(p1_sim + rng.normal(0, 0.015, p1_sim.shape), 0.0, 1.0)
-
-            if "sequence_idx" in coords:
-                n_seq = len(coords["sequence_idx"])
-                pop_seq = np.tile(p1_sim[:, :, None], (1, 1, n_seq))
-                p1_t = np.repeat(pop_seq[None, ...], n_targets, axis=0)
-                if self.params.use_state_discrimination:
-                    return {"state": (("target", "cancel_amp", "init_phase", "sequence_idx"), p1_t)}
-                return {
-                    "I": (("target", "cancel_amp", "init_phase", "sequence_idx"), p1_t),
-                    "Q": (("target", "cancel_amp", "init_phase", "sequence_idx"), np.zeros_like(p1_t)),
-                }
-
-            p1_t = np.repeat(p1_sim[None, ...], n_targets, axis=0)
-            if self.params.use_state_discrimination:
-                return {"state": (("target", "cancel_amp", "init_phase"), p1_t)}
-            return {
-                "I": (("target", "cancel_amp", "init_phase"), p1_t),
-                "Q": (("target", "cancel_amp", "init_phase"), np.zeros_like(p1_t)),
-            }
-
-        # Benchmark mode: 3 conditions over depths
         conditions = coords["condition"]
         depths = coords["depth"]
         n_seq = len(coords["sequence_idx"])
+        n_targets = max(1, len(self.params.targets))
 
         def _pop(p_map: dict[str, float]) -> np.ndarray:
-            pop_data = np.empty((len(conditions), n_seq, len(depths)), dtype=float)
+            pop = np.empty((len(conditions), n_seq, len(depths)), dtype=float)
             for c_idx, c_name in enumerate(conditions):
                 p_val = p_map.get(str(c_name), p_iso)
                 for d_idx, d in enumerate(depths):
-                    mean_p0 = 0.5 + 0.48 * (p_val ** d)
-                    pop_data[c_idx, :, d_idx] = np.clip(
-                        mean_p0 + rng.normal(0, 0.005, n_seq), 0.0, 1.0
-                    )
-            return pop_data
+                    pop[c_idx, :, d_idx] = np.clip(0.5 + 0.48 * (p_val ** d) + rng.normal(0, 0.005, n_seq), 0.0, 1.0)
+            return pop
 
         pop_probe = _pop({"isolated": p_iso, "simultaneous": p_sim, "compensated": p_comp})
         if self.params.bidirectional:
             pop_drive = _pop({"isolated": p_iso, "simultaneous": p_sim, "compensated": p_comp_drive})
             pop_t = np.stack([pop_probe, pop_drive] + [pop_probe] * (n_targets - 2), axis=0)
         else:
-            pop_t = np.repeat(pop_probe[None, ...], n_targets, axis=0)  # (n_targets, cond, seq, depth)
+            pop_t = np.repeat(pop_probe[None, ...], n_targets, axis=0)
+        dims = ("target", "condition", "sequence_idx", "depth")
         if self.params.use_state_discrimination:
-            return {"state": (("target", "condition", "sequence_idx", "depth"), pop_t)}
-        return {
-            "I": (("target", "condition", "sequence_idx", "depth"), pop_t),
-            "Q": (("target", "condition", "sequence_idx", "depth"), np.zeros_like(pop_t)),
-        }
+            return {"state": (dims, pop_t)}
+        return {"I": (dims, pop_t), "Q": (dims, np.zeros_like(pop_t))}
 
     def estimate(self) -> CrosstalkCompensatedSQRBResult:
         assert self.dataset is not None, "run() populates self.dataset before estimate()"
-        from scqat.estimators.crosstalk_compensated_sqrb import (
-            CrosstalkCompensatedSQRBEstimator,
-        )
+        from scqat.estimators.crosstalk_compensated_sqrb import CrosstalkCompensatedSQRBEstimator
 
-        probe = self.params.probe_qubit
-        if "target" in self.dataset.coords and probe in self.dataset.coords["target"].values:
-            ds_probe = self.dataset.sel(target=probe)
-        else:
-            ds_probe = self.dataset
+        probe, drive = self.params.probe_qubit, self.params.drive_qubit
+        has_target = "target" in self.dataset.coords
+        ds_probe = self.dataset.sel(target=probe) if has_target and probe in self.dataset.coords["target"].values else self.dataset
 
-        # Populate synthetic stage_history for offline/simulated calibrate runs if not already set by hardware
-        if self.params.mode == "calibrate" and "stage_history" not in ds_probe.attrs:
-            try:
-                import json
-                stage_reps = self.params.get_cal_stage_repetitions()
-                history = []
-                cur_min_a = float(self.params.min_cancel_amp)
-                cur_max_a = float(self.params.max_cancel_amp)
-                cur_min_p = float(self.params.min_init_phase)
-                cur_max_p = float(self.params.max_init_phase)
-                zoom = float(self.params.zoom_factor)
-                opt_a = 0.035
-                opt_phi = 0.85
-                for s_idx, r in enumerate(stage_reps):
-                    s_amps = np.linspace(cur_min_a, cur_max_a, int(self.params.num_cancel_amps))
-                    s_phases = np.linspace(cur_min_p, cur_max_p, int(self.params.num_init_phases))
-                    A, P = np.meshgrid(s_amps, s_phases, indexing="ij")
-                    res_drive = np.sqrt((A - opt_a) ** 2 + 0.001 * (np.sin((P - opt_phi) / 2)) ** 2)
-                    p_val = np.sin(2.0 * np.pi * res_drive * r / 2) ** 2
-                    min_idx = np.unravel_index(np.argmin(p_val), p_val.shape)
-                    best_a = float(s_amps[min_idx[0]])
-                    best_p = float(s_phases[min_idx[1]])
-                    history.append({
-                        "stage": s_idx + 1,
-                        "repetitions": int(r),
-                        "cancel_amps": s_amps.tolist(),
-                        "init_phases": s_phases.tolist(),
-                        "p_vals": p_val.tolist(),
-                        "best_cancel_amp": best_a,
-                        "best_init_phase": best_p,
-                        "min_signal": float(p_val[min_idx]),
-                    })
-                    span_a = (cur_max_a - cur_min_a) / zoom
-                    span_p = (cur_max_p - cur_min_p) / zoom
-                    cur_min_a = max(0.0, best_a - span_a / 2.0)
-                    cur_max_a = best_a + span_a / 2.0
-                    cur_min_p = best_p - span_p / 2.0
-                    cur_max_p = best_p + span_p / 2.0
-                ds_probe.attrs["stage_history"] = json.dumps(history)
-                if self.dataset is not None:
-                    self.dataset.attrs["stage_history"] = json.dumps(history)
-            except Exception:
-                pass
-
-        estimator = CrosstalkCompensatedSQRBEstimator()
-        result = CrosstalkCompensatedSQRBResult()
-
-        # (victim, aggressor, victim's dataset): bidirectional benchmark fits each qubit's own RB
-        fits = [(probe, self.params.drive_qubit, ds_probe)]
-        if self.params.reads_both() and self.params.mode == "benchmark":
-            drive = self.params.drive_qubit
-            if "target" not in self.dataset.coords or drive not in self.dataset.coords["target"].values:
+        # (victim, aggressor, victim's dataset): bidirectional fits each qubit's own RB
+        fits = [(probe, drive, ds_probe)]
+        if self.params.bidirectional:
+            if not has_target or drive not in self.dataset.coords["target"].values:
                 raise ValueError(
-                    f"bidirectional run has no data for drive qubit {drive!r}; "
-                    "the probe must read out both qubits"
+                    f"bidirectional run has no data for drive qubit {drive!r}; the probe must read out both qubits"
                 )
             fits.append((drive, probe, self.dataset.sel(target=drive)))
 
+        estimator = CrosstalkCompensatedSQRBEstimator()
+        result = CrosstalkCompensatedSQRBResult()
         for victim, aggressor, ds_victim in fits:
             ds_victim = ds_victim.assign_attrs(victim_qubit=victim, aggressor_qubit=aggressor)
             out_dir = None
@@ -713,9 +301,7 @@ class CrosstalkCompensatedSQRB(Experiment):
                 out_dir = str(self.artifact_dir / victim) if len(fits) > 1 else str(self.artifact_dir)
             fit_res, _figures = estimator.analyze(ds_victim, output_dir=out_dir)
             result.fit[victim] = fit_res
-            result.outcomes[victim] = (
-                Outcome.SUCCESSFUL if fit_res.get("success", False) else Outcome.FAILED
-            )
+            result.outcomes[victim] = Outcome.SUCCESSFUL if fit_res.get("success", False) else Outcome.FAILED
         return result
 
     def probe(self):  # pragma: no cover - driver half

@@ -8,7 +8,6 @@ from scqo import experiments as registry
 from scqo.experiments.crosstalk_compensated_sqrb import (
     CrosstalkCompensatedSQRB,
     CrosstalkCompensatedSQRBParameters,
-    compute_theoretical_phase_rate,
 )
 from scqo.testing import (
     InMemoryDevice,
@@ -30,16 +29,6 @@ def session(tmp_path):
         device_name="chipT", backend_label="simulated",
         setup_name="sim", cooldown_id="cd1"
     )
-
-
-def test_theoretical_phase_rate():
-    # 85 MHz detuning, 20 ns slot
-    f_d = 5.235e9
-    f_p = 5.150e9
-    tau = 20.0
-    dphi = compute_theoretical_phase_rate(f_d, f_p, tau)
-    # Expected: 2 * pi * 85e6 * 20e-9 = 3.4 * pi rad
-    assert np.isclose(dphi, 2 * np.pi * 85e6 * 20e-9)
 
 
 def test_parameter_validation():
@@ -66,29 +55,12 @@ def test_get_depths():
     np.testing.assert_array_equal(p_custom.get_depths(), [1, 5, 10])
 
 
-def test_get_cancel_amps_and_init_phases():
-    p_def = CrosstalkCompensatedSQRBParameters(
-        min_cancel_amp=0.0, max_cancel_amp=0.1, num_cancel_amps=11,
-        min_init_phase=-1.0, max_init_phase=1.0, num_init_phases=9,
-    )
-    np.testing.assert_allclose(p_def.get_cancel_amps(), np.linspace(0.0, 0.1, 11))
-    np.testing.assert_allclose(p_def.get_init_phases(), np.linspace(-1.0, 1.0, 9))
-
-    p_explicit = CrosstalkCompensatedSQRBParameters(
-        cancel_amps=[0.02, 0.04, 0.06],
-        init_phases=[0.1, 0.5],
-    )
-    np.testing.assert_allclose(p_explicit.get_cancel_amps(), [0.02, 0.04, 0.06])
-    np.testing.assert_allclose(p_explicit.get_init_phases(), [0.1, 0.5])
-
-
 def test_end_to_end_simulated_benchmark(session):
     out = session.run(
         "crosstalk_compensated_sqrb",
         {
             "probe_qubit": "q0",
             "drive_qubit": "q1",
-            "mode": "benchmark",
             "depths": [1, 2, 4, 8, 16],
             "num_random_sequences": 5,
             "cancel_amp": 0.035,
@@ -105,29 +77,11 @@ def test_end_to_end_simulated_benchmark(session):
     assert fit["r_isolated"] < fit["r_simultaneous"]
 
 
-def test_end_to_end_simulated_calibrate(session):
-    out = session.run(
-        "crosstalk_compensated_sqrb",
-        {
-            "probe_qubit": "q0",
-            "drive_qubit": "q1",
-            "mode": "calibrate",
-            "cal_depth": 10,
-            "num_random_sequences": 5,
-            "cancel_amps": [0.01, 0.035, 0.06],
-            "init_phases": [-0.5, 0.85, 1.5],
-        },
-        update="none",
-    )
-    assert out.get("error") is None, out.get("error")
-    fit = out["fit"]["q0"]
-    assert fit["mode"] == "calibrate"
-    assert "optimal_cancel_amp" in fit
-    assert "optimal_init_phase_rad" in fit
-
-
 def test_contract_validation_with_population():
     import xarray as xr
+    from scqo.contract import ContractError
+
+    # the old calibrate-mode grid (cancel_amp x init_phase) is no longer a valid dataset
     ds_cal = xr.Dataset(
         {"population": (("target", "cancel_amp", "init_phase", "sequence_idx"), np.ones((1, 5, 5, 2)))},
         coords={
@@ -137,7 +91,8 @@ def test_contract_validation_with_population():
             "sequence_idx": np.arange(2),
         },
     )
-    CrosstalkCompensatedSQRB.Contract.validate(ds_cal)
+    with pytest.raises(ContractError, match="condition"):
+        CrosstalkCompensatedSQRB.Contract.validate(ds_cal)
 
     ds_bench = xr.Dataset(
         {"population": (("target", "condition", "sequence_idx", "depth"), np.ones((1, 3, 2, 4)))},
@@ -151,43 +106,12 @@ def test_contract_validation_with_population():
     CrosstalkCompensatedSQRB.Contract.validate(ds_bench)
 
 
-def test_cal_stage_repetitions():
-    # 1. Default fallback
-    p_def = CrosstalkCompensatedSQRBParameters()
-    assert p_def.get_cal_stage_repetitions() == [5, 10, 20]
-
-    # 2. Comma separated string
-    p_comma = CrosstalkCompensatedSQRBParameters(cal_stage_repetitions="2, 8, 24")
-    assert p_comma.get_cal_stage_repetitions() == [2, 8, 24]
-
-    # 3. Slice string: "10:30:5"
-    p_slice = CrosstalkCompensatedSQRBParameters(cal_stage_repetitions="10:30:5")
-    assert p_slice.get_cal_stage_repetitions() == [10, 15, 20, 25, 30]
-
-    # 4. Single int
-    p_int = CrosstalkCompensatedSQRBParameters(cal_stage_repetitions=12)
-    assert p_int.get_cal_stage_repetitions() == [12]
-
-    # 5. List of ints
-    p_list = CrosstalkCompensatedSQRBParameters(cal_stage_repetitions=[4, 8, 16])
-    assert p_list.get_cal_stage_repetitions() == [4, 8, 16]
-
-
-def test_parameters_batch_size_and_zoom():
-    p = CrosstalkCompensatedSQRBParameters(zoom_factor=2.5, **{"batch_size": 3})
-    assert p.zoom_factor == 2.5
-    assert p.benchmark_batch_size == 3
-    assert p.target_gate == "x180"
-
-
-
 def test_end_to_end_simulated_bidirectional(session):
     out = session.run(
         "crosstalk_compensated_sqrb",
         {
             "probe_qubit": "q0",
             "drive_qubit": "q1",
-            "mode": "benchmark",
             "bidirectional": True,
             "depths": [1, 2, 4, 8, 16, 32],
             "num_random_sequences": 5,
@@ -231,6 +155,24 @@ def test_bidirectional_reverse_compensation_is_independent(session):
     assert out["fit"]["q1"]["mitigation_ratio"] < 0.3
 
 
-def test_bidirectional_refuses_calibrate_mode():
-    with pytest.raises(ValueError, match="bidirectional"):
-        CrosstalkCompensatedSQRBParameters(mode="calibrate", bidirectional=True)
+@pytest.mark.parametrize("removed", [
+    {"mode": "calibrate"}, {"cal_stage_repetitions": [10, 20]}, {"min_cancel_amp": 0.01},
+    {"readout_scheme": "separate_passes"}, {"sequence_mode": "unrolled"}, {"cancel_tone": "victim"},
+    {"stark_frame_rad": 0.01}, {"phase_reset": "if_only"}, {"fpga_dispatch": "merged"},
+    {"reverse_track": False}, {"strict_timing": True}, {"target_gate": "x180"},
+])
+def test_removed_options_are_refused(removed):
+    """One way to run it: the calibrate scan, the unrolled path and the diagnostics are gone."""
+    with pytest.raises(ValueError):
+        CrosstalkCompensatedSQRBParameters(probe_qubit="q1", drive_qubit="q3", **removed)
+
+
+def test_conditions_and_depths_are_checked():
+    p = CrosstalkCompensatedSQRBParameters(conditions=["compensated", "isolated"])
+    assert p.get_conditions() == ["compensated", "isolated"]
+    assert CrosstalkCompensatedSQRBParameters().get_conditions() == ["isolated", "simultaneous", "compensated"]
+    with pytest.raises(ValueError, match="conditions"):
+        CrosstalkCompensatedSQRBParameters(conditions=["calibrate"])
+    with pytest.raises(ValueError, match="depths"):
+        CrosstalkCompensatedSQRBParameters(depths=[0, 4])
+    assert CrosstalkCompensatedSQRBParameters().sequences_per_program == 7

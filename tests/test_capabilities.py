@@ -94,6 +94,8 @@ EXPECTED_CAPABILITIES = {
     "qubit_power_rabi": ["state_readout", "qubit_reset", "amplitude"],
     "qubit_deterministic_benchmarking": ["state_readout", "qubit_reset", "amplitude"],
     "qubit_sqrb": ["state_readout", "qubit_reset"],
+    "crosstalk_compensated_sqrb": ["state_readout", "qubit_reset"],
+    "crosstalk_cancellation_tomography": ["state_readout", "qubit_reset"],
     # ramsey cryoscope: state_readout + qubit_reset, but NO flux capability — the
     # flux-pulse amplitude is a scalar parameter, not a swept window, so it does
     # not subclass the flux mixins; the swept axis is the pulse duration.

@@ -112,3 +112,15 @@ def test_estimate_suggests_the_simulated_optimum(session):
     assert fit["suggested_cancel_amp"] == pytest.approx(0.035, rel=0.05)
     assert fit["suggested_init_phase"] == pytest.approx(0.85, abs=0.05)
     assert fit["suggested_updates"]["cancel_amp"] == fit["suggested_cancel_amp"]
+
+
+@pytest.mark.parametrize("removed", [
+    {"cancel_tone": "victim"}, {"phase_reset": "if_only"}, {"stark_frame_rad": 0.01},
+    {"drive_cancel_amp": 0.0}, {"drive_init_phase": 0.1},
+])
+def test_removed_tomography_options_are_refused(removed):
+    """The cancel tone is always the aggressor's; the unrolled-era knobs are gone."""
+    from scqo.experiments.crosstalk_cancellation_tomography import CrosstalkCancellationTomographyParameters
+
+    with pytest.raises(ValueError):
+        CrosstalkCancellationTomographyParameters(probe_qubit="q1", drive_qubit="q3", **removed)
