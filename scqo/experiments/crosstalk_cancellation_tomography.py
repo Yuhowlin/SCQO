@@ -157,9 +157,12 @@ class CrosstalkCancellationTomographyParameters(
         description="Step increment for repetitions."
     )
     batch_size: int = Field(
-        4,
+        64,
         gt=0,
-        description="Number of repetition points per OPX hardware execution batch."
+        description=(
+            "Number of repetition points per OPX hardware execution batch. Each batch is its own "
+            "program (compile, load, run); the default puts a usual sweep in one."
+        )
     )
 
     conditions: list[str] | None = Field(
