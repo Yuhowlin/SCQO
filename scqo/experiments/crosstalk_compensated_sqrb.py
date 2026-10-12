@@ -134,6 +134,18 @@ class CrosstalkCompensatedSQRBParameters(
             "crosstalk_cancellation_tomography run with the same cancel_tone."
         )
     )
+    line_delay_ns: int = Field(
+        0,
+        ge=-16,
+        le=16,
+        description=(
+            "Timing shift (ns) of the probe's line against the drive's, on top of the configured port "
+            "delays: > 0 delays the probe qubit's xy output port (its own pulses and the cancellation on "
+            "it), < 0 delays the drive qubit's. Shifts the cancellation against the leak in 1 ns steps; "
+            "a bidirectional reverse cancellation sees the opposite shift. Use the value the cancellation "
+            "was calibrated with (crosstalk_cancellation_tomography line_delay_ns)."
+        ),
+    )
 
     def get_depths(self) -> np.ndarray:
         """Depths from the explicit list, or from log_scale / max_circuit_depth."""

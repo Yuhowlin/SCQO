@@ -116,6 +116,18 @@ class CrosstalkCancellationTomographyParameters(
             "Calibrate with the cancel_tone the benchmark will use."
         )
     )
+    line_delay_ns: int = Field(
+        0,
+        ge=-16,
+        le=16,
+        description=(
+            "Timing shift (ns) of the probe's line against the drive's, on top of the configured port "
+            "delays: > 0 delays the probe qubit's xy output port (its own pulses and the cancellation on "
+            "it), < 0 delays the drive qubit's. Shifts the cancellation against the leak in 1 ns steps; "
+            "a bidirectional reverse cancellation sees the opposite shift. Calibrate and benchmark with "
+            "the same value."
+        ),
+    )
     repetitions: list[int] | str | int | None = Field(
         None,
         description=(
