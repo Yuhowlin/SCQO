@@ -146,6 +146,15 @@ class CrosstalkCompensatedSQRBParameters(
             "was calibrated with (crosstalk_cancellation_tomography line_delay_ns)."
         ),
     )
+    leak_phase_twirl: bool = Field(
+        False,
+        description=(
+            "Every shot, turn each aggressor's frame and the frame of the cancellation copying it by "
+            "the same random phase: the aggressor's own RB is unchanged, but the leak's phase against "
+            "the victim is randomised, so coherent leak residuals of a fixed set of sequences average "
+            "out instead of biasing every run the same way. cancel_tone 'aggressor' only."
+        ),
+    )
 
     def get_depths(self) -> np.ndarray:
         """Depths from the explicit list, or from log_scale / max_circuit_depth."""
