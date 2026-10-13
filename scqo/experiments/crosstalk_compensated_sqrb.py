@@ -155,6 +155,15 @@ class CrosstalkCompensatedSQRBParameters(
             "out instead of biasing every run the same way. cancel_tone 'aggressor' only."
         ),
     )
+    dummy_load_detuning_hz: float = Field(
+        0.0,
+        description=(
+            "Non-zero: in the probe's isolated RB the drive qubit's line also plays the drive's "
+            "sequence, at the drive's amplitude but this far (Hz) from the drive frequency, so the "
+            "isolated error carries the drive line's power without its resonant leak (tests whether "
+            "part of the simultaneous error is power-induced). Simultaneous / compensated unchanged."
+        ),
+    )
 
     def get_depths(self) -> np.ndarray:
         """Depths from the explicit list, or from log_scale / max_circuit_depth."""
