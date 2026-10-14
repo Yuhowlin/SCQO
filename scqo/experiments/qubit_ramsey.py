@@ -37,6 +37,14 @@ class QubitRamseyParameters(TargetSelection, AveragingParameters, StateReadoutPa
     frequency_detuning_hz: float = Field(
         1.0e6, gt=0, description="Artificial drive detuning applied to make the fringe oscillate."
     )
+    spectator_qubits: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Qubits put in |1> (one x180 after the reset, not read out) for the whole Ramsey: the fringe "
+            "then carries the targets' static ZZ shift from them; compare with the same run without "
+            "spectators. The fitted frequency includes that shift, so run it with --no-update."
+        ),
+    )
     min_idle_time_ns: float = Field(16, ge=0, description="Shortest idle delay between the two pi/2 pulses.")
     max_idle_time_ns: float = Field(4000, gt=0, description="Longest idle delay.")
     num_points: int = Field(101, gt=1, description="Number of idle-time points.")

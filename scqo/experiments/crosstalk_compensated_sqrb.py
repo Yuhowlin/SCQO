@@ -164,6 +164,14 @@ class CrosstalkCompensatedSQRBParameters(
             "part of the simultaneous error is power-induced). Simultaneous / compensated unchanged."
         ),
     )
+    spectator_pi: bool = Field(
+        False,
+        description=(
+            "In the probe's isolated RB the drive qubit first gets one x180 and then idles in |1>, so the "
+            "isolated error carries the static probe-drive ZZ (no drive, no leak). Compare with the plain "
+            "run: delta r = 7.6e-3 (zeta/MHz)^2 per Clifford. Simultaneous / compensated unchanged."
+        ),
+    )
 
     def get_depths(self) -> np.ndarray:
         """Depths from the explicit list, or from log_scale / max_circuit_depth."""
