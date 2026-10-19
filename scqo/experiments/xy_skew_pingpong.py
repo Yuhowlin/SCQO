@@ -133,7 +133,10 @@ class XySkewPingpongParameters(TargetSelection, AveragingParameters, StateReadou
     )
     repetitions: list[int] = Field(
         default_factory=lambda: [2],
-        description="Ping-pong pair counts N (scan) or pulse counts N (calibrate): list, 'a:b:step' or 'a,b'.",
+        description="Ping-pong pair counts N (scan) or pulse counts N (calibrate): list, 'a:b:step' or 'a,b'. "
+        "Scan: the slope grows with N (chipQM 2026-10-19, k 0.05: -0.11 / -0.22 / -0.41 / -0.69 per ns at "
+        "N 2 / 4 / 8 / 16), so a fine scan wants N 8,16 (300-500 averages, +-0.6 ns, fit_window_ns 0.3) and a "
+        "coarse one N 1,2. Calibrate: e.g. 0:20:2, keeping N x rotation below 2 pi.",
     )
     include_background: bool = Field(
         True, description="Also run kflip = 0 (L1's plain x180 pairs, L2 silent): the sensor's own DRAG background."
@@ -143,7 +146,15 @@ class XySkewPingpongParameters(TargetSelection, AveragingParameters, StateReadou
         description="Zeros (ns) on each side of each scan pulse; |tau_sw| must stay below it.",
     )
     tau_batch_size: int = Field(
-        13, gt=0, description="tau_sw points per program (each program compiles and runs on its own)."
+        25, gt=0,
+        description="tau_sw points per program (each program compiles and runs on its own). Keep one program "
+        "under ~30 s (shots x points x shot time): cross-line errors drift within long programs.",
+    )
+    program_layout: Literal["loops", "unrolled"] = Field(
+        "loops",
+        description="Scan QUA layout. 'loops': N pairs as one QUA loop per element (the SQRB's gap-free pattern; "
+        "compiles fast, N costs nothing). 'unrolled': every pulse unrolled in strict_timing_ (the first hardware "
+        "version, kept for A/B).",
     )
     fit_window_ns: float = Field(
         1.5, gt=0.0,
