@@ -110,6 +110,8 @@ EXPECTED_CAPABILITIES = {
     "qubit_sqrb": ["state_readout", "qubit_reset"],
     "crosstalk_compensated_sqrb": ["state_readout", "qubit_reset"],
     "crosstalk_cancellation_tomography": ["state_readout", "qubit_reset"],
+    # the skew ping-pong: same pair shape (sensor read, both reset), its sweeps are its own
+    "xy_skew_pingpong": ["state_readout", "qubit_reset"],
     # ramsey cryoscope: state_readout + qubit_reset, but NO flux capability — the
     # flux-pulse amplitude is a scalar parameter, not a swept window, so it does
     # not subclass the flux mixins; the swept axis is the pulse duration.

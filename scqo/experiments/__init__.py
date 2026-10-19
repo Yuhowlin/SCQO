@@ -201,6 +201,7 @@ from .qubit_drag_alternating import QubitDragAlternating  # noqa: E402
 from .qubit_drag_equator import QubitDragEquator  # noqa: E402
 from .crosstalk_compensated_sqrb import CrosstalkCompensatedSQRB  # noqa: E402
 from .crosstalk_cancellation_tomography import CrosstalkCancellationTomography  # noqa: E402
+from .xy_skew_pingpong import XySkewPingpong  # noqa: E402
 from .qubit_echo import QubitEcho  # noqa: E402
 from .qubit_echo_flux_pulse import QubitEchoFluxPulse  # noqa: E402
 from .qubit_parametric_drive_amp import QubitParametricDriveAmp  # noqa: E402
@@ -253,6 +254,7 @@ __all__ = [
     "BroadbandResonatorSpectroscopy",
     "CrosstalkCompensatedSQRB",
     "CrosstalkCancellationTomography",
+    "XySkewPingpong",
     "PairCouplerCrossingPulse", "PairCouplerSpectroscopySwap",
     "PairCouplerSpectroscopyZZ",
     "PairSwapAngle", "PairSwapChevron", "PairSwapFluxMap",

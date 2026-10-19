@@ -420,7 +420,7 @@ tests/test_campaign.py          # the pure aggregator + run_campaign orchestrati
 ### The registered experiments
 
 <!-- BEGIN generated: experiments -->
-**52 registered experiments.** This list is GENERATED from the registry
+**53 registered experiments.** This list is GENERATED from the registry
 (`scqo.catalog()`) - refresh it with `python scripts/update_docs.py`. Descriptions are
 catalog-quality and live in the registry, never here: read one with
 `scqo run <name> --help`, or browse by capability with `scqo run --capability <name>`.
@@ -442,7 +442,7 @@ qc_n_swap_amp                       qubit_ramsey_phasor                 resonato
 qc_swap_flux_stark                  qubit_relaxation                    resonator_spectroscopy_power_amp
 qc_trotter_compensation             qubit_relaxation_flux_pulse         resonator_spectroscopy_power_chain
 qc_unidirectional_trotter           qubit_resonator_stark               single_shot_readout
-qubit_deterministic_benchmarking    qubit_spectroscopy
+qubit_deterministic_benchmarking    qubit_spectroscopy                  xy_skew_pingpong
 qubit_drag_alternating              qubit_spectroscopy_cryoscope
 ```
 <!-- END generated: experiments -->
@@ -505,6 +505,7 @@ experiments, or a name in the trailing line, is a KNOWN VIOLATION carried in
 | `resonator_spectroscopy_power` | resonator_spectroscopy_power_amp, resonator_spectroscopy_power_chain **(shared)** |
 | `spectroscopy_cryoscope` | qubit_spectroscopy_cryoscope |
 | `state_discrimination` | qubit_thermal_population, single_shot_readout **(shared)** |
+| `xy_skew_pingpong` | xy_skew_pingpong |
 | `xyz_delay` | qubit_xyz_delay |
 | `zz_interaction` | pair_zz_coupler |
 
