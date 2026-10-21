@@ -108,3 +108,30 @@ def test_offline_calibration_with_null_and_flip_checks(session, tmp_path):
     # in the model both lines flip their sign: the alternating trains net ~0
     assert fit["flip_ratio_l1"] < 0.1 and fit["flip_ratio_l2"] < 0.1
     assert _figures(out, tmp_path / "data") == ["xy_skew_pingpong.png", "xy_skew_pingpong_detail.png"]
+
+
+def test_new_options_default_off_and_validate():
+    p = XySkewPingpongParameters(targets=["q1", "q3"])
+    assert p.sensor_transition == "ge" and p.envelope_length_ns is None and not p.cal_via_auto
+    assert p.effective_cal_via_scale() == p.cal_via_scale
+    # a c ~0.9 leak over N up to 20: the auto scale keeps N x pi x c x scale <= 0.8 pi
+    p = XySkewPingpongParameters(targets=["q2", "q3"], mode="calibrate", repetitions="0:20:2", c_amp=0.9,
+                                 cal_via_auto=True)
+    assert p.effective_cal_via_scale() == pytest.approx(0.8 / (20 * 0.9))
+    with pytest.raises(ValueError):
+        XySkewPingpongParameters(targets=["q1", "q3"], envelope_length_ns=30)
+    with pytest.raises(ValueError):
+        XySkewPingpongParameters(targets=["q1", "q3"], sensor_transition="fg")
+
+
+def test_offline_ef_cal_finds_f12_pi_and_readout(session, tmp_path):
+    out = session.run("xy_skew_pingpong", {
+        "targets": ["q0", "q1"], "mode": "ef_cal", "use_state_discrimination": True,
+    }, update="none")
+    assert out.get("error") is None, out.get("error")
+    fit = out["fit"]["q0"]
+    assert fit["success"], fit
+    assert fit["f12_offset_hz"] == pytest.approx(0.3e6, abs=0.05e6)
+    assert fit["ef_pi_scale"] == pytest.approx(0.8, abs=0.03)
+    assert fit["p1_prep2"] > 0.8 and fit["warnings"] == []
+    assert _figures(out, tmp_path / "data") == ["xy_skew_pingpong.png"]

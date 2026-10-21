@@ -37,6 +37,12 @@ Optional checks in the same tomography:
     nearest 0), alternating the + and - waveforms. A line whose sign really flips nets ~0; one that
     does not accumulates k x the sensor's rate per pulse (flip_ratio ~1).
 
+mode='ef_cal' calibrates what sensor_transition='ef' needs, in one program, without writing anything back:
+a weak long EF pulse (ef_spec_length_ns) swept in detuning around f01 - anharmonicity gives f12; an EF
+amplitude Rabi (the real part of the sensor's EF_x180, scaled by ef_rabi_scales) at that guess gives the EF
+pi amplitude; |0>, |1>, |2> (|2> made with the current EF_x180) prepared and mapped by a ge x180 check that
+|2> reads as excited. Each shot starts with a ge x180 and ends with the mapping ge x180.
+
 Sign: the reported tau_sw* is the software shift of L2 that aligns it. Do not trust the sign convention
 before the hardware check: add +1 ns to L2's port delay and the zero crossing must move by -1 ns.
 
@@ -62,11 +68,16 @@ from ._capabilities.qubit_reset import QubitResetParameters
 from ._capabilities.state_readout import POPULATION_ALT, StateReadoutParameters
 from ._sim import stable_seed
 
-MODES = ("scan", "calibrate")
+MODES = ("scan", "calibrate", "ef_cal")
 CAL_CONDITIONS = ("own_x", "own_y", "via_0", "via_90")
 NULL_CONDITION = "null"
 FLIP_CONDITIONS = ("l1_flip", "l2_flip")
 BASES = ("z", "x", "y")
+#: ef_cal variables (P1 after the mapping ge x180) and the attrs the probe stamps for the analysis
+EF_CAL_VARS = ("population_spec", "population_rabi", "population_ro")
+EF_ATTR_CENTER = "xyskew_ef_center_hz"
+EF_ATTR_PEAK = "xyskew_ef_x180_peak"
+EF_ATTR_F01 = "xyskew_f01_hz"
 #: largest |L2 waveform sample| allowed (MW-FEM waveform range is [-1, 1))
 MAX_VIA_AMPLITUDE = 0.95
 #: the offline simulator's truth: L2's leak arrives SIM_SKEW_NS late; crosstalk amplitude and axis
@@ -109,10 +120,11 @@ class XySkewPingpongParameters(TargetSelection, AveragingParameters, StateReadou
     source_qubit: str = Field("q3", description="Qubit whose xy line is L2; L2 plays at the sensor's frequency.")
     targets: list[str] = Field(default_factory=list, description="[sensor_qubit, source_qubit]; auto-derived.")
 
-    mode: Literal["scan", "calibrate"] = Field(
+    mode: Literal["scan", "calibrate", "ef_cal"] = Field(
         "scan",
         description="'calibrate': tomography of the L2 -> sensor crosstalk (gives c_amp, via_phase). "
-        "'scan': the ping-pong S(tau_sw) sweep.",
+        "'scan': the ping-pong S(tau_sw) sweep. 'ef_cal': the sensor's f12, EF pi amplitude and |2> readout "
+        "check that sensor_transition='ef' needs (reported only, nothing written back).",
     )
 
     # ---- scan
@@ -142,8 +154,9 @@ class XySkewPingpongParameters(TargetSelection, AveragingParameters, StateReadou
         True, description="Also run kflip = 0 (L1's plain x180 pairs, L2 silent): the sensor's own DRAG background."
     )
     pad_ns: int = Field(
-        4, ge=1, le=16,
-        description="Zeros (ns) on each side of each scan pulse; |tau_sw| must stay below it.",
+        4, ge=1, le=64,
+        description="Zeros (ns) on each side of each scan pulse; |tau_sw| must stay below it. Up to 64 for a "
+        "line whose offset may be tens of ns (each scan pulse is then up to 16 + 128 ns long).",
     )
     tau_batch_size: int = Field(
         25, gt=0,
@@ -166,6 +179,38 @@ class XySkewPingpongParameters(TargetSelection, AveragingParameters, StateReadou
         False,
         description="Scan diagnostic: stamp every play of both lines (timestamp_stream, 4 ns cycles) and store "
         "them in the dataset (ts_y90, ts_l1, ts_l2). Runs ONE program: the first tau_sw only, at most 10 shots.",
+    )
+
+    sensor_transition: Literal["ge", "ef"] = Field(
+        "ge",
+        description="Which sensor transition senses: 'ge' (|0>-|1>) or 'ef' (|1>-|2>, a frequency lower by the "
+        "anharmonicity; same qubit, same place). 'ef' plays the sensor's EF_x180 / EF_x90 on a sensor element at "
+        "f12, prepares |1> with a ge x180 and maps the result back with another before the readout. Both "
+        "lines then run at f12: calibrate again for it.",
+    )
+    ef_anharmonicity_hz: float | None = Field(
+        None, description="f01 - f12 (Hz) for sensor_transition='ef'; default the qubit's anharmonicity."
+    )
+    envelope_length_ns: int | None = Field(
+        None, ge=16,
+        description="Scan / calibration pulse length (ns, multiple of 4): a DragCosine with the 16 ns pulse's "
+        "area and DRAG coefficient on both lines (a narrower band). None: the sensor's own x180. Calibrate "
+        "with the same length.",
+    )
+
+    # ---- ef_cal
+    ef_cal_span_hz: float = Field(4e6, gt=0, description="ef_cal: detuning half span (Hz) around the f12 guess.")
+    ef_cal_step_hz: float = Field(0.25e6, gt=0, description="ef_cal: detuning step (Hz).")
+    ef_spec_length_ns: int = Field(
+        400, ge=16, description="ef_cal: length (ns, multiple of 4) of the weak spectroscopy pulse (narrow line)."
+    )
+    ef_spec_rotation: float = Field(
+        1 / 3, gt=0, le=1,
+        description="ef_cal: spectroscopy pulse area as a fraction of the current EF_x180's (pi/3 by default).",
+    )
+    ef_rabi_scales: list[float] = Field(
+        default_factory=lambda: [round(0.05 * i, 6) for i in range(31)],
+        description="ef_cal: scales of the EF_x180 envelope (DRAG off) for the amplitude Rabi: list or 'a:b:step'.",
     )
 
     # ---- calibrate
@@ -195,6 +240,20 @@ class XySkewPingpongParameters(TargetSelection, AveragingParameters, StateReadou
         "k x the sensor's rate per pulse (flip_ratio ~1) if it does not.",
     )
 
+    cal_via_auto: bool = Field(
+        False,
+        description="Calibrate: scale cal_via_scale down so a leak of the c_amp given here turns at most 0.8 pi "
+        "over the largest N (a strong crosstalk, c > 0.5, otherwise wraps and the fit fails). Pass the c_amp "
+        "of a previous calibration.",
+    )
+
+    def effective_cal_via_scale(self) -> float:
+        """cal_via_scale, or with cal_via_auto the largest scale that keeps N x pi x c_amp x scale <= 0.8 pi."""
+        if not self.cal_via_auto:
+            return float(self.cal_via_scale)
+        n_max = max(max(self.repetitions), 1)
+        return float(min(self.cal_via_scale, 0.8 / (n_max * self.c_amp)))
+
     def cal_conditions(self) -> list[str]:
         return (list(CAL_CONDITIONS) + ([NULL_CONDITION] if self.include_null else [])
                 + (list(FLIP_CONDITIONS) if self.include_flip_check else []))
@@ -210,6 +269,15 @@ class XySkewPingpongParameters(TargetSelection, AveragingParameters, StateReadou
     @classmethod
     def _parse_taus(cls, val: Any) -> Any:
         return _parse_float_list(val)
+
+    @field_validator("ef_rabi_scales", mode="before")
+    @classmethod
+    def _parse_scales(cls, val: Any) -> Any:
+        return _parse_float_list(val)
+
+    def ef_detunings_hz(self) -> list[int]:
+        n = int(round(self.ef_cal_span_hz / self.ef_cal_step_hz))
+        return [int(round(i * self.ef_cal_step_hz)) for i in range(-n, n + 1)]
 
     @field_validator("repetitions", mode="before")
     @classmethod
@@ -241,6 +309,10 @@ class XySkewPingpongParameters(TargetSelection, AveragingParameters, StateReadou
             raise ValueError("repetitions must be non-negative counts")
         if not self.tau_sw_ns:
             raise ValueError("tau_sw_ns is empty")
+        if self.ef_spec_length_ns % 4:
+            raise ValueError("ef_spec_length_ns must be a multiple of 4")
+        if self.envelope_length_ns is not None and self.envelope_length_ns % 4:
+            raise ValueError("envelope_length_ns must be a multiple of 4")
         worst = max(abs(t) for t in self.tau_sw_ns)
         if worst > self.pad_ns - 1:
             raise ValueError(f"|tau_sw| up to {worst} ns needs pad_ns >= {math.ceil(worst) + 1}")
@@ -253,13 +325,18 @@ class XySkewPingpongContract(DatasetContract):
     def validate(self, ds: xr.Dataset) -> None:
         scan = {"tau_sw_ns", "repetitions", "kflip"}
         cal = {"condition", "repetitions", "basis"}
+        ef = {"ef_detuning_hz", "ef_amp_scale", "prepared_state"}
         dims = set(ds.dims)
         problems = []
         if "target" not in dims:
             problems.append("missing dimension 'target'")
-        if not (scan <= dims or cal <= dims):
+        if ef <= dims:
+            missing = [v for v in EF_CAL_VARS if v not in ds.data_vars]
+            if missing:
+                problems.append(f"ef_cal is missing {missing}")
+        elif not (scan <= dims or cal <= dims):
             problems.append(f"dims {sorted(dims)} carry neither {sorted(scan)} nor {sorted(cal)}")
-        if not any(v in ds.data_vars for v in ("population", "I")):
+        if not (ef <= dims) and not any(v in ds.data_vars for v in ("population", "I")):
             problems.append("missing data variable ('population' or 'I')")
         if problems:
             raise ContractError("; ".join(problems))
@@ -387,6 +464,12 @@ class XySkewPingpong(Experiment):
 
     def define_sweep(self) -> dict[str, np.ndarray]:
         p = self.params
+        if p.mode == "ef_cal":
+            return {
+                "ef_detuning_hz": np.asarray(p.ef_detunings_hz(), dtype=float),
+                "ef_amp_scale": np.asarray(p.ef_rabi_scales, dtype=float),
+                "prepared_state": np.asarray([0, 1, 2], dtype=int),
+            }
         if p.mode == "calibrate":
             return {
                 "condition": np.asarray(p.cal_conditions(), dtype=str),
@@ -403,6 +486,20 @@ class XySkewPingpong(Experiment):
     def simulate(self, coords: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         p = self.params
         rng = np.random.default_rng(stable_seed("xy_skew_pingpong", p.sensor_qubit, p.mode))
+        if p.mode == "ef_cal":
+            # truth: f12 sits 0.3 MHz above the guess, the EF pi pulse is 0.8 x the current EF_x180,
+            # |2> reads as excited with 0.9
+            det = coords["ef_detuning_hz"]
+            spec = 0.08 + 0.55 / (1 + ((det - 0.3e6) / 0.8e6) ** 2)
+            rabi = 0.06 + 0.86 * (1 - np.cos(np.pi * coords["ef_amp_scale"] / 0.8)) / 2
+            ro = np.array([0.96, 0.04, 0.9])
+            n_t = max(1, len(p.targets))
+            pack = lambda v: np.repeat(np.clip(v + rng.normal(0, 0.01, v.shape), 0, 1)[None, :], n_t, axis=0)
+            return {
+                "population_spec": (("target", "ef_detuning_hz"), pack(spec)),
+                "population_rabi": (("target", "ef_amp_scale"), pack(rabi)),
+                "population_ro": (("target", "prepared_state"), pack(ro)),
+            }
         x180, y180 = _sim_pulses()
         ox = np.real(x180).astype(complex)
         c_true = SIM_C_AMP * np.exp(1j * SIM_C_AXIS)
@@ -462,6 +559,20 @@ class XySkewPingpong(Experiment):
         sensor = p.sensor_qubit
         result = XySkewPingpongResult()
         ds = self.dataset
+        if p.mode == "ef_cal":
+            targets = [str(t) for t in ds["target"].values]
+            sub = ds.sel(target=[sensor if sensor in targets else targets[0]])[list(EF_CAL_VARS)]
+            attrs = self.dataset.attrs
+            kwargs = dict(ef_center_hz=float(attrs.get(EF_ATTR_CENTER, 0.0)),
+                          ef_x180_peak=float(attrs.get(EF_ATTR_PEAK, 1.0)),
+                          f01_hz=float(attrs.get(EF_ATTR_F01, float("nan"))))
+            estimator = XySkewPingpongEstimator()
+            for name, res in per_qubit_results(sub, estimator, self.artifact_dir, **kwargs).items():
+                meta = estimator.extract_metadata(res)
+                meta["mode"] = p.mode
+                result.fit[name] = meta
+                result.outcomes[name] = Outcome.SUCCESSFUL if res.get("success") else Outcome.FAILED
+            return result
         if "population" not in ds.data_vars:
             result.fit[sensor] = {"success": False, "reason": "needs use_state_discrimination (population)"}
             result.outcomes[sensor] = Outcome.FAILED
@@ -470,7 +581,8 @@ class XySkewPingpong(Experiment):
         ds = ds.sel(target=[sensor if sensor in targets else targets[0]])
         keep = [v for v in ("population",) if v in ds.data_vars]
         if p.mode == "calibrate":
-            kwargs = dict(cal_own_scale=p.cal_own_scale, cal_via_scale=p.cal_via_scale, cal_null_k=p.cal_null_k,
+            kwargs = dict(cal_own_scale=p.cal_own_scale, cal_via_scale=p.effective_cal_via_scale(),
+                          cal_null_k=p.cal_null_k,
                           c_amp_played=p.c_amp, via_phase_played=p.via_phase, flip_k=p.k)
         else:
             kwargs = dict(fit_window_ns=p.fit_window_ns)
